@@ -2,6 +2,7 @@ mod errors;
 mod frontmatter;
 mod log_filename;
 mod paths;
+mod templates;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
