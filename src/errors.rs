@@ -16,9 +16,6 @@ pub enum LeiterError {
     #[error("invalid log filename: {0}")]
     LogFilenameParse(String),
 
-    #[error("logs directory not found (~/.leiter/logs/ does not exist)")]
-    LogsDirNotFound,
-
     #[error("cannot determine home directory")]
     HomeNotFound,
 }
@@ -43,12 +40,6 @@ mod tests {
     fn log_filename_parse_display() {
         let err = LeiterError::LogFilenameParse("bad format".to_string());
         assert_eq!(err.to_string(), "invalid log filename: bad format");
-    }
-
-    #[test]
-    fn logs_dir_not_found_display() {
-        let err = LeiterError::LogsDirNotFound;
-        assert_eq!(err.to_string(), "logs directory not found (~/.leiter/logs/ does not exist)");
     }
 
     #[test]

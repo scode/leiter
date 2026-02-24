@@ -29,7 +29,7 @@ pub fn parse_log_filename(filename: &str) -> Result<(DateTime<Utc>, String), Lei
         LeiterError::LogFilenameParse(format!("log filename missing .md extension: {filename}"))
     })?;
 
-    // Timestamp is fixed-width (16 chars: YYYYMMDDTHHMMSSz), followed by a hyphen.
+    // Timestamp is fixed-width (16 chars: YYYYMMDDTHHMMSSZ), followed by a hyphen.
     if stem.len() < 18 || stem.as_bytes()[16] != b'-' {
         return Err(LeiterError::LogFilenameParse(format!(
             "invalid log filename format: {filename}"

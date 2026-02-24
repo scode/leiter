@@ -24,7 +24,13 @@ use crate::templates::{SOUL_TEMPLATE, SOUL_TEMPLATE_CHANGELOG, SOUL_TEMPLATE_VER
 /// migration instructions for the agent to follow.
 pub fn run(home: &Path, out: &mut impl Write) -> Result<()> {
     let soul_path = paths::soul_path(home);
-    let content = fs::read_to_string(&soul_path).map_err(|_| LeiterError::SoulNotFound)?;
+    let content = fs::read_to_string(&soul_path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            LeiterError::SoulNotFound.into()
+        } else {
+            anyhow::anyhow!("failed to read {}: {e}", soul_path.display())
+        }
+    })?;
     let (fm, _) = parse_soul(&content)?;
 
     if fm.soul_version >= SOUL_TEMPLATE_VERSION {

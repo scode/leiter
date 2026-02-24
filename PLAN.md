@@ -246,9 +246,9 @@
 - [x] Invoke `pre-pr-review-swarm` skill to review all uncommitted changes; address feedback
 - [x] **STOP** — wait for user before proceeding to next step
 
-## Final
+## Final **(DONE)**
 
-- [ ] Run full test suite one final time
-- [ ] Invoke `pre-pr-review-swarm` skill for a final review of the complete codebase
-- [ ] Address any remaining feedback
-- [ ] Stop and present the work to the human for review and follow-ups
+- [x] Run full test suite one final time
+- [x] Invoke `pre-pr-review-swarm` skill for a final review of the complete codebase
+- [x] Address any remaining feedback
+- [x] Stop and present the work to the human for review and follow-ups
