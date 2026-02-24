@@ -96,7 +96,15 @@ mod tests {
         String::from_utf8(out).unwrap()
     }
 
-    fn write_log(home: &Path, year: i32, month: u32, day: u32, hour: u32, session_id: &str, content: &str) {
+    fn write_log(
+        home: &Path,
+        year: i32,
+        month: u32,
+        day: u32,
+        hour: u32,
+        session_id: &str,
+        content: &str,
+    ) {
         let ts = Utc.with_ymd_and_hms(year, month, day, hour, 0, 0).unwrap();
         let filename = generate_log_filename(ts, session_id);
         let path = paths::logs_dir(home).join(filename);

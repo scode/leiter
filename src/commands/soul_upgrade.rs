@@ -38,7 +38,11 @@ pub fn run(home: &Path, out: &mut impl Write) -> Result<()> {
         return Ok(());
     }
 
-    writeln!(out, "Soul version {} is outdated (current: {}).\n", fm.soul_version, SOUL_TEMPLATE_VERSION)?;
+    writeln!(
+        out,
+        "Soul version {} is outdated (current: {}).\n",
+        fm.soul_version, SOUL_TEMPLATE_VERSION
+    )?;
 
     writeln!(out, "## Changelog\n")?;
     for &(version, description) in SOUL_TEMPLATE_CHANGELOG {
@@ -47,7 +51,10 @@ pub fn run(home: &Path, out: &mut impl Write) -> Result<()> {
         }
     }
 
-    writeln!(out, "## Current template (version {SOUL_TEMPLATE_VERSION})\n")?;
+    writeln!(
+        out,
+        "## Current template (version {SOUL_TEMPLATE_VERSION})\n"
+    )?;
     write!(out, "{SOUL_TEMPLATE}")?;
     if !SOUL_TEMPLATE.ends_with('\n') {
         writeln!(out)?;
@@ -55,7 +62,10 @@ pub fn run(home: &Path, out: &mut impl Write) -> Result<()> {
     writeln!(out)?;
 
     writeln!(out, "## Migration instructions\n")?;
-    writeln!(out, "Restructure the existing soul content into the new template format above, preserving all learned preferences. Then update `soul_version` in the frontmatter to {SOUL_TEMPLATE_VERSION}.")?;
+    writeln!(
+        out,
+        "Restructure the existing soul content into the new template format above, preserving all learned preferences. Then update `soul_version` in the frontmatter to {SOUL_TEMPLATE_VERSION}."
+    )?;
 
     Ok(())
 }

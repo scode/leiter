@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use tracing::info;
 
-use crate::frontmatter::{serialize_soul, SoulFrontmatter};
+use crate::frontmatter::{SoulFrontmatter, serialize_soul};
 use crate::paths;
 use crate::templates::{AGENT_SETUP_INSTRUCTIONS, SOUL_TEMPLATE, SOUL_TEMPLATE_VERSION};
 
@@ -25,7 +25,10 @@ use crate::templates::{AGENT_SETUP_INSTRUCTIONS, SOUL_TEMPLATE, SOUL_TEMPLATE_VE
 /// always gets actionable output.
 pub fn run(home: &Path, out: &mut impl Write) -> Result<()> {
     if let Err(e) = init_filesystem(home) {
-        write!(out, "leiter agent-setup failed during initialization:\n\n  {e:#}\n\nPlease relay this error to the user.\n")?;
+        write!(
+            out,
+            "leiter agent-setup failed during initialization:\n\n  {e:#}\n\nPlease relay this error to the user.\n"
+        )?;
         return Ok(());
     }
 
@@ -54,7 +57,10 @@ fn init_filesystem(home: &Path) -> Result<()> {
             .with_context(|| format!("failed to write {}", soul_path.display()))?;
         info!("created {}", soul_path.display());
     } else {
-        info!("soul file already exists, skipping: {}", soul_path.display());
+        info!(
+            "soul file already exists, skipping: {}",
+            soul_path.display()
+        );
     }
 
     Ok(())

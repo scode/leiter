@@ -8,7 +8,7 @@
 use std::io::{Read, Write};
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 
 use crate::log_filename::generate_log_filename;
@@ -19,7 +19,12 @@ use crate::paths;
 /// Reads all content from `input`, writes it atomically to the logs directory,
 /// and prints a confirmation to `out`. Takes `input` and `out` as parameters
 /// so tests can substitute a buffer for stdin/stdout.
-pub fn run(home: &Path, session_id: &str, input: &mut impl Read, out: &mut impl Write) -> Result<()> {
+pub fn run(
+    home: &Path,
+    session_id: &str,
+    input: &mut impl Read,
+    out: &mut impl Write,
+) -> Result<()> {
     let logs_dir = paths::logs_dir(home);
 
     if !logs_dir.is_dir() {
@@ -27,7 +32,9 @@ pub fn run(home: &Path, session_id: &str, input: &mut impl Read, out: &mut impl 
     }
 
     let mut content = String::new();
-    input.read_to_string(&mut content).context("failed to read stdin")?;
+    input
+        .read_to_string(&mut content)
+        .context("failed to read stdin")?;
 
     let timestamp = Utc::now();
     let filename = generate_log_filename(timestamp, session_id);
@@ -108,7 +115,12 @@ mod tests {
         let mut out = Vec::new();
         let result = run(tmp.path(), "sess1", &mut input, &mut out);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("logs directory does not exist"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("logs directory does not exist")
+        );
     }
 
     #[test]

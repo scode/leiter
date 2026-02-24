@@ -23,7 +23,10 @@ pub fn run(home: &Path, out: &mut impl Write) -> Result<()> {
     let soul_path = paths::soul_path(home);
 
     if !soul_path.exists() {
-        write!(out, "Leiter is not initialized. Run `leiter agent-setup` to set up.\n")?;
+        writeln!(
+            out,
+            "Leiter is not initialized. Run `leiter agent-setup` to set up."
+        )?;
         return Ok(());
     }
 

@@ -3,8 +3,8 @@
 //! Each test sets `LEITER_HOME` to a temp directory so state is isolated
 //! from the user's real `~/.leiter/`.
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use assert_cmd::Command;
+use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use std::fs;
 use std::path::Path;
@@ -146,10 +146,7 @@ fn stdout_stderr_separation() {
     leiter(home).arg("agent-setup").assert().success();
 
     // With -v, tracing goes to stderr; contractual output goes to stdout.
-    let assert = leiter(home)
-        .args(["-v", "context"])
-        .assert()
-        .success();
+    let assert = leiter(home).args(["-v", "context"]).assert().success();
 
     let output = assert.get_output();
     let stdout = String::from_utf8(output.stdout.clone()).unwrap();
