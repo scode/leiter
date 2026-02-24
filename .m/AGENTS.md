@@ -5,5 +5,5 @@ This `.m/` directory is managed by the [`m`](https://github.com/scode/m) tool â€
 Instruction files (`AGENTS.md`, `CLAUDE.md`) in the parent directory are **generated** from the snippets in
 `snippets.d/`. Do not edit them directly â€” your changes will be overwritten on the next `m build`.
 
-To modify agent instructions, edit or add snippet files in `snippets.d/`, then run `m build` to regenerate
-the instruction files.
+To modify agent instructions, edit or add snippet files in `snippets.d/`, then run `m build` to regenerate the
+instruction files.
