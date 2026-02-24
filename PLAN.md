@@ -217,22 +217,22 @@
 - [x] Invoke `pre-pr-review-swarm` skill to review uncommitted changes; address feedback
 - [x] **STOP** — wait for user before proceeding to next step
 
-## Step 11: `leiter soul-upgrade` command
+## Step 11: `leiter soul-upgrade` command **(DONE)**
 
-- [ ] Create `src/commands/soul_upgrade.rs`
-- [ ] Implement `soul_upgrade()`:
+- [x] Create `src/commands/soul_upgrade.rs`
+- [x] Implement `soul_upgrade()`:
   1. Read and parse `~/.leiter/soul.md` frontmatter for `soul_version`
   2. Compare with `SOUL_TEMPLATE_VERSION`
   3. If equal: output "soul is up to date"
   4. If outdated: output changelog for versions between user's and current, the full current template, and instructions for the agent to migrate
-- [ ] Wire into CLI dispatch
-- [ ] Tests:
+- [x] Wire into CLI dispatch
+- [x] Tests:
   - Soul version == current → up-to-date message
   - Soul version < current → upgrade output includes changelog, template, and instructions
   - Upgrade output includes `soul_version` update instruction
   - Missing soul.md → error
-- [ ] Invoke `pre-pr-review-swarm` skill to review uncommitted changes; address feedback
-- [ ] **STOP** — wait for user before proceeding to next step
+- [x] Invoke `pre-pr-review-swarm` skill to review uncommitted changes; address feedback
+- [x] **STOP** — wait for user before proceeding to next step
 
 ## Step 12: Integration tests
 

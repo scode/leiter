@@ -47,7 +47,9 @@ fn parses_stop_hook() {
 
 #[test]
 fn parses_soul_upgrade() {
-    leiter().arg("soul-upgrade").assert().success();
+    // soul-upgrade reads ~/.leiter/soul.md which may not exist in sandboxed environments.
+    let assert = leiter().arg("soul-upgrade").assert();
+    assert.stderr(predicate::str::contains("unrecognized subcommand").not());
 }
 
 // Verbosity tests use "dispatching command" (emitted at DEBUG) to verify levels.
