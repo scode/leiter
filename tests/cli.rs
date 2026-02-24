@@ -1,0 +1,123 @@
+use assert_cmd::cargo::cargo_bin_cmd;
+use assert_cmd::Command;
+use predicates::prelude::*;
+
+fn leiter() -> Command {
+    cargo_bin_cmd!("leiter")
+}
+
+#[test]
+fn parses_agent_setup() {
+    leiter().arg("agent-setup").assert().success();
+}
+
+#[test]
+fn parses_context() {
+    leiter().arg("context").assert().success();
+}
+
+#[test]
+fn parses_log_with_session_id() {
+    leiter()
+        .args(["log", "--session-id", "abc123"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn parses_distill() {
+    leiter().arg("distill").assert().success();
+}
+
+#[test]
+fn parses_stop_hook() {
+    leiter().arg("stop-hook").assert().success();
+}
+
+#[test]
+fn parses_soul_upgrade() {
+    leiter().arg("soul-upgrade").assert().success();
+}
+
+// Verbosity tests use "dispatching command" (emitted at DEBUG) to verify levels.
+
+#[test]
+fn default_level_is_info_no_debug_output() {
+    leiter()
+        .arg("context")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("dispatching command").not());
+}
+
+#[test]
+fn verbose_sets_debug() {
+    leiter()
+        .args(["-v", "context"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("dispatching command"));
+}
+
+#[test]
+fn double_verbose_sets_trace() {
+    leiter()
+        .args(["-vv", "context"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("dispatching command"));
+}
+
+#[test]
+fn quiet_sets_warn() {
+    leiter()
+        .args(["-q", "context"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("dispatching command").not());
+}
+
+#[test]
+fn double_quiet_sets_error() {
+    leiter()
+        .args(["-qq", "context"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("dispatching command").not());
+}
+
+#[test]
+fn log_level_trace_overrides_quiet() {
+    leiter()
+        .args(["--log-level=TRACE", "-q", "context"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("dispatching command"));
+}
+
+#[test]
+fn log_level_warn_overrides_verbose() {
+    leiter()
+        .args(["--log-level=WARN", "-v", "context"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("dispatching command").not());
+}
+
+#[test]
+fn unknown_subcommand_errors() {
+    leiter()
+        .arg("nonexistent")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unrecognized subcommand"));
+}
+
+#[test]
+fn log_requires_session_id() {
+    leiter()
+        .arg("log")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--session-id"));
+}

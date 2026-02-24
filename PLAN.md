@@ -14,28 +14,29 @@
 - At the end of each step, invoke the `pre-pr-review-swarm` skill (a Claude Code skill, not a binary) with instructions to review uncommitted changes. Address all feedback.
 - After completing a step and addressing review feedback, **STOP and wait for the user to continue**. Do not proceed to the next step until explicitly asked.
 - If during implementation we discover open gaps in the spec or problems to fix later, append them as known gaps at the bottom of SPEC.md.
+- **Tracking:** Mark checkboxes `[x]` in this file as each item is completed. When a step is fully done, also mark its header line with **(DONE)**.
 
 ---
 
-## Step 1: Project scaffolding and CLI skeleton
+## Step 1: Project scaffolding and CLI skeleton **(DONE)**
 
-- [ ] `cargo init` with binary target
-- [ ] Add dependencies to Cargo.toml: clap (derive), tracing, tracing-subscriber, thiserror, anyhow, serde (derive), serde_yaml, serde_json, chrono (serde feature), tempfile
-- [ ] Add dev-dependency: assert_cmd, predicates, tempfile
-- [ ] Create `src/main.rs` with clap top-level CLI struct:
+- [x] `cargo init` with binary target
+- [x] Add dependencies to Cargo.toml: clap (derive), tracing, tracing-subscriber, thiserror, anyhow, serde (derive), serde_yaml, serde_json, chrono (serde feature), tempfile
+- [x] Add dev-dependency: assert_cmd, predicates, tempfile
+- [x] Create `src/main.rs` with clap top-level CLI struct:
   - Global flags: `-v` (DEBUG), `-vv` (TRACE), `-q` (WARN), `-qq` (ERROR), `--log-level=<LEVEL>`
   - `--log-level` takes precedence over `-v`/`-q`
   - Subcommands as empty stubs: `agent-setup`, `context`, `log`, `distill`, `stop-hook`, `soul-upgrade`
-- [ ] Initialize tracing-subscriber from the resolved log level, output to stderr
-- [ ] Tests:
+- [x] Initialize tracing-subscriber from the resolved log level, output to stderr
+- [x] Tests:
   - CLI parses each subcommand without error
   - `-v` sets DEBUG, `-vv` sets TRACE, `-q` sets WARN, `-qq` sets ERROR
   - `--log-level=TRACE` overrides `-q`
   - `--log-level=WARN` overrides `-v`
   - Unknown subcommand errors
   - `leiter log` requires `--session-id`
-- [ ] Invoke `pre-pr-review-swarm` skill to review uncommitted changes; address feedback
-- [ ] **STOP** — wait for user before proceeding to next step
+- [x] Invoke `pre-pr-review-swarm` skill to review uncommitted changes; address feedback
+- [x] **STOP** — wait for user before proceeding to next step
 
 ## Step 2: State paths and error types
 
