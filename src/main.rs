@@ -7,7 +7,7 @@ mod templates;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tracing::{debug, error, Level};
+use tracing::{debug, Level};
 
 #[derive(Parser)]
 #[command(name = "leiter", about = "Self-training system for Claude Code")]
@@ -98,7 +98,7 @@ fn main() -> Result<()> {
             commands::stop_hook::run(&mut std::io::stdin(), &mut std::io::stdout())?;
         }
         Command::SoulUpgrade => {
-            error!("soul-upgrade: not yet implemented");
+            commands::soul_upgrade::run(&home, &mut std::io::stdout())?;
         }
     }
 
