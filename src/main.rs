@@ -1,3 +1,4 @@
+mod commands;
 mod errors;
 mod frontmatter;
 mod log_filename;
@@ -78,9 +79,11 @@ fn main() -> Result<()> {
 
     debug!("dispatching command");
 
+    let home = paths::home_dir()?;
+
     match &cli.command {
         Command::AgentSetup => {
-            error!("agent-setup: not yet implemented");
+            commands::agent_setup::run(&home, &mut std::io::stdout())?;
         }
         Command::Context => {
             error!("context: not yet implemented");
