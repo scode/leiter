@@ -86,7 +86,7 @@ fn main() -> Result<()> {
             commands::agent_setup::run(&home, &mut std::io::stdout())?;
         }
         Command::Context => {
-            error!("context: not yet implemented");
+            commands::context::run(&home, &mut std::io::stdout())?;
         }
         Command::Log { session_id } => {
             error!(session_id, "log: not yet implemented");
