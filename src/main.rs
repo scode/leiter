@@ -1,5 +1,6 @@
 mod errors;
 mod frontmatter;
+mod log_filename;
 mod paths;
 
 use anyhow::Result;
