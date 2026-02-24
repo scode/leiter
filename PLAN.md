@@ -11,6 +11,7 @@
 **Process notes:**
 - Build bottom-up: low-level modules first, commands on top.
 - Each step includes exhaustive tests. Run tests before and after implementation.
+- **Docstrings:** Every public type, function, and module should have a doc comment explaining what it does and why it exists. Don't just restate the name — explain the purpose, invariants, or non-obvious design decisions. Internal/private items get doc comments when the intent isn't obvious from context.
 - At the end of each step, invoke the `pre-pr-review-swarm` skill (a Claude Code skill, not a binary) with instructions to review uncommitted changes. Address all feedback.
 - After completing a step and addressing review feedback, **STOP and wait for the user to continue**. Do not proceed to the next step until explicitly asked.
 - If during implementation we discover open gaps in the spec or problems to fix later, append them as known gaps at the bottom of SPEC.md.

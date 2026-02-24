@@ -1,19 +1,32 @@
+//! Path construction for the `~/.leiter/` state directory.
+//!
+//! All leiter state lives under a single directory in the user's home. These
+//! functions build the canonical paths. They take `home` as a parameter so
+//! callers (and tests) can substitute a different root.
+
 use std::path::{Path, PathBuf};
 
 use crate::errors::LeiterError;
 
+/// Resolve the user's home directory via the `dirs` crate.
+///
+/// This is the only function that touches the real filesystem — everything else
+/// is pure path construction.
 pub fn home_dir() -> Result<PathBuf, LeiterError> {
     dirs::home_dir().ok_or(LeiterError::HomeNotFound)
 }
 
+/// Root of leiter's state directory (`<home>/.leiter/`).
 pub fn leiter_dir(home: &Path) -> PathBuf {
     home.join(".leiter")
 }
 
+/// Path to the soul file (`<home>/.leiter/soul.md`).
 pub fn soul_path(home: &Path) -> PathBuf {
     leiter_dir(home).join("soul.md")
 }
 
+/// Path to the session logs directory (`<home>/.leiter/logs/`).
 pub fn logs_dir(home: &Path) -> PathBuf {
     leiter_dir(home).join("logs")
 }

@@ -1,4 +1,5 @@
 mod errors;
+mod frontmatter;
 mod paths;
 
 use anyhow::Result;
