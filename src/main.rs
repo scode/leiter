@@ -92,7 +92,7 @@ fn main() -> Result<()> {
             commands::log::run(&home, session_id, &mut std::io::stdin(), &mut std::io::stdout())?;
         }
         Command::Distill => {
-            error!("distill: not yet implemented");
+            commands::distill::run(&home, &mut std::io::stdout())?;
         }
         Command::StopHook => {
             error!("stop-hook: not yet implemented");
