@@ -1,3 +1,6 @@
+mod errors;
+mod paths;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing::{debug, error, Level};
