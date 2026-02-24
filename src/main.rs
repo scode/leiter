@@ -95,7 +95,7 @@ fn main() -> Result<()> {
             commands::distill::run(&home, &mut std::io::stdout())?;
         }
         Command::StopHook => {
-            error!("stop-hook: not yet implemented");
+            commands::stop_hook::run(&mut std::io::stdin(), &mut std::io::stdout())?;
         }
         Command::SoulUpgrade => {
             error!("soul-upgrade: not yet implemented");

@@ -39,7 +39,10 @@ fn parses_distill() {
 
 #[test]
 fn parses_stop_hook() {
-    leiter().arg("stop-hook").assert().success();
+    // stop-hook reads JSON from stdin, so it will fail with empty input,
+    // but we verify the subcommand is recognized (no "unrecognized subcommand").
+    let assert = leiter().arg("stop-hook").assert();
+    assert.stderr(predicate::str::contains("unrecognized subcommand").not());
 }
 
 #[test]
