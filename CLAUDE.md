@@ -8,6 +8,11 @@
 Always run `dprint fmt` before considering your work done. This applies after any file changes — implementation,
 refactoring, documentation edits, etc.
 
+# Rust checks
+
+Before considering your work done, run `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo test`. Fix any
+issues before proceeding.
+
 # SPEC.md compliance
 
 All code must comply with `SPEC.md` at the project root. Before implementing changes, read SPEC.md to understand the
