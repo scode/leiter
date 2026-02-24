@@ -1,5 +1,10 @@
 use thiserror::Error;
 
+/// Structured errors for operations that callers need to match on.
+///
+/// Command handlers use `anyhow` for propagation; this enum is for cases where
+/// the caller's control flow depends on the specific failure mode (e.g.,
+/// distinguishing "soul not found" from "bad frontmatter").
 #[derive(Debug, Error)]
 pub enum LeiterError {
     #[error("soul file not found (~/.leiter/soul.md does not exist)")]
