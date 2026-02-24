@@ -27,7 +27,10 @@ mod tests {
     #[test]
     fn soul_not_found_display() {
         let err = LeiterError::SoulNotFound;
-        assert_eq!(err.to_string(), "soul file not found (~/.leiter/soul.md does not exist)");
+        assert_eq!(
+            err.to_string(),
+            "soul file not found (~/.leiter/soul.md does not exist)"
+        );
     }
 
     #[test]

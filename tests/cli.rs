@@ -1,5 +1,5 @@
-use assert_cmd::cargo::cargo_bin_cmd;
 use assert_cmd::Command;
+use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 
 fn leiter() -> Command {
@@ -24,9 +24,7 @@ fn parses_context() {
 fn parses_log_with_session_id() {
     // log reads stdin and writes to ~/.leiter/logs/ which may not exist in
     // sandboxed environments, so just verify the subcommand is recognized.
-    let assert = leiter()
-        .args(["log", "--session-id", "abc123"])
-        .assert();
+    let assert = leiter().args(["log", "--session-id", "abc123"]).assert();
     assert.stderr(predicate::str::contains("unrecognized subcommand").not());
 }
 

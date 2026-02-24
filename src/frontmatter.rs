@@ -35,9 +35,8 @@ pub fn parse_soul(content: &str) -> Result<(SoulFrontmatter, &str), LeiterError>
         LeiterError::FrontmatterParse("missing closing --- delimiter".to_string())
     })?;
 
-    let frontmatter: SoulFrontmatter = serde_yaml::from_str(yaml).map_err(|e| {
-        LeiterError::FrontmatterParse(e.to_string())
-    })?;
+    let frontmatter: SoulFrontmatter =
+        serde_yaml::from_str(yaml).map_err(|e| LeiterError::FrontmatterParse(e.to_string()))?;
 
     Ok((frontmatter, body))
 }
@@ -47,7 +46,8 @@ pub fn parse_soul(content: &str) -> Result<(SoulFrontmatter, &str), LeiterError>
 /// `serde_yaml::to_string` always emits a trailing newline, so the output
 /// naturally produces `---\n<yaml>\n---\n<body>`.
 pub fn serialize_soul(frontmatter: &SoulFrontmatter, body: &str) -> String {
-    let yaml = serde_yaml::to_string(frontmatter).expect("SoulFrontmatter contains only simple scalar types");
+    let yaml = serde_yaml::to_string(frontmatter)
+        .expect("SoulFrontmatter contains only simple scalar types");
     format!("---\n{yaml}---\n{body}")
 }
 
@@ -95,13 +95,15 @@ mod tests {
 
     #[test]
     fn error_on_missing_opening_delimiter() {
-        let err = parse_soul("last_distilled: 2026-02-23T17:00:00Z\nsoul_version: 1\n---\nbody\n").unwrap_err();
+        let err = parse_soul("last_distilled: 2026-02-23T17:00:00Z\nsoul_version: 1\n---\nbody\n")
+            .unwrap_err();
         assert!(err.to_string().contains("opening ---"));
     }
 
     #[test]
     fn error_on_missing_closing_delimiter() {
-        let err = parse_soul("---\nlast_distilled: 2026-02-23T17:00:00Z\nsoul_version: 1\n").unwrap_err();
+        let err =
+            parse_soul("---\nlast_distilled: 2026-02-23T17:00:00Z\nsoul_version: 1\n").unwrap_err();
         assert!(err.to_string().contains("closing ---"));
     }
 
@@ -140,7 +142,9 @@ mod tests {
     #[test]
     fn preserves_body_whitespace() {
         let body_content = "  indented\n\n\n  more indented  \n";
-        let doc = format!("---\nlast_distilled: 1970-01-01T00:00:00Z\nsoul_version: 1\n---\n{body_content}");
+        let doc = format!(
+            "---\nlast_distilled: 1970-01-01T00:00:00Z\nsoul_version: 1\n---\n{body_content}"
+        );
         let (_, body) = parse_soul(&doc).unwrap();
         assert_eq!(body, body_content);
     }

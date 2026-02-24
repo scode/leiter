@@ -7,7 +7,7 @@ mod templates;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tracing::{debug, Level};
+use tracing::{Level, debug};
 
 #[derive(Parser)]
 #[command(name = "leiter", about = "Self-training system for Claude Code")]
@@ -89,7 +89,12 @@ fn main() -> Result<()> {
             commands::context::run(&home, &mut std::io::stdout())?;
         }
         Command::Log { session_id } => {
-            commands::log::run(&home, session_id, &mut std::io::stdin(), &mut std::io::stdout())?;
+            commands::log::run(
+                &home,
+                session_id,
+                &mut std::io::stdin(),
+                &mut std::io::stdout(),
+            )?;
         }
         Command::Distill => {
             commands::distill::run(&home, &mut std::io::stdout())?;

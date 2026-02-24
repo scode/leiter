@@ -34,7 +34,9 @@ struct BlockDecision {
 /// stop proceeds.
 pub fn run(input: &mut impl Read, out: &mut impl Write) -> Result<()> {
     let mut raw = String::new();
-    input.read_to_string(&mut raw).context("failed to read stdin")?;
+    input
+        .read_to_string(&mut raw)
+        .context("failed to read stdin")?;
 
     let hook_input: StopHookInput =
         serde_json::from_str(&raw).context("failed to parse stop hook JSON")?;
@@ -66,10 +68,7 @@ mod tests {
 
     #[test]
     fn inactive_produces_block_decision() {
-        let output = run_stop_hook(
-            r#"{"session_id":"abc123","stop_hook_active":false}"#,
-        )
-        .unwrap();
+        let output = run_stop_hook(r#"{"session_id":"abc123","stop_hook_active":false}"#).unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
         assert_eq!(parsed["decision"], "block");
@@ -77,10 +76,8 @@ mod tests {
 
     #[test]
     fn block_reason_contains_session_id() {
-        let output = run_stop_hook(
-            r#"{"session_id":"my-sess-42","stop_hook_active":false}"#,
-        )
-        .unwrap();
+        let output =
+            run_stop_hook(r#"{"session_id":"my-sess-42","stop_hook_active":false}"#).unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
         let reason = parsed["reason"].as_str().unwrap();
@@ -89,10 +86,7 @@ mod tests {
 
     #[test]
     fn block_reason_contains_log_command() {
-        let output = run_stop_hook(
-            r#"{"session_id":"abc123","stop_hook_active":false}"#,
-        )
-        .unwrap();
+        let output = run_stop_hook(r#"{"session_id":"abc123","stop_hook_active":false}"#).unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
         let reason = parsed["reason"].as_str().unwrap();
@@ -101,10 +95,7 @@ mod tests {
 
     #[test]
     fn active_produces_no_output() {
-        let output = run_stop_hook(
-            r#"{"session_id":"abc123","stop_hook_active":true}"#,
-        )
-        .unwrap();
+        let output = run_stop_hook(r#"{"session_id":"abc123","stop_hook_active":true}"#).unwrap();
 
         assert!(output.is_empty());
     }

@@ -47,9 +47,10 @@ mistakes are not repeated.
 
 /// Version changelog for the soul template. Each entry describes what changed
 /// in that version, so `leiter soul-upgrade` can show the agent what to migrate.
-pub const SOUL_TEMPLATE_CHANGELOG: &[(u32, &str)] = &[
-    (1, "Initial soul template with sections for communication style, coding preferences, workflow patterns, tool preferences, project context, and corrections."),
-];
+pub const SOUL_TEMPLATE_CHANGELOG: &[(u32, &str)] = &[(
+    1,
+    "Initial soul template with sections for communication style, coding preferences, workflow patterns, tool preferences, project context, and corrections.",
+)];
 
 /// Preamble injected before the soul content by `leiter context`.
 ///
@@ -153,11 +154,7 @@ mod tests {
 
     #[test]
     fn context_preamble_contains_required_literals() {
-        for literal in [
-            "~/.leiter/soul.md",
-            "leiter distill",
-            "leiter soul-upgrade",
-        ] {
+        for literal in ["~/.leiter/soul.md", "leiter distill", "leiter soul-upgrade"] {
             assert!(
                 CONTEXT_PREAMBLE.contains(literal),
                 "context preamble missing: {literal}"
