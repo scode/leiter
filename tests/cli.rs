@@ -32,7 +32,9 @@ fn parses_log_with_session_id() {
 
 #[test]
 fn parses_distill() {
-    leiter().arg("distill").assert().success();
+    // distill requires ~/.leiter/soul.md which may not exist.
+    let assert = leiter().arg("distill").assert();
+    assert.stderr(predicate::str::contains("unrecognized subcommand").not());
 }
 
 #[test]
