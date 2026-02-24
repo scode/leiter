@@ -8,11 +8,16 @@ use std::path::{Path, PathBuf};
 
 use crate::errors::LeiterError;
 
-/// Resolve the user's home directory via the `dirs` crate.
+/// Resolve the user's home directory.
 ///
-/// This is the only function that touches the real filesystem — everything else
-/// is pure path construction.
+/// Checks `LEITER_HOME` first (used by integration tests to isolate state),
+/// then falls back to `dirs::home_dir()`. This is the only function that
+/// consults runtime environment state — everything else is pure path
+/// construction.
 pub fn home_dir() -> Result<PathBuf, LeiterError> {
+    if let Ok(home) = std::env::var("LEITER_HOME") {
+        return Ok(PathBuf::from(home));
+    }
     dirs::home_dir().ok_or(LeiterError::HomeNotFound)
 }
 

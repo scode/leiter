@@ -234,17 +234,17 @@
 - [x] Invoke `pre-pr-review-swarm` skill to review uncommitted changes; address feedback
 - [x] **STOP** — wait for user before proceeding to next step
 
-## Step 12: Integration tests
+## Step 12: Integration tests **(DONE)**
 
-- [ ] Create `tests/integration.rs` (or `tests/` directory with multiple files)
-- [ ] Full flow: agent-setup → context → verify soul injected
-- [ ] Full flow: agent-setup → log a session → distill → verify log appears
-- [ ] Full flow: distill with last_distilled = epoch → all logs appear
-- [ ] Full flow: stop-hook with `stop_hook_active: false` → block → log → stop-hook with `stop_hook_active: true` → allow
-- [ ] Full flow: agent-setup twice → soul not overwritten, no errors
-- [ ] Verify all stdout/stderr separation (contractual output on stdout, tracing on stderr)
-- [ ] Invoke `pre-pr-review-swarm` skill to review all uncommitted changes; address feedback
-- [ ] **STOP** — wait for user before proceeding to next step
+- [x] Create `tests/integration.rs` (or `tests/` directory with multiple files)
+- [x] Full flow: agent-setup → context → verify soul injected
+- [x] Full flow: agent-setup → log a session → distill → verify log appears
+- [x] Full flow: distill with last_distilled = epoch → all logs appear
+- [x] Full flow: stop-hook with `stop_hook_active: false` → block → log → stop-hook with `stop_hook_active: true` → allow
+- [x] Full flow: agent-setup twice → soul not overwritten, no errors
+- [x] Verify all stdout/stderr separation (contractual output on stdout, tracing on stderr)
+- [x] Invoke `pre-pr-review-swarm` skill to review all uncommitted changes; address feedback
+- [x] **STOP** — wait for user before proceeding to next step
 
 ## Final
 
