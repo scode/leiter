@@ -13,6 +13,9 @@ pub enum LeiterError {
     #[error("failed to parse frontmatter: {0}")]
     FrontmatterParse(String),
 
+    #[error("invalid log filename: {0}")]
+    LogFilenameParse(String),
+
     #[error("logs directory not found (~/.leiter/logs/ does not exist)")]
     LogsDirNotFound,
 
@@ -34,6 +37,12 @@ mod tests {
     fn frontmatter_parse_display() {
         let err = LeiterError::FrontmatterParse("bad yaml".to_string());
         assert_eq!(err.to_string(), "failed to parse frontmatter: bad yaml");
+    }
+
+    #[test]
+    fn log_filename_parse_display() {
+        let err = LeiterError::LogFilenameParse("bad format".to_string());
+        assert_eq!(err.to_string(), "invalid log filename: bad format");
     }
 
     #[test]
