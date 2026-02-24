@@ -89,7 +89,7 @@ fn main() -> Result<()> {
             commands::context::run(&home, &mut std::io::stdout())?;
         }
         Command::Log { session_id } => {
-            error!(session_id, "log: not yet implemented");
+            commands::log::run(&home, session_id, &mut std::io::stdin(), &mut std::io::stdout())?;
         }
         Command::Distill => {
             error!("distill: not yet implemented");
