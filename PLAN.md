@@ -4,25 +4,35 @@
 
 **Goal:** Implement the `leiter` Rust CLI tool per SPEC.md — a self-training system for Claude Code.
 
-**Architecture:** Thin Rust CLI with clap derive API. All agent intelligence lives outside the binary; the CLI handles structured storage, timestamp management, and context injection. State lives under `~/.leiter/`.
+**Architecture:** Thin Rust CLI with clap derive API. All agent intelligence lives outside the binary; the CLI handles
+structured storage, timestamp management, and context injection. State lives under `~/.leiter/`.
 
-**Tech Stack:** Rust, clap (derive), tracing/tracing-subscriber, thiserror, anyhow, serde/serde_yaml/serde_json, chrono, tempfile
+**Tech Stack:** Rust, clap (derive), tracing/tracing-subscriber, thiserror, anyhow, serde/serde_yaml/serde_json, chrono,
+tempfile
 
 **Process notes:**
+
 - Build bottom-up: low-level modules first, commands on top.
 - Each step includes exhaustive tests. Run tests before and after implementation.
-- **Docstrings:** Every public type, function, and module should have a doc comment explaining what it does and why it exists. Don't just restate the name — explain the purpose, invariants, or non-obvious design decisions. Internal/private items get doc comments when the intent isn't obvious from context.
-- At the end of each step, invoke the `pre-pr-review-swarm` skill (a Claude Code skill, not a binary) with instructions to review uncommitted changes. Address all feedback.
-- After completing a step and addressing review feedback, **STOP and wait for the user to continue**. Do not proceed to the next step until explicitly asked.
-- If during implementation we discover open gaps in the spec or problems to fix later, append them as known gaps at the bottom of SPEC.md.
-- **Tracking:** Mark checkboxes `[x]` in this file as each item is completed. When a step is fully done, also mark its header line with **(DONE)**.
+- **Docstrings:** Every public type, function, and module should have a doc comment explaining what it does and why it
+  exists. Don't just restate the name — explain the purpose, invariants, or non-obvious design decisions.
+  Internal/private items get doc comments when the intent isn't obvious from context.
+- At the end of each step, invoke the `pre-pr-review-swarm` skill (a Claude Code skill, not a binary) with instructions
+  to review uncommitted changes. Address all feedback.
+- After completing a step and addressing review feedback, **STOP and wait for the user to continue**. Do not proceed to
+  the next step until explicitly asked.
+- If during implementation we discover open gaps in the spec or problems to fix later, append them as known gaps at the
+  bottom of SPEC.md.
+- **Tracking:** Mark checkboxes `[x]` in this file as each item is completed. When a step is fully done, also mark its
+  header line with **(DONE)**.
 
 ---
 
 ## Step 1: Project scaffolding and CLI skeleton **(DONE)**
 
 - [x] `cargo init` with binary target
-- [x] Add dependencies to Cargo.toml: clap (derive), tracing, tracing-subscriber, thiserror, anyhow, serde (derive), serde_yaml, serde_json, chrono (serde feature), tempfile
+- [x] Add dependencies to Cargo.toml: clap (derive), tracing, tracing-subscriber, thiserror, anyhow, serde (derive),
+      serde_yaml, serde_json, chrono (serde feature), tempfile
 - [x] Add dev-dependency: assert_cmd, predicates, tempfile
 - [x] Create `src/main.rs` with clap top-level CLI struct:
   - Global flags: `-v` (DEBUG), `-vv` (TRACE), `-q` (WARN), `-qq` (ERROR), `--log-level=<LEVEL>`
@@ -63,7 +73,8 @@
 
 - [x] Create `src/frontmatter.rs`:
   - `SoulFrontmatter` struct: `last_distilled: DateTime<Utc>`, `soul_version: u32`
-  - `parse_soul(content: &str) -> Result<(SoulFrontmatter, &str)>` — extracts frontmatter and body from `---`-delimited YAML block
+  - `parse_soul(content: &str) -> Result<(SoulFrontmatter, &str)>` — extracts frontmatter and body from `---`-delimited
+    YAML block
   - `serialize_soul(frontmatter: &SoulFrontmatter, body: &str) -> String` — reassembles the full document
 - [x] Tests:
   - Parse valid frontmatter with both fields
@@ -82,8 +93,10 @@
 ## Step 4: Log filename parsing and generation **(DONE)**
 
 - [x] Create `src/log_filename.rs`:
-  - `generate_log_filename(timestamp: DateTime<Utc>, session_id: &str) -> String` — produces `YYYYMMDDTHHMMSSZ-<session_id>.md`
-  - `parse_log_filename(filename: &str) -> Result<(DateTime<Utc>, String)>` — extracts timestamp and session_id from filename
+  - `generate_log_filename(timestamp: DateTime<Utc>, session_id: &str) -> String` — produces
+    `YYYYMMDDTHHMMSSZ-<session_id>.md`
+  - `parse_log_filename(filename: &str) -> Result<(DateTime<Utc>, String)>` — extracts timestamp and session_id from
+    filename
 - [x] Tests:
   - Generate produces correct format
   - Parse extracts correct timestamp and session_id
@@ -98,11 +111,14 @@
 
 - [x] Create `src/templates.rs`:
   - `SOUL_TEMPLATE_VERSION: u32` — current version (start at 1)
-  - `SOUL_TEMPLATE: &str` — the initial soul template content (~1 page, section headings for communication style, coding preferences, workflow patterns, tool preferences, etc.)
+  - `SOUL_TEMPLATE: &str` — the initial soul template content (~1 page, section headings for communication style, coding
+    preferences, workflow patterns, tool preferences, etc.)
   - `SOUL_TEMPLATE_CHANGELOG: &[(u32, &str)]` — version changelog entries (just v1 for now)
-  - `CONTEXT_PREAMBLE: &str` — the preamble for `leiter context` covering identity, soul file location, when to edit soul, session logging, distillation command, soul upgrade command (all per spec)
+  - `CONTEXT_PREAMBLE: &str` — the preamble for `leiter context` covering identity, soul file location, when to edit
+    soul, session logging, distillation command, soul upgrade command (all per spec)
   - `STOP_HOOK_PROMPT_TEMPLATE: &str` — the stop hook blocking reason template (with `{session_id}` placeholder)
-  - `AGENT_SETUP_INSTRUCTIONS: &str` — the instructions output by `leiter agent-setup` (with the exact hook JSON from the spec)
+  - `AGENT_SETUP_INSTRUCTIONS: &str` — the instructions output by `leiter agent-setup` (with the exact hook JSON from
+    the spec)
 - [x] Tests:
   - Soul template contains expected section headings
   - Soul template version is > 0
@@ -120,12 +136,14 @@
 - [x] Implement `agent_setup()`:
   1. Create `~/.leiter/` (no-op if exists)
   2. Create `~/.leiter/logs/` (no-op if exists)
-  3. If `~/.leiter/soul.md` does not exist: write soul template with frontmatter (`last_distilled: 1970-01-01T00:00:00Z`, `soul_version: <current>`)
+  3. If `~/.leiter/soul.md` does not exist: write soul template with frontmatter
+     (`last_distilled: 1970-01-01T00:00:00Z`, `soul_version: <current>`)
   4. If `~/.leiter/soul.md` exists: skip (do not overwrite)
   5. Print agent setup instructions to stdout
   6. If any step fails, output instructions telling the agent to relay the error
 - [x] Wire into CLI dispatch in `main.rs`
-- [x] Tests (use a temp dir override for `~/.leiter/` — accept a base path parameter or use an env var override for testing):
+- [x] Tests (use a temp dir override for `~/.leiter/` — accept a base path parameter or use an env var override for
+      testing):
   - Fresh setup creates all directories and soul.md
   - Soul.md contains expected frontmatter (last_distilled = epoch, soul_version = current)
   - Soul.md body matches template
@@ -146,7 +164,8 @@
 - [x] Tests:
   - With existing soul: output starts with preamble, followed by soul content
   - Without soul: output contains "not initialized" and "leiter agent-setup"
-  - Preamble contains all required elements (identity, soul path, edit instructions, logging, distill command, upgrade command)
+  - Preamble contains all required elements (identity, soul path, edit instructions, logging, distill command, upgrade
+    command)
   - Soul content is reproduced verbatim
 - [x] Invoke `pre-pr-review-swarm` skill to review uncommitted changes; address feedback
 - [x] **STOP** — wait for user before proceeding to next step
@@ -202,7 +221,8 @@
 - [x] Implement `stop_hook()`:
   1. Read JSON from stdin
   2. Deserialize to extract `session_id` (string) and `stop_hook_active` (bool)
-  3. If `stop_hook_active` is false: output `{"decision":"block","reason":"..."}` with session logging prompt including the session_id
+  3. If `stop_hook_active` is false: output `{"decision":"block","reason":"..."}` with session logging prompt including
+     the session_id
   4. If `stop_hook_active` is true: output nothing (or `{"decision":"allow"}`), exit 0
 - [x] Wire into CLI dispatch
 - [x] Tests:
@@ -224,7 +244,8 @@
   1. Read and parse `~/.leiter/soul.md` frontmatter for `soul_version`
   2. Compare with `SOUL_TEMPLATE_VERSION`
   3. If equal: output "soul is up to date"
-  4. If outdated: output changelog for versions between user's and current, the full current template, and instructions for the agent to migrate
+  4. If outdated: output changelog for versions between user's and current, the full current template, and instructions
+     for the agent to migrate
 - [x] Wire into CLI dispatch
 - [x] Tests:
   - Soul version == current → up-to-date message
@@ -240,7 +261,8 @@
 - [x] Full flow: agent-setup → context → verify soul injected
 - [x] Full flow: agent-setup → log a session → distill → verify log appears
 - [x] Full flow: distill with last_distilled = epoch → all logs appear
-- [x] Full flow: stop-hook with `stop_hook_active: false` → block → log → stop-hook with `stop_hook_active: true` → allow
+- [x] Full flow: stop-hook with `stop_hook_active: false` → block → log → stop-hook with `stop_hook_active: true` →
+      allow
 - [x] Full flow: agent-setup twice → soul not overwritten, no errors
 - [x] Verify all stdout/stderr separation (contractual output on stdout, tracing on stderr)
 - [x] Invoke `pre-pr-review-swarm` skill to review all uncommitted changes; address feedback
