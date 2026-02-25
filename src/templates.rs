@@ -69,13 +69,15 @@ When the user asks to distill session logs, run `leiter distill`. This outputs u
 
 When the user asks to upgrade the leiter soul, run `leiter soul-upgrade`. If the soul template is outdated, this outputs migration instructions and the new template. Follow the instructions to restructure the soul while preserving all learned preferences.
 
+IMPORTANT: All `leiter` CLI commands that write to the filesystem (especially `leiter log`) must be run outside the sandbox (i.e., with sandbox disabled). The leiter state directory (`~/.leiter/`) is outside the default sandbox allowed paths and writes will fail with \"Operation not permitted\" otherwise.
+
 ---
 ";
 
 /// Template for the stop hook blocking reason. `{session_id}` is replaced at
 /// runtime with the actual session ID from the hook input.
 pub const STOP_HOOK_PROMPT_TEMPLATE: &str = "\
-Before stopping, please write a brief session log summarizing what was done in this session, any learnings for future sessions, and any challenges encountered. Pipe the log content to `leiter log --session-id {session_id}`. If you have already written a session log in this session, you may skip this step.";
+Before stopping, please write a brief session log summarizing what was done in this session, any learnings for future sessions, and any challenges encountered. Pipe the log content to `leiter log --session-id {session_id}` (run outside the sandbox — leiter writes to ~/.leiter/ which is not in the sandbox allowed paths). If you have already written a session log in this session, you may skip this step.";
 
 /// Instructions output by `leiter agent-setup` telling the agent how to
 /// configure Claude Code hooks in `~/.claude/settings.json`.
