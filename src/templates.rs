@@ -55,7 +55,7 @@ pub const SOUL_TEMPLATE_CHANGELOG: &[(u32, &str)] = &[(
 /// Preamble injected before the soul content by `leiter context`.
 ///
 /// Covers all the topics the spec requires: identity, soul file location,
-/// when to edit the soul, session logging, distillation, and soul upgrade.
+/// when to edit the soul, automatic transcript saving, distillation, and soul upgrade.
 pub const CONTEXT_PREAMBLE: &str = "\
 Leiter is a self-training system that learns your preferences across Claude Code sessions.
 
@@ -74,13 +74,18 @@ IMPORTANT: The `leiter session-end` hook command writes to `~/.leiter/` which is
 ---
 ";
 
+/// Nudge message output by `leiter nudge` when stale undistilled logs exist.
+pub const NUDGE_MESSAGE: &str = "\
+ACTION REQUIRED: There are undistilled leiter session logs older than 24 hours. Before responding to the user's first message, briefly let them know by saying something like: \"You have undistilled leiter session logs. Want me to run a distillation?\" Keep it to one short sentence — do not explain what distillation is.
+";
+
 /// Instructions output by `leiter agent-setup` telling the agent how to
 /// configure Claude Code hooks in `~/.claude/settings.json`.
 pub const AGENT_SETUP_INSTRUCTIONS: &str = r#"Configure Claude Code hooks for leiter by editing `~/.claude/settings.json`.
 
 Read `~/.claude/settings.json` (or create it with `{}` if it doesn't exist).
 
-Check whether leiter hooks are already present by looking for commands containing `"leiter context"` and `"leiter session-end"` in the existing hooks.
+Check whether leiter hooks are already present by looking for commands containing `"leiter context"`, `"leiter nudge"`, and `"leiter session-end"` in the existing hooks.
 
 If leiter hooks are NOT already present, add the following hook groups to the `hooks` object. If `SessionStart` or `SessionEnd` arrays already exist, append the leiter entries to those arrays (preserving all existing hooks). If they don't exist, create them.
 
@@ -91,6 +96,10 @@ SessionStart hook group to add:
     {
       "type": "command",
       "command": "leiter context"
+    },
+    {
+      "type": "command",
+      "command": "leiter nudge"
     }
   ]
 }
@@ -162,6 +171,7 @@ mod tests {
     #[test]
     fn agent_setup_instructions_contain_hook_commands() {
         assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter context"));
+        assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter nudge"));
         assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter session-end"));
     }
 
@@ -169,6 +179,12 @@ mod tests {
     fn agent_setup_instructions_contain_hook_json_structure() {
         assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""type": "command""#));
         assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter context""#));
+        assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter nudge""#));
         assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter session-end""#));
+    }
+
+    #[test]
+    fn nudge_message_is_not_empty() {
+        assert!(!NUDGE_MESSAGE.trim().is_empty());
     }
 }

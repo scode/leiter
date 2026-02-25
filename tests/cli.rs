@@ -28,6 +28,13 @@ fn parses_distill() {
 }
 
 #[test]
+fn parses_nudge() {
+    // nudge reads ~/.leiter/soul.md which may not exist in sandboxed environments.
+    let assert = leiter().arg("nudge").assert();
+    assert.stderr(predicate::str::contains("unrecognized subcommand").not());
+}
+
+#[test]
 fn parses_session_end() {
     // session-end reads JSON from stdin, so it will fail with empty input,
     // but we verify the subcommand is recognized (no "unrecognized subcommand").
