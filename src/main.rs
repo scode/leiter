@@ -34,16 +34,10 @@ pub enum Command {
     AgentSetup,
     /// Output soul content and agent instructions
     Context,
-    /// Store a session log
-    Log {
-        /// Claude Code session ID
-        #[arg(long)]
-        session_id: String,
-    },
     /// Output unprocessed session logs for distillation
     Distill,
-    /// Handle the Claude Code Stop hook
-    StopHook,
+    /// Handle the Claude Code SessionEnd hook
+    SessionEnd,
     /// Detect and output soul template migration instructions
     SoulUpgrade,
 }
@@ -88,19 +82,11 @@ fn main() -> Result<()> {
         Command::Context => {
             commands::context::run(&home, &mut std::io::stdout())?;
         }
-        Command::Log { session_id } => {
-            commands::log::run(
-                &home,
-                session_id,
-                &mut std::io::stdin(),
-                &mut std::io::stdout(),
-            )?;
-        }
         Command::Distill => {
             commands::distill::run(&home, &mut std::io::stdout())?;
         }
-        Command::StopHook => {
-            commands::stop_hook::run(&mut std::io::stdin(), &mut std::io::stdout())?;
+        Command::SessionEnd => {
+            commands::session_end::run(&home, &mut std::io::stdin(), &mut std::io::stdout())?;
         }
         Command::SoulUpgrade => {
             commands::soul_upgrade::run(&home, &mut std::io::stdout())?;

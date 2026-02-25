@@ -1,6 +1,6 @@
 //! Generate and parse session log filenames.
 //!
-//! Log files are named `<YYYYMMDDTHHMMSSZ>-<session_id>.md` using UTC ISO 8601
+//! Log files are named `<YYYYMMDDTHHMMSSZ>-<session_id>.jsonl` using UTC ISO 8601
 //! basic format for the timestamp. Basic format (no colons or hyphens in the
 //! timestamp) keeps filenames filesystem-safe and ensures lexicographic sorting
 //! matches chronological order.
@@ -16,7 +16,11 @@ const TIMESTAMP_FORMAT: &str = "%Y%m%dT%H%M%SZ";
 /// The timestamp uses UTC ISO 8601 basic format so filenames sort
 /// chronologically when sorted lexicographically.
 pub fn generate_log_filename(timestamp: DateTime<Utc>, session_id: &str) -> String {
-    format!("{}-{}.md", timestamp.format(TIMESTAMP_FORMAT), session_id)
+    format!(
+        "{}-{}.jsonl",
+        timestamp.format(TIMESTAMP_FORMAT),
+        session_id
+    )
 }
 
 /// Extract the timestamp and session ID from a log filename.
@@ -25,9 +29,14 @@ pub fn generate_log_filename(timestamp: DateTime<Utc>, session_id: &str) -> Stri
 /// may contain hyphens — only the first hyphen after the timestamp is used
 /// as the separator.
 pub fn parse_log_filename(filename: &str) -> Result<(DateTime<Utc>, String), LeiterError> {
-    let stem = filename.strip_suffix(".md").ok_or_else(|| {
-        LeiterError::LogFilenameParse(format!("log filename missing .md extension: {filename}"))
-    })?;
+    let stem = filename
+        .strip_suffix(".jsonl")
+        .or_else(|| filename.strip_suffix(".md"))
+        .ok_or_else(|| {
+            LeiterError::LogFilenameParse(format!(
+                "log filename missing .jsonl or .md extension: {filename}"
+            ))
+        })?;
 
     // Timestamp is fixed-width (16 chars: YYYYMMDDTHHMMSSZ), followed by a hyphen.
     if stem.len() < 18 || stem.as_bytes()[16] != b'-' {
@@ -64,11 +73,18 @@ mod tests {
     #[test]
     fn generate_produces_correct_format() {
         let filename = generate_log_filename(ts(2026, 2, 23, 17, 30, 0), "abc123");
-        assert_eq!(filename, "20260223T173000Z-abc123.md");
+        assert_eq!(filename, "20260223T173000Z-abc123.jsonl");
     }
 
     #[test]
     fn parse_extracts_timestamp_and_session_id() {
+        let (timestamp, session_id) = parse_log_filename("20260223T173000Z-abc123.jsonl").unwrap();
+        assert_eq!(timestamp, ts(2026, 2, 23, 17, 30, 0));
+        assert_eq!(session_id, "abc123");
+    }
+
+    #[test]
+    fn parse_accepts_legacy_md_extension() {
         let (timestamp, session_id) = parse_log_filename("20260223T173000Z-abc123.md").unwrap();
         assert_eq!(timestamp, ts(2026, 2, 23, 17, 30, 0));
         assert_eq!(session_id, "abc123");
@@ -85,7 +101,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_missing_md_extension() {
+    fn parse_rejects_missing_extension() {
         assert!(parse_log_filename("20260223T173000Z-abc123").is_err());
     }
 

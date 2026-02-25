@@ -63,21 +63,16 @@ Your soul file is at `~/.leiter/soul.md`. Use your Read/Edit/Write tools to modi
 
 When the user says \"remember\", \"learn\", \"always\", \"never\", or similar preference-setting language, read the soul file, find the appropriate section, and add the preference. No CLI command is needed — edit the file directly.
 
-You will be prompted to write a session log when this session ends (via the stop hook). You do not need to do anything proactively — the prompt will include instructions and the session ID.
+Session transcripts are saved automatically when each session ends. No manual logging needed.
 
 When the user asks to distill session logs, run `leiter distill`. This outputs unprocessed session logs. Read through them, update the soul with new learnings, then update `last_distilled` in the soul file's frontmatter to the current UTC ISO 8601 timestamp (e.g., 2026-02-23T17:00:00Z).
 
 When the user asks to upgrade the leiter soul, run `leiter soul-upgrade`. If the soul template is outdated, this outputs migration instructions and the new template. Follow the instructions to restructure the soul while preserving all learned preferences.
 
-IMPORTANT: All `leiter` CLI commands that write to the filesystem (especially `leiter log`) must be run outside the sandbox (i.e., with sandbox disabled). The leiter state directory (`~/.leiter/`) is outside the default sandbox allowed paths and writes will fail with \"Operation not permitted\" otherwise.
+IMPORTANT: The `leiter session-end` hook command writes to `~/.leiter/` which is outside the default sandbox allowed paths. Ensure it is run outside the sandbox (i.e., with sandbox disabled) or writes will fail with \"Operation not permitted\".
 
 ---
 ";
-
-/// Template for the stop hook blocking reason. `{session_id}` is replaced at
-/// runtime with the actual session ID from the hook input.
-pub const STOP_HOOK_PROMPT_TEMPLATE: &str = "\
-Before stopping, please write a brief session log summarizing what was done in this session, any learnings for future sessions, and any challenges encountered. Pipe the log content to `leiter log --session-id {session_id}` (run outside the sandbox — leiter writes to ~/.leiter/ which is not in the sandbox allowed paths). If you have already written a session log in this session, you may skip this step.";
 
 /// Instructions output by `leiter agent-setup` telling the agent how to
 /// configure Claude Code hooks in `~/.claude/settings.json`.
@@ -85,9 +80,9 @@ pub const AGENT_SETUP_INSTRUCTIONS: &str = r#"Configure Claude Code hooks for le
 
 Read `~/.claude/settings.json` (or create it with `{}` if it doesn't exist).
 
-Check whether leiter hooks are already present by looking for commands containing `"leiter context"` and `"leiter stop-hook"` in the existing hooks.
+Check whether leiter hooks are already present by looking for commands containing `"leiter context"` and `"leiter session-end"` in the existing hooks.
 
-If leiter hooks are NOT already present, add the following hook groups to the `hooks` object. If `SessionStart` or `Stop` arrays already exist, append the leiter entries to those arrays (preserving all existing hooks). If they don't exist, create them.
+If leiter hooks are NOT already present, add the following hook groups to the `hooks` object. If `SessionStart` or `SessionEnd` arrays already exist, append the leiter entries to those arrays (preserving all existing hooks). If they don't exist, create them.
 
 SessionStart hook group to add:
 ```json
@@ -101,13 +96,13 @@ SessionStart hook group to add:
 }
 ```
 
-Stop hook group to add:
+SessionEnd hook group to add:
 ```json
 {
   "hooks": [
     {
       "type": "command",
-      "command": "leiter stop-hook"
+      "command": "leiter session-end"
     }
   ]
 }
@@ -165,20 +160,15 @@ mod tests {
     }
 
     #[test]
-    fn stop_hook_prompt_contains_session_id_placeholder() {
-        assert!(STOP_HOOK_PROMPT_TEMPLATE.contains("{session_id}"));
-    }
-
-    #[test]
     fn agent_setup_instructions_contain_hook_commands() {
         assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter context"));
-        assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter stop-hook"));
+        assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter session-end"));
     }
 
     #[test]
     fn agent_setup_instructions_contain_hook_json_structure() {
         assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""type": "command""#));
         assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter context""#));
-        assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter stop-hook""#));
+        assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter session-end""#));
     }
 }

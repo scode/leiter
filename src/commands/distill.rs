@@ -178,7 +178,7 @@ mod tests {
         write_log(tmp.path(), 2026, 1, 1, 0, "sess1", "content1");
 
         let output = run_distill(tmp.path());
-        assert!(output.contains("## 20260101T000000Z-sess1.md"));
+        assert!(output.contains("## 20260101T000000Z-sess1.jsonl"));
     }
 
     #[test]
