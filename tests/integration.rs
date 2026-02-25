@@ -178,6 +178,41 @@ fn stdout_stderr_separation() {
 }
 
 #[test]
+fn nudge_outputs_nothing_when_no_stale_logs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+
+    leiter(home).arg("agent-setup").assert().success();
+
+    // No logs exist, so nudge should output nothing.
+    leiter(home)
+        .arg("nudge")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn nudge_outputs_message_when_stale_logs_exist() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+
+    leiter(home).arg("agent-setup").assert().success();
+
+    // Create a log file with a timestamp >24h ago by writing directly to logs dir.
+    // agent-setup sets last_distilled to epoch, so any log >= epoch is undistilled.
+    let stale_filename = "20260101T000000Z-stale-sess.jsonl";
+    let logs_dir = home.join(".leiter").join("logs");
+    fs::write(logs_dir.join(stale_filename), "stale log content\n").unwrap();
+
+    leiter(home)
+        .arg("nudge")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("undistilled leiter session logs"));
+}
+
+#[test]
 fn soul_upgrade_reports_up_to_date_after_setup() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();

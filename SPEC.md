@@ -21,7 +21,7 @@ terminates and provides the transcript path directly, so no agent involvement is
 │                    Claude Code Session                   │
 │                                                         │
 │  SessionStart hook ──► leiter context ──► soul + agent  │
-│                                           instructions  │
+│                        leiter nudge       instructions  │
 │                                           injected      │
 │                                                         │
 │  ... normal session ...                                 │
@@ -132,8 +132,8 @@ configure Claude Code hooks.
    section below)
 2. Instructions for the agent to:
    - Read `~/.claude/settings.json` (or create it with `{}` if it doesn't exist)
-   - Check whether leiter hooks are already present (by looking for commands containing `"leiter context"` and
-     `"leiter session-end"`)
+   - Check whether leiter hooks are already present (by looking for commands containing `"leiter context"`,
+     `"leiter nudge"`, and `"leiter session-end"`)
    - If not present, append the leiter hook groups to the existing `SessionStart` and `SessionEnd` arrays (creating
      those arrays if they don't exist), preserving all existing hooks
    - If already present, skip and report that hooks are already configured
@@ -162,8 +162,8 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
    preference-setting language. The agent should read the soul, find the appropriate section, and add the preference. No
    CLI command is needed for this — the agent edits the file directly.
 
-   **Session logging:** The agent will be prompted to write a session log when the session ends (via the stop hook). It
-   does not need to do anything proactively — the prompt will include instructions and the session ID.
+   **Session transcripts:** Session transcripts are saved automatically by the SessionEnd hook. The agent does not need
+   to do anything — no manual logging is required.
 
    **Distillation command:** Must include the literal command `leiter distill`. Explain that this is user-triggered (the
    user says "distill" or similar), outputs unprocessed session logs, and the agent should then update the soul with new
@@ -225,6 +225,28 @@ Outputs session logs that haven't been processed since the last distillation.
 After the agent processes the distill output and updates the soul, the agent is responsible for updating the
 `last_distilled` timestamp in the soul file's frontmatter to the current time.
 
+### `leiter nudge`
+
+Checks for stale undistilled session logs and outputs a nudge if any exist. Called by the SessionStart hook (after
+`leiter context`) to remind the agent to suggest distillation.
+
+**Behavior:**
+
+1. Read `last_distilled` timestamp from `~/.leiter/soul.md` frontmatter
+2. Scan `~/.leiter/logs/` for files whose filename timestamps are >= `last_distilled` (same inclusive comparison as
+   `leiter distill`)
+3. If any such file has a timestamp older than 24 hours ago (`now - 24h`): output a nudge message (defined in source
+   code)
+4. Otherwise: output nothing
+
+If the soul file does not exist or the logs directory does not exist, silently output nothing and exit successfully.
+Leiter may not be initialized yet — the nudge must not break the session.
+
+**Output (stdout):**
+
+- If stale undistilled logs exist: a short nudge message reminding the agent to suggest distillation
+- Otherwise: nothing (zero context pollution)
+
 ### `leiter soul-upgrade`
 
 Detects soul template drift and outputs agent instructions to migrate the existing soul to the current template format.
@@ -264,6 +286,10 @@ The following hooks are configured in `~/.claude/settings.json` by the agent dur
           {
             "type": "command",
             "command": "leiter context"
+          },
+          {
+            "type": "command",
+            "command": "leiter nudge"
           }
         ]
       }
@@ -272,7 +298,9 @@ The following hooks are configured in `~/.claude/settings.json` by the agent dur
 }
 ```
 
-Fires on every session start (new, resume, clear, compact). The stdout output is added as context for the agent.
+Fires on every session start (new, resume, clear, compact). The stdout output is added as context for the agent. The
+`leiter context` hook injects the soul and agent instructions; the `leiter nudge` hook outputs a distillation reminder
+only when stale undistilled logs exist (otherwise it outputs nothing, adding zero context).
 
 ### SessionEnd Hook
 
@@ -310,7 +338,8 @@ Fires once when the session terminates. The `leiter session-end` command reads t
 
 ### Normal Session (After Setup)
 
-1. Session starts → SessionStart hook fires → `leiter context` outputs soul + instructions → agent has leiter context
+1. Session starts → SessionStart hook fires → `leiter context` outputs soul + instructions, `leiter nudge` outputs a
+   distillation reminder if stale logs exist → agent has leiter context
 2. Normal session proceeds
 3. Session ends → SessionEnd hook fires → `leiter session-end` copies transcript to `~/.leiter/logs/`
 

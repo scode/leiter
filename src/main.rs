@@ -36,6 +36,8 @@ pub enum Command {
     Context,
     /// Output unprocessed session logs for distillation
     Distill,
+    /// Nudge about stale undistilled logs
+    Nudge,
     /// Handle the Claude Code SessionEnd hook
     SessionEnd,
     /// Detect and output soul template migration instructions
@@ -84,6 +86,9 @@ fn main() -> Result<()> {
         }
         Command::Distill => {
             commands::distill::run(&home, &mut std::io::stdout())?;
+        }
+        Command::Nudge => {
+            commands::nudge::run(&home, &mut std::io::stdout())?;
         }
         Command::SessionEnd => {
             commands::session_end::run(&home, &mut std::io::stdin(), &mut std::io::stdout())?;
