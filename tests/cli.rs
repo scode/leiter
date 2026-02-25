@@ -21,14 +21,6 @@ fn parses_context() {
 }
 
 #[test]
-fn parses_log_with_session_id() {
-    // log reads stdin and writes to ~/.leiter/logs/ which may not exist in
-    // sandboxed environments, so just verify the subcommand is recognized.
-    let assert = leiter().args(["log", "--session-id", "abc123"]).assert();
-    assert.stderr(predicate::str::contains("unrecognized subcommand").not());
-}
-
-#[test]
 fn parses_distill() {
     // distill requires ~/.leiter/soul.md which may not exist.
     let assert = leiter().arg("distill").assert();
@@ -36,10 +28,10 @@ fn parses_distill() {
 }
 
 #[test]
-fn parses_stop_hook() {
-    // stop-hook reads JSON from stdin, so it will fail with empty input,
+fn parses_session_end() {
+    // session-end reads JSON from stdin, so it will fail with empty input,
     // but we verify the subcommand is recognized (no "unrecognized subcommand").
-    let assert = leiter().arg("stop-hook").assert();
+    let assert = leiter().arg("session-end").assert();
     assert.stderr(predicate::str::contains("unrecognized subcommand").not());
 }
 
@@ -122,13 +114,4 @@ fn unknown_subcommand_errors() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("unrecognized subcommand"));
-}
-
-#[test]
-fn log_requires_session_id() {
-    leiter()
-        .arg("log")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("--session-id"));
 }

@@ -150,7 +150,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let output = run_setup(tmp.path());
         assert!(output.contains("leiter context"));
-        assert!(output.contains("leiter stop-hook"));
+        assert!(output.contains("leiter session-end"));
     }
 
     #[test]

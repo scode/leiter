@@ -12,6 +12,10 @@ remember. The CLI never calls the Claude API.
 
 ## Architecture
 
+The SessionEnd hook (rather than Stop) is used for session logging because Stop fires on every turn — not just session
+end — which would block the agent on every response to write a log. SessionEnd fires once when the session actually
+terminates and provides the transcript path directly, so no agent involvement is needed to save it.
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    Claude Code Session                   │
@@ -29,18 +33,15 @@ remember. The CLI never calls the Claude API.
 │                           ──► agent edits soul.md       │
 │                           ──► agent updates frontmatter │
 │                                                         │
-│  Stop hook ──► leiter stop-hook                         │
-│                ──► blocks stop (if not already logging) │
-│                ──► agent writes summary                 │
-│                ──► pipes to leiter log                  │
-│                ──► agent stops                          │
+│  SessionEnd hook ──► leiter session-end                 │
+│                      ──► copies transcript to logs/     │
 └─────────────────────────────────────────────────────────┘
 
 ~/.leiter/
 ├── soul.md              # The "leiter soul" — agent instructions
 └── logs/
-    ├── 20260223T173000Z-abc123.md
-    ├── 20260223T190000Z-def456.md
+    ├── 20260223T173000Z-abc123.jsonl
+    ├── 20260223T190000Z-def456.jsonl
     └── ...
 ```
 
@@ -86,11 +87,10 @@ preferences, workflow patterns, tool preferences).
 
 ### `~/.leiter/logs/`
 
-Session logs, one file per session. Named `<UTC_ISO8601_BASIC>-<session_id>.md` (e.g., `20260223T173000Z-abc123.md`)
-using UTC ISO 8601 basic format (`YYYYMMDDTHHMMSSZ`) for the timestamp and the Claude Code session ID as a suffix. The
-session ID makes it easy to associate a log file with a specific session for debugging. Each file contains free-form
-markdown written by the agent — typically a brief summary of what was done, learnings, challenges, and things the user
-corrected.
+Session transcripts, one file per session. Named `<UTC_ISO8601_BASIC>-<session_id>.jsonl` (e.g.,
+`20260223T173000Z-abc123.jsonl`) using UTC ISO 8601 basic format (`YYYYMMDDTHHMMSSZ`) for the timestamp and the Claude
+Code session ID as a suffix. The session ID makes it easy to associate a log file with a specific session for debugging.
+Each file is a session transcript (JSONL) copied from the Claude Code transcript path provided by the SessionEnd hook.
 
 All timestamps in leiter — frontmatter values, log filenames, and CLI output — use UTC ISO 8601 format. Frontmatter uses
 extended format (`2026-02-23T17:00:00Z`). Filenames use basic format (`20260223T173000Z`) to avoid colons and other
@@ -128,14 +128,14 @@ configure Claude Code hooks.
 **Output (stdout):** Natural language instructions telling the agent to configure Claude Code hooks in
 `~/.claude/settings.json`. The output includes:
 
-1. The exact JSON hook entries to add (the `SessionStart` and `Stop` hook objects shown in the Hook Configuration
+1. The exact JSON hook entries to add (the `SessionStart` and `SessionEnd` hook objects shown in the Hook Configuration
    section below)
 2. Instructions for the agent to:
    - Read `~/.claude/settings.json` (or create it with `{}` if it doesn't exist)
    - Check whether leiter hooks are already present (by looking for commands containing `"leiter context"` and
-     `"leiter stop-hook"`)
-   - If not present, append the leiter hook groups to the existing `SessionStart` and `Stop` arrays (creating those
-     arrays if they don't exist), preserving all existing hooks
+     `"leiter session-end"`)
+   - If not present, append the leiter hook groups to the existing `SessionStart` and `SessionEnd` arrays (creating
+     those arrays if they don't exist), preserving all existing hooks
    - If already present, skip and report that hooks are already configured
    - Use the agent's Edit tool to make the changes
 
@@ -178,32 +178,30 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
 If `~/.leiter/soul.md` does not exist, outputs a message telling the agent that leiter is not initialized and to suggest
 the user run `leiter agent-setup`.
 
-### `leiter log --session-id <id>`
+### `leiter session-end`
 
-Stores a session log. Reads the log content from stdin.
+Hook handler for the Claude Code SessionEnd event. Reads the SessionEnd hook JSON from stdin and copies the session
+transcript to the logs directory.
 
-**Input:** Free-form markdown on stdin.
+**Input:** Claude Code SessionEnd hook JSON on stdin. The command depends on these fields (other fields may be present
+and are ignored):
 
-**Arguments:**
-
-- `--session-id <id>` (required): The Claude Code session ID, used in the filename for debuggability.
+- `session_id` (string): The Claude Code session ID
+- `transcript_path` (string): Path to the session transcript file
 
 **Behavior:**
 
-1. Read all of stdin to completion (wait for stdin to close before proceeding)
-2. Write the content to a temporary file in the same filesystem as `~/.leiter/logs/` using the OS tempfile facility
+1. Read and parse JSON from stdin
+2. Read the transcript file at `transcript_path`
+3. Write the transcript to a temporary file in the same filesystem as `~/.leiter/logs/` using the OS tempfile facility
    (e.g., `tempfile` crate)
-3. Generate the final filename using the current UTC timestamp (captured after stdin is fully read):
-   `~/.leiter/logs/<YYYYMMDDTHHMMSSZ>-<session_id>.md`
-4. Atomically rename the temporary file to the final path
-
-The timestamp is captured after stdin closes, not before, so the filename reflects when the log was actually received
-rather than when the command started.
+4. Generate the final filename using the current UTC timestamp: `~/.leiter/logs/<YYYYMMDDTHHMMSSZ>-<session_id>.jsonl`
+5. Atomically rename the temporary file to the final path
 
 **Output (stdout):** Confirmation message with the path of the created file.
 
-**Errors:** If `~/.leiter/logs/` does not exist, the write fails, or the atomic rename fails, print an error to stderr
-and exit with a non-zero code. Clean up the temporary file on any error.
+**Errors:** If `~/.leiter/logs/` does not exist, the transcript file cannot be read, the write fails, or the atomic
+rename fails, print an error to stderr and exit with a non-zero code. Clean up the temporary file on any error.
 
 ### `leiter distill`
 
@@ -226,41 +224,6 @@ Outputs session logs that haven't been processed since the last distillation.
 
 After the agent processes the distill output and updates the soul, the agent is responsible for updating the
 `last_distilled` timestamp in the soul file's frontmatter to the current time.
-
-### `leiter stop-hook`
-
-Hook handler for the Claude Code Stop event. Reads the Stop hook JSON from stdin and decides whether to block the stop.
-
-**Input:** Claude Code Stop hook JSON on stdin. The command depends on these fields (other fields may be present and are
-ignored):
-
-- `session_id` (string): The Claude Code session ID
-- `stop_hook_active` (boolean): `false` on the first stop of a turn not initiated by a stop hook; `true` when the
-  current turn was initiated by a stop hook blocking a previous stop
-
-**Behavior:**
-
-- If `stop_hook_active` is `false`: output a blocking decision telling the agent to write a session log before stopping,
-  including the `session_id` from the input JSON so the agent can pass it to `leiter log --session-id`
-- If `stop_hook_active` is `true`: output an allow decision (exit 0 with no stdout, or a JSON object with
-  `"decision": "allow"`)
-
-Note: `stop_hook_active` is `false` on resumed sessions too (the resume is user-initiated, not stop-hook-initiated).
-This means a resumed session will also be prompted to write a session log. Duplicate logging from resume is acceptable —
-better to capture extra signal than to lose it.
-
-**Output when blocking:**
-
-A JSON object with `"decision": "block"` and a `"reason"` containing the session logging prompt. The exact prompt
-wording is maintained in the source code alongside other agent-facing text (like the soul template and context
-preamble). Example for illustration:
-
-```json
-{
-  "decision": "block",
-  "reason": "Before stopping, please write a brief session log summarizing what was done in this session, any learnings for future sessions, and any challenges encountered. Pipe the log content to `leiter log --session-id abc123`. If you have already written a session log in this session, you may skip this step."
-}
-```
 
 ### `leiter soul-upgrade`
 
@@ -311,17 +274,17 @@ The following hooks are configured in `~/.claude/settings.json` by the agent dur
 
 Fires on every session start (new, resume, clear, compact). The stdout output is added as context for the agent.
 
-### Stop Hook
+### SessionEnd Hook
 
 ```json
 {
   "hooks": {
-    "Stop": [
+    "SessionEnd": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "leiter stop-hook"
+            "command": "leiter session-end"
           }
         ]
       }
@@ -330,10 +293,8 @@ Fires on every session start (new, resume, clear, compact). The stdout output is
 }
 ```
 
-Fires when the agent finishes responding. The `leiter stop-hook` command reads the hook JSON from stdin. When
-`stop_hook_active` is false (the agent was not continued by a stop hook), it blocks the stop with instructions to write
-a session log. When `stop_hook_active` is true (the agent was continued by a stop hook and has had the chance to write a
-log), it allows the stop.
+Fires once when the session terminates. The `leiter session-end` command reads the SessionEnd hook JSON from stdin
+(which includes `session_id` and `transcript_path`) and copies the transcript to `~/.leiter/logs/`.
 
 ## Flows
 
@@ -351,9 +312,7 @@ log), it allows the stop.
 
 1. Session starts → SessionStart hook fires → `leiter context` outputs soul + instructions → agent has leiter context
 2. Normal session proceeds
-3. Agent finishes → Stop hook fires → `leiter stop-hook` blocks with "write a session log"
-4. Agent writes a markdown summary and pipes it to `leiter log`
-5. Agent finishes again → Stop hook fires → `stop_hook_active` is true → stop allowed
+3. Session ends → SessionEnd hook fires → `leiter session-end` copies transcript to `~/.leiter/logs/`
 
 ### User Asks the Agent to Learn Something
 
@@ -375,12 +334,11 @@ log), it allows the stop.
 ### Distillation
 
 1. User says "distill my session logs" (or similar natural language)
-2. Agent writes a session log for the current session first (so it's included)
-3. Agent runs `leiter distill`
-4. Agent receives all session logs since last distillation
-5. Agent reads current `~/.leiter/soul.md`
-6. Agent edits the soul to incorporate new learnings
-7. Agent updates `last_distilled` in the frontmatter to the current timestamp
+2. Agent runs `leiter distill`
+3. Agent receives all session logs since last distillation
+4. Agent reads current `~/.leiter/soul.md`
+5. Agent edits the soul to incorporate new learnings
+6. Agent updates `last_distilled` in the frontmatter to the current timestamp
 
 ## Non-Goals (For Now)
 
