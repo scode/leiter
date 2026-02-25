@@ -12,17 +12,19 @@ cargo install --path .
 
 ## Setup
 
-In a Claude Code session, say "set up leiter". The agent will run `leiter agent-setup`, which initializes `~/.leiter/`
-and outputs instructions for the agent to configure Claude Code hooks in `~/.claude/settings.json`.
+In a Claude Code session, paste the following prompt:
 
-Once hooks are configured, leiter is active on every future session.
+```
+Run the shell command `leiter agent-setup` and follow the instructions it outputs on stdout.
+```
+
+This initializes `~/.leiter/` and configures Claude Code hooks. Once done, leiter is active on every future session.
 
 ## Usage
 
-Leiter works through Claude Code hooks — no manual CLI interaction is needed during normal use.
+Session context injection and session logging happen automatically via hooks. The soul itself is updated in two ways:
 
-- **Learning preferences:** Tell the agent "remember to always use snake_case" (or similar). It edits
-  `~/.leiter/soul.md` directly.
-- **Session logging:** Happens automatically when a session ends (via the Stop hook).
-- **Distillation:** Say "distill" to have the agent process recent session logs and update the soul.
+- **Learning preferences:** Tell the agent "remember to always use snake_case" (or similar). It edits the soul directly.
+- **Distillation:** Periodically say "distill" to have the agent process accumulated session logs and update the soul.
+  Without this, logs accumulate but don't feed back into the soul.
 - **Soul upgrade:** After updating the leiter binary, say "upgrade the leiter soul" to migrate to the latest template.
