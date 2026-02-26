@@ -132,11 +132,16 @@ configure Claude Code hooks.
    section below)
 2. Instructions for the agent to:
    - Read `~/.claude/settings.json` (or create it with `{}` if it doesn't exist)
-   - Check whether leiter hooks are already present (by looking for commands containing `"leiter context"`,
-     `"leiter nudge"`, and `"leiter session-end"`)
-   - If not present, append the leiter hook groups to the existing `SessionStart` and `SessionEnd` arrays (creating
-     those arrays if they don't exist), preserving all existing hooks
-   - If already present, skip and report that hooks are already configured
+   - Check whether leiter hooks are already present by looking for hook commands containing `"leiter context"`,
+     `"leiter nudge"`, or `"leiter session-end"`
+   - If no leiter hooks are found, append the leiter hook groups to the existing `SessionStart` and `SessionEnd` arrays
+     (creating those arrays if they don't exist), preserving all existing hooks
+   - If leiter hooks are found but don't match the expected set (e.g., after a leiter upgrade changed the hook
+     commands), replace the leiter hook entries with the current ones, preserving all non-leiter hooks. Create any
+     missing hook groups (e.g., if `SessionEnd` has no leiter entry but `SessionStart` does). The match is based on the
+     set of leiter command strings present, not on JSON formatting
+   - If leiter hooks are found and already match the expected commands exactly, skip and report that hooks are already
+     configured
    - Use the agent's Edit tool to make the changes
 
 If any deterministic step fails, the output instructs the agent to relay the error to the user.
