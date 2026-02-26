@@ -85,11 +85,17 @@ pub const AGENT_SETUP_INSTRUCTIONS: &str = r#"Configure Claude Code hooks for le
 
 Read `~/.claude/settings.json` (or create it with `{}` if it doesn't exist).
 
-Check whether leiter hooks are already present by looking for commands containing `"leiter context"`, `"leiter nudge"`, and `"leiter session-end"` in the existing hooks.
+Check whether leiter hooks are already present by looking for hook commands containing `"leiter context"`, `"leiter nudge"`, or `"leiter session-end"` anywhere in the existing hooks.
 
-If leiter hooks are NOT already present, add the following hook groups to the `hooks` object. If `SessionStart` or `SessionEnd` arrays already exist, append the leiter entries to those arrays (preserving all existing hooks). If they don't exist, create them.
+The desired leiter hooks are shown below. There are three cases:
 
-SessionStart hook group to add:
+1. **No leiter hooks found:** Add these hook groups to the `hooks` object. If `SessionStart` or `SessionEnd` arrays already exist, append the leiter entries to those arrays (preserving all existing hooks). If they don't exist, create them.
+
+2. **Some leiter hooks found but the set of leiter command strings doesn't match what is shown below** (e.g., a command is missing, extra, or different — this means leiter was upgraded): Replace all existing leiter hook entries with the ones below, preserving all non-leiter hooks. Check both `SessionStart` and `SessionEnd` — if either group is missing its leiter entries, create them.
+
+3. **Leiter hooks found and the command strings already match:** Skip and report that hooks are already configured.
+
+SessionStart hook group:
 ```json
 {
   "hooks": [
@@ -105,7 +111,7 @@ SessionStart hook group to add:
 }
 ```
 
-SessionEnd hook group to add:
+SessionEnd hook group:
 ```json
 {
   "hooks": [
@@ -116,8 +122,6 @@ SessionEnd hook group to add:
   ]
 }
 ```
-
-If leiter hooks are already present, skip and report that hooks are already configured.
 
 Use your Edit tool to make the changes to `~/.claude/settings.json`.
 "#;
