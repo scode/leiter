@@ -15,6 +15,7 @@ use crate::errors::LeiterError;
 use crate::frontmatter::parse_soul;
 use crate::log_filename::parse_log_filename;
 use crate::paths;
+use crate::templates::SOUL_WRITING_GUIDELINES;
 
 /// Run the distill command.
 ///
@@ -61,6 +62,8 @@ pub fn run(home: &Path, out: &mut impl Write) -> Result<()> {
     }
 
     logs.sort_by_key(|(ts, _, _)| *ts);
+
+    write!(out, "{SOUL_WRITING_GUIDELINES}")?;
 
     for (_, filename, path) in &logs {
         let content = fs::read_to_string(path)
@@ -203,6 +206,33 @@ mod tests {
         let output = run_distill(tmp.path());
         assert!(output.contains("good content"));
         assert!(!output.contains("bad"));
+    }
+
+    #[test]
+    fn output_includes_writing_guidelines() {
+        let tmp = setup_home();
+        write_log(tmp.path(), 2026, 1, 1, 0, "sess1", "content");
+
+        let output = run_distill(tmp.path());
+        assert!(output.contains("Soul-writing guidelines"));
+    }
+
+    #[test]
+    fn guidelines_appear_before_logs() {
+        let tmp = setup_home();
+        write_log(tmp.path(), 2026, 1, 1, 0, "sess1", "content");
+
+        let output = run_distill(tmp.path());
+        let guidelines_pos = output.find("Soul-writing guidelines").unwrap();
+        let log_pos = output.find("## 20260101T000000Z-sess1.jsonl").unwrap();
+        assert!(guidelines_pos < log_pos);
+    }
+
+    #[test]
+    fn no_guidelines_when_no_logs() {
+        let tmp = setup_home();
+        let output = run_distill(tmp.path());
+        assert!(!output.contains("Soul-writing guidelines"));
     }
 
     #[test]

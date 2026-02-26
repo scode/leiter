@@ -6,7 +6,7 @@
 
 /// Current soul template version. Bumped whenever the template structure
 /// changes, so `leiter soul-upgrade` can detect drift.
-pub const SOUL_TEMPLATE_VERSION: u32 = 1;
+pub const SOUL_TEMPLATE_VERSION: u32 = 2;
 
 /// Initial content for `~/.leiter/soul.md` (body only, no frontmatter).
 ///
@@ -14,6 +14,9 @@ pub const SOUL_TEMPLATE_VERSION: u32 = 1;
 /// preferences. The agent fills these in over time by editing the soul file
 /// directly.
 pub const SOUL_TEMPLATE: &str = "\
+When new observations contradict existing entries, update the entry to reflect \
+current behavior.
+
 # Communication Style
 
 How the user prefers to receive information — conciseness, level of detail,
@@ -34,34 +37,81 @@ ask vs. act, commit and PR habits, testing expectations, etc.
 Which tools and commands the user prefers (e.g., specific test runners, build
 systems, editors, shell commands). Tools to avoid.
 
-# Project Context
+# Technology & Environment
 
-Recurring project-specific knowledge — repo layouts, deployment targets,
-important dependencies, domain terminology.
+Cross-project technology preferences — languages, frameworks, databases,
+deployment targets, and infrastructure choices that apply across repos.
 
-# Corrections and Lessons
+# What Works Well
 
-Things the user has corrected or explicitly taught. Record these so the same
-mistakes are not repeated.
+Approaches, techniques, and interaction patterns that the user responds to
+positively. Record these so they can be repeated.
+
+# What to Avoid
+
+Things the user has corrected, dislikes, or explicitly asked to stop.
+Record these so the same mistakes are not repeated.
 ";
 
 /// Version changelog for the soul template. Each entry describes what changed
 /// in that version, so `leiter soul-upgrade` can show the agent what to migrate.
-pub const SOUL_TEMPLATE_CHANGELOG: &[(u32, &str)] = &[(
-    1,
-    "Initial soul template with sections for communication style, coding preferences, workflow patterns, tool preferences, project context, and corrections.",
-)];
+pub const SOUL_TEMPLATE_CHANGELOG: &[(u32, &str)] = &[
+    (
+        1,
+        "Initial soul template with sections for communication style, coding preferences, workflow patterns, tool preferences, project context, and corrections.",
+    ),
+    (
+        2,
+        "Renamed 'Project Context' to 'Technology & Environment' (cross-project scope). Split 'Corrections and Lessons' into 'What Works Well' and 'What to Avoid'. Added lifecycle note: update entries when new observations contradict them.",
+    ),
+];
+
+/// Guidelines for writing soul entries, shared by `leiter instill` and
+/// `leiter distill`. Only emitted when the agent is actively writing to
+/// the soul — never in the session preamble.
+pub const SOUL_WRITING_GUIDELINES: &str = "\
+## Soul-writing guidelines
+
+Follow these rules when adding or updating entries in the soul file.
+
+**Format:** Use concise bullets, one preference per bullet. Be specific and \
+actionable — avoid vague statements.
+
+**Placement:** Add each entry under the most appropriate section heading:
+- Communication Style — tone, detail level, explanation preferences
+- Coding Preferences — language conventions, patterns, libraries, architecture
+- Workflow Patterns — order of operations, when to ask vs. act, commit habits
+- Tool Preferences — specific tools, commands, runners, things to avoid
+- Technology & Environment — cross-project stack choices (languages, frameworks, infra)
+- What Works Well — approaches and patterns the user responds to positively
+- What to Avoid — things the user corrected, dislikes, or asked to stop
+
+**Contradiction resolution:** When a new preference contradicts an existing \
+entry, update the existing entry to reflect the new behavior. Do not add a \
+second conflicting entry. Do not remove entries just because they are old — \
+only when they are contradicted.
+
+**Examples of good entries:**
+
+- Communication Style: `- Prefers concise responses; push back when wrong rather than agreeing.`
+- Coding Preferences: `- Use snake_case for all Rust function and variable names.`
+- Workflow Patterns: `- After running review swarm, fix feedback directly rather than asking.`
+- Tool Preferences: `- Always use cargo-nextest instead of cargo test.`
+- Technology & Environment: `- Default to PostgreSQL for relational data.`
+- What Works Well: `- Presenting 2-3 options with a recommendation works better than open-ended questions.`
+- What to Avoid: `- Do not add inline comments unless the logic is non-obvious.`
+";
 
 /// Preamble injected before the soul content by `leiter context`.
 ///
 /// Covers all the topics the spec requires: identity, soul file location,
-/// when to edit the soul, automatic transcript saving, distillation, and soul upgrade.
+/// when to instill preferences, automatic transcript saving, distillation, and soul upgrade.
 pub const CONTEXT_PREAMBLE: &str = "\
 Leiter is a self-training system that learns your preferences across Claude Code sessions.
 
 Your soul file is at `~/.leiter/soul.md`. Use your Read/Edit/Write tools to modify it directly.
 
-When the user says \"remember\", \"learn\", \"always\", \"never\", or similar preference-setting language, read the soul file, find the appropriate section, and add the preference. No CLI command is needed — edit the file directly.
+When the user says \"remember\", \"learn\", \"instill\", \"always\", \"never\", or similar preference-setting language, run `leiter instill \"<what the user wants remembered>\"` and follow the instructions it outputs.
 
 Session transcripts are saved automatically when each session ends. No manual logging needed.
 
@@ -77,6 +127,30 @@ IMPORTANT: The `leiter session-end` hook command writes to `~/.leiter/` which is
 /// Nudge message output by `leiter nudge` when stale undistilled logs exist.
 pub const NUDGE_MESSAGE: &str = "\
 ACTION REQUIRED: There are undistilled leiter session logs older than 24 hours. Before responding to the user's first message, briefly let them know by saying something like: \"You have undistilled leiter session logs. Want me to run a distillation?\" Keep it to one short sentence — do not explain what distillation is.
+";
+
+/// Migration instructions output by `leiter soul-upgrade` when the soul
+/// template is outdated. Tells the agent how to restructure the existing
+/// soul content into the new template format.
+pub const SOUL_UPGRADE_INSTRUCTIONS: &str = "\
+## Migration instructions
+
+Rewrite `~/.leiter/soul.md` to match the new template structure above.
+
+Rules:
+1. Read the current soul file completely before making any changes.
+2. Every existing entry must appear in the rewritten soul. Do not drop, \
+summarize, or merge entries unless they are exact duplicates.
+3. Move each entry to the section where it best fits in the new template. \
+If an entry fits multiple sections, place it in the most specific one.
+4. Preserve the original wording of each entry. Do not rephrase or \
+\"improve\" entries during migration — the meaning must be identical.
+5. If an existing section has no equivalent in the new template, keep the \
+entries and place them in the closest matching new section.
+6. After rewriting, update `soul_version` in the frontmatter to the current \
+version.
+7. Do not add new entries or remove the section description placeholders \
+from empty sections.
 ";
 
 /// Instructions output by `leiter agent-setup` telling the agent how to
@@ -142,8 +216,9 @@ mod tests {
             "# Coding Preferences",
             "# Workflow Patterns",
             "# Tool Preferences",
-            "# Project Context",
-            "# Corrections and Lessons",
+            "# Technology & Environment",
+            "# What Works Well",
+            "# What to Avoid",
         ] {
             assert!(
                 SOUL_TEMPLATE.contains(heading),
@@ -164,12 +239,71 @@ mod tests {
 
     #[test]
     fn context_preamble_contains_required_literals() {
-        for literal in ["~/.leiter/soul.md", "leiter distill", "leiter soul-upgrade"] {
+        for literal in [
+            "~/.leiter/soul.md",
+            "leiter distill",
+            "leiter soul-upgrade",
+            "leiter instill",
+        ] {
             assert!(
                 CONTEXT_PREAMBLE.contains(literal),
                 "context preamble missing: {literal}"
             );
         }
+    }
+
+    #[test]
+    fn soul_template_contains_lifecycle_note() {
+        assert!(
+            SOUL_TEMPLATE.contains("contradict"),
+            "soul template missing lifecycle note about contradiction resolution"
+        );
+    }
+
+    #[test]
+    fn soul_template_does_not_contain_v1_sections() {
+        assert!(
+            !SOUL_TEMPLATE.contains("# Project Context"),
+            "soul template still contains old '# Project Context' section"
+        );
+        assert!(
+            !SOUL_TEMPLATE.contains("# Corrections and Lessons"),
+            "soul template still contains old '# Corrections and Lessons' section"
+        );
+    }
+
+    #[test]
+    fn soul_writing_guidelines_contains_section_names() {
+        for section in [
+            "Communication Style",
+            "Coding Preferences",
+            "Workflow Patterns",
+            "Tool Preferences",
+            "Technology & Environment",
+            "What Works Well",
+            "What to Avoid",
+        ] {
+            assert!(
+                SOUL_WRITING_GUIDELINES.contains(section),
+                "soul writing guidelines missing section: {section}"
+            );
+        }
+    }
+
+    #[test]
+    fn soul_writing_guidelines_ends_with_newline() {
+        assert!(
+            SOUL_WRITING_GUIDELINES.ends_with('\n'),
+            "SOUL_WRITING_GUIDELINES must end with a newline"
+        );
+    }
+
+    #[test]
+    fn soul_writing_guidelines_contains_contradiction_rule() {
+        assert!(
+            SOUL_WRITING_GUIDELINES.contains("contradict"),
+            "soul writing guidelines missing contradiction resolution rule"
+        );
     }
 
     #[test]
@@ -185,6 +319,13 @@ mod tests {
         assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter context""#));
         assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter nudge""#));
         assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter session-end""#));
+    }
+
+    #[test]
+    fn soul_upgrade_instructions_contain_required_elements() {
+        assert!(SOUL_UPGRADE_INSTRUCTIONS.contains("Migration instructions"));
+        assert!(SOUL_UPGRADE_INSTRUCTIONS.contains("soul_version"));
+        assert!(SOUL_UPGRADE_INSTRUCTIONS.contains("~/.leiter/soul.md"));
     }
 
     #[test]

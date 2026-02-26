@@ -29,7 +29,8 @@ fn agent_setup_then_context_injects_soul() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Leiter is a self-training system"))
-        .stdout(predicate::str::contains("# Communication Style"));
+        .stdout(predicate::str::contains("# Communication Style"))
+        .stdout(predicate::str::contains("leiter instill"));
 }
 
 #[test]
@@ -91,7 +92,8 @@ fn agent_setup_then_session_end_then_distill() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Integration test transcript."))
-        .stdout(predicate::str::contains("integ-sess"));
+        .stdout(predicate::str::contains("integ-sess"))
+        .stdout(predicate::str::contains("Soul-writing guidelines"));
 }
 
 #[test]
@@ -210,6 +212,21 @@ fn nudge_outputs_message_when_stale_logs_exist() {
         .assert()
         .success()
         .stdout(predicate::str::contains("undistilled leiter session logs"));
+}
+
+#[test]
+fn instill_outputs_guidelines_and_preference() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+
+    leiter(home).arg("agent-setup").assert().success();
+
+    leiter(home)
+        .args(["instill", "always use snake_case"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("always use snake_case"))
+        .stdout(predicate::str::contains("Soul-writing guidelines"));
 }
 
 #[test]

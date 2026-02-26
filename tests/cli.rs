@@ -115,6 +115,14 @@ fn log_level_warn_overrides_verbose() {
 }
 
 #[test]
+fn parses_instill() {
+    leiter()
+        .args(["instill", "test preference"])
+        .assert()
+        .success();
+}
+
+#[test]
 fn unknown_subcommand_errors() {
     leiter()
         .arg("nonexistent")

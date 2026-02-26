@@ -24,7 +24,8 @@ This initializes `~/.leiter/` and configures Claude Code hooks. Once done, leite
 
 Session context injection and session logging happen automatically via hooks. The soul itself is updated in two ways:
 
-- **Learning preferences:** Tell the agent "remember to always use snake_case" (or similar). It edits the soul directly.
+- **Learning preferences:** Tell the agent "remember to always use snake_case" (or similar). It runs `leiter instill`
+  and follows the instructions to update the soul.
 - **Distillation:** Periodically say "distill" to have the agent process accumulated session logs and update the soul.
   If undistilled logs are older than 24 hours, the agent will nudge you at session start.
 - **Soul upgrade:** After updating the leiter binary, say "upgrade the leiter soul" to migrate to the latest template.
