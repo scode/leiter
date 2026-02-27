@@ -34,7 +34,7 @@ pub enum Command {
     AgentSetup,
     /// Output soul content and agent instructions
     Context,
-    /// Output unprocessed session logs for distillation
+    /// Output new session logs for distillation
     Distill,
     /// Output soul-writing instructions for a preference
     Instill {

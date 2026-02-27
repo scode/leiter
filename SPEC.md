@@ -177,7 +177,7 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
    to do anything — no manual logging is required.
 
    **Distillation command:** Must include the literal command `leiter distill`. Explain that this is user-triggered (the
-   user says "distill" or similar), outputs unprocessed session logs, and the agent should then update the soul with new
+   user says "distill" or similar), outputs new session logs, and the agent should then update the soul with new
    learnings and update `last_distilled` in the frontmatter to the current UTC ISO 8601 timestamp.
 
    **Soul upgrade command:** Must include the literal command `leiter soul-upgrade`. Explain that this is user-triggered
@@ -234,9 +234,14 @@ Outputs session logs that haven't been processed since the last distillation.
 
 **Output (stdout):**
 
-- If new logs exist: soul-writing guidelines (emitted once, before the first log entry) followed by the concatenated
+- If new logs exist: soul-writing guidelines (emitted once, before the first log entry) followed by the pre-processed
   content of all new session log files, with filename headers separating each entry
 - If no new logs: a message indicating there are no new session logs to process
+
+**Log pre-processing:** JSONL session logs are pre-processed to extract user-visible content — user messages and
+assistant text responses — filtering out tool results, tool invocations, progress events, thinking blocks, and other
+non-user-facing content. For non-JSONL files or lines with unrecognized JSON structures, the raw content is included
+as-is (fail-useful: no user content is silently lost).
 
 After the agent processes the distill output and updates the soul, the agent is responsible for updating the
 `last_distilled` timestamp in the soul file's frontmatter to the current time.
