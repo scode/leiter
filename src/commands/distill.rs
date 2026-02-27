@@ -1,15 +1,41 @@
-//! `leiter distill` — output unprocessed session logs for the agent to distill.
+//! `leiter distill` — output new session logs for the agent to distill.
 //!
 //! Reads the `last_distilled` timestamp from the soul frontmatter, scans the
 //! logs directory for files with timestamps >= that value, and outputs them
 //! chronologically. The inclusive comparison ensures a log written in the same
 //! second as the distillation timestamp is not lost.
+//!
+//! ## JSONL pre-processing
+//!
+//! Claude Code session transcripts are JSONL files where each line is a JSON
+//! object with a `type` field. The vast majority of content is tool machinery
+//! invisible to the user (tool results, tool invocations, progress events,
+//! thinking blocks, file history snapshots). In observed sessions, user text +
+//! assistant text combined are typically 2–15% of the file.
+//!
+//! We filter each log down to approximately what the user saw:
+//!
+//! Kept:
+//!   - `type: "user"` without `toolUseResult` key (user messages)
+//!   - `type: "assistant"` with text blocks (assistant responses)
+//!   - Unknown types (fail-useful)
+//!   - Non-JSON lines (fail-useful)
+//!
+//! Dropped:
+//!   - `type: "user"` with `toolUseResult` (tool output)
+//!   - `type: "assistant"` with only tool_use/thinking blocks
+//!   - `type: "progress"`, `"file-history-snapshot"`, `"system"`
+//!
+//! Uses `serde_json::Value` (not typed structs) to stay resilient to schema
+//! changes. If parsing or field access fails, we include the raw line rather
+//! than silently dropping it.
 
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use serde_json::Value;
 
 use crate::errors::LeiterError;
 use crate::frontmatter::parse_soul;
@@ -69,11 +95,85 @@ pub fn run(home: &Path, out: &mut impl Write) -> Result<()> {
         let content = fs::read_to_string(path)
             .with_context(|| format!("failed to read log file: {}", path.display()))?;
         writeln!(out, "## {filename}\n")?;
-        write!(out, "{content}")?;
-        if !content.ends_with('\n') {
-            writeln!(out)?;
-        }
+        filter_session_log(&content, out)?;
         writeln!(out)?;
+    }
+
+    Ok(())
+}
+
+/// Extract concatenated text from a `message.content` value that may be either
+/// a plain string or an array of content blocks (with `type: "text"` entries).
+/// Returns `None` if no text could be extracted.
+fn extract_text(content_val: &Value) -> Option<String> {
+    if let Some(s) = content_val.as_str() {
+        return Some(s.to_string());
+    }
+    let blocks = content_val.as_array()?;
+    let parts: Vec<&str> = blocks
+        .iter()
+        .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|b| b.get("text").and_then(Value::as_str))
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
+    }
+}
+
+/// Pre-process a JSONL session log to extract user-visible content.
+///
+/// For each line:
+/// 1. If JSON parse fails → include raw line (format may have changed).
+/// 2. If `type` field is missing or not a string → include raw line.
+/// 3. Known noise types ("progress", "file-history-snapshot", "system") → drop.
+/// 4. `type: "user"`: drop if `toolUseResult` key exists (tool output);
+///    otherwise extract text from `message.content` → emit as `[user]: <text>`.
+/// 5. `type: "assistant"`: extract text from `message.content` → emit as
+///    `[assistant]: <text>`. Drop if no text could be extracted.
+/// 6. Unknown type → include raw line (new type we don't know about).
+fn filter_session_log(content: &str, out: &mut impl Write) -> Result<()> {
+    for line in content.lines() {
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            writeln!(out, "{line}")?;
+            continue;
+        };
+
+        let Some(obj) = val.as_object() else {
+            writeln!(out, "{line}")?;
+            continue;
+        };
+
+        let Some(type_val) = obj.get("type").and_then(Value::as_str) else {
+            writeln!(out, "{line}")?;
+            continue;
+        };
+
+        match type_val {
+            "progress" | "file-history-snapshot" | "system" => continue,
+
+            "user" => {
+                if obj.contains_key("toolUseResult") {
+                    continue;
+                }
+                let content_val = obj.get("message").and_then(|m| m.get("content"));
+                match content_val.and_then(extract_text) {
+                    Some(text) => writeln!(out, "[user]: {text}")?,
+                    None => writeln!(out, "{line}")?,
+                }
+            }
+
+            "assistant" => {
+                let content_val = obj.get("message").and_then(|m| m.get("content"));
+                match content_val.and_then(extract_text) {
+                    Some(text) => writeln!(out, "[assistant]: {text}")?,
+                    None => continue,
+                }
+            }
+
+            _ => writeln!(out, "{line}")?,
+        }
     }
 
     Ok(())
@@ -185,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn log_content_reproduced_verbatim() {
+    fn non_json_content_preserved_verbatim() {
         let tmp = setup_home();
         let original = "line one\n  indented\n\nlast line\n";
         write_log(tmp.path(), 2026, 1, 1, 0, "sess1", original);
@@ -244,5 +344,172 @@ mod tests {
         let mut out = Vec::new();
         let result = run(tmp.path(), &mut out);
         assert!(result.is_err());
+    }
+
+    // --- filter_session_log unit tests ---
+
+    fn filter(input: &str) -> String {
+        let mut out = Vec::new();
+        filter_session_log(input, &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    fn jsonl_user(text: &str) -> String {
+        serde_json::json!({"type": "user", "message": {"content": text}}).to_string()
+    }
+
+    fn jsonl_assistant_text(text: &str) -> String {
+        serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": text}]}
+        })
+        .to_string()
+    }
+
+    fn jsonl_assistant_tool_use() -> String {
+        serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}]}
+        })
+        .to_string()
+    }
+
+    fn jsonl_tool_result() -> String {
+        serde_json::json!({
+            "type": "user",
+            "toolUseResult": {"tool_use_id": "t1"},
+            "message": {"content": "file contents here"}
+        })
+        .to_string()
+    }
+
+    fn jsonl_progress() -> String {
+        serde_json::json!({"type": "progress", "data": {"type": "agent_progress"}}).to_string()
+    }
+
+    #[test]
+    fn filter_extracts_user_text() {
+        let output = filter(&jsonl_user("hello world"));
+        assert_eq!(output, "[user]: hello world\n");
+    }
+
+    #[test]
+    fn filter_extracts_assistant_text() {
+        let output = filter(&jsonl_assistant_text("here is my response"));
+        assert_eq!(output, "[assistant]: here is my response\n");
+    }
+
+    #[test]
+    fn filter_concatenates_multiple_text_blocks() {
+        let line = serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [
+                {"type": "text", "text": "first part"},
+                {"type": "tool_use", "id": "t1", "name": "Read", "input": {}},
+                {"type": "text", "text": "second part"}
+            ]}
+        })
+        .to_string();
+        let output = filter(&line);
+        assert_eq!(output, "[assistant]: first part\n\nsecond part\n");
+    }
+
+    #[test]
+    fn filter_drops_tool_results() {
+        let output = filter(&jsonl_tool_result());
+        assert_eq!(output, "");
+    }
+
+    #[test]
+    fn filter_drops_tool_use_only_assistant() {
+        let output = filter(&jsonl_assistant_tool_use());
+        assert_eq!(output, "");
+    }
+
+    #[test]
+    fn filter_drops_progress() {
+        let output = filter(&jsonl_progress());
+        assert_eq!(output, "");
+    }
+
+    #[test]
+    fn filter_drops_system() {
+        let line = serde_json::json!({"type": "system", "event": "init"}).to_string();
+        assert_eq!(filter(&line), "");
+    }
+
+    #[test]
+    fn filter_drops_file_history_snapshot() {
+        let line = serde_json::json!({"type": "file-history-snapshot", "files": []}).to_string();
+        assert_eq!(filter(&line), "");
+    }
+
+    #[test]
+    fn filter_includes_unknown_type_as_raw() {
+        let line = serde_json::json!({"type": "new_future_type", "data": 42}).to_string();
+        let output = filter(&line);
+        assert_eq!(output, format!("{line}\n"));
+    }
+
+    #[test]
+    fn filter_includes_non_json_as_raw() {
+        let output = filter("this is not json at all");
+        assert_eq!(output, "this is not json at all\n");
+    }
+
+    #[test]
+    fn filter_includes_json_without_type_as_raw() {
+        let line = serde_json::json!({"foo": "bar"}).to_string();
+        let output = filter(&line);
+        assert_eq!(output, format!("{line}\n"));
+    }
+
+    #[test]
+    fn filter_preserves_blank_lines() {
+        let input = format!("{}\n\n{}", jsonl_user("hi"), jsonl_user("bye"));
+        let output = filter(&input);
+        assert_eq!(output, "[user]: hi\n\n[user]: bye\n");
+    }
+
+    #[test]
+    fn filter_mixed_session() {
+        let lines = [
+            jsonl_user("help me with rust"),
+            jsonl_assistant_text("Sure, I can help."),
+            jsonl_assistant_tool_use(),
+            jsonl_tool_result(),
+            jsonl_progress(),
+            jsonl_assistant_text("Here is the result."),
+            jsonl_user("thanks"),
+        ];
+        let input = lines.join("\n");
+        let output = filter(&input);
+        assert_eq!(
+            output,
+            "[user]: help me with rust\n\
+             [assistant]: Sure, I can help.\n\
+             [assistant]: Here is the result.\n\
+             [user]: thanks\n"
+        );
+    }
+
+    #[test]
+    fn filter_drops_thinking_only_assistant() {
+        let line = serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [{"type": "thinking", "thinking": "let me think..."}]}
+        })
+        .to_string();
+        assert_eq!(filter(&line), "");
+    }
+
+    #[test]
+    fn filter_extracts_user_text_from_array_content() {
+        let line = serde_json::json!({
+            "type": "user",
+            "message": {"content": [{"type": "text", "text": "hello from array"}]}
+        })
+        .to_string();
+        assert_eq!(filter(&line), "[user]: hello from array\n");
     }
 }

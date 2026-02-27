@@ -115,7 +115,7 @@ When the user says \"remember\", \"learn\", \"instill\", \"always\", \"never\", 
 
 Session transcripts are saved automatically when each session ends. No manual logging needed.
 
-When the user asks to distill session logs, run `leiter distill`. This outputs unprocessed session logs. Read through them, update the soul with new learnings, then update `last_distilled` in the soul file's frontmatter to the current UTC ISO 8601 timestamp (e.g., 2026-02-23T17:00:00Z).
+When the user asks to distill session logs, run `leiter distill`. This outputs new session logs. Read through them, update the soul with new learnings, then update `last_distilled` in the soul file's frontmatter to the current UTC ISO 8601 timestamp (e.g., 2026-02-23T17:00:00Z).
 
 When the user asks to upgrade the leiter soul, run `leiter soul-upgrade`. If the soul template is outdated, this outputs migration instructions and the new template. Follow the instructions to restructure the soul while preserving all learned preferences.
 
