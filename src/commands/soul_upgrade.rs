@@ -14,7 +14,9 @@ use anyhow::Result;
 use crate::errors::LeiterError;
 use crate::frontmatter::parse_soul;
 use crate::paths;
-use crate::templates::{SOUL_TEMPLATE, SOUL_TEMPLATE_CHANGELOG, SOUL_TEMPLATE_VERSION};
+use crate::templates::{
+    SOUL_TEMPLATE, SOUL_TEMPLATE_CHANGELOG, SOUL_TEMPLATE_VERSION, SOUL_UPGRADE_INSTRUCTIONS,
+};
 
 /// Run the soul-upgrade command.
 ///
@@ -61,11 +63,7 @@ pub fn run(home: &Path, out: &mut impl Write) -> Result<()> {
     }
     writeln!(out)?;
 
-    writeln!(out, "## Migration instructions\n")?;
-    writeln!(
-        out,
-        "Restructure the existing soul content into the new template format above, preserving all learned preferences. Then update `soul_version` in the frontmatter to {SOUL_TEMPLATE_VERSION}."
-    )?;
+    write!(out, "{SOUL_UPGRADE_INSTRUCTIONS}")?;
 
     Ok(())
 }
@@ -111,6 +109,7 @@ mod tests {
         let output = run_upgrade(tmp.path());
         assert!(output.contains("Changelog"));
         assert!(output.contains("Version 1"));
+        assert!(output.contains("Version 2"));
     }
 
     #[test]
@@ -120,7 +119,7 @@ mod tests {
 
         let output = run_upgrade(tmp.path());
         assert!(output.contains("Current template"));
-        assert!(output.contains("# Communication Style"));
+        assert!(output.contains("# Technology & Environment"));
     }
 
     #[test]

@@ -16,6 +16,11 @@ The SessionEnd hook (rather than Stop) is used for session logging because Stop 
 end — which would block the agent on every response to write a log. SessionEnd fires once when the session actually
 terminates and provides the transcript path directly, so no agent involvement is needed to save it.
 
+The `leiter instill` and `leiter distill` commands share a single set of soul-writing guidelines (built into the
+binary). This ensures consistent entry quality across both learning paths — inline preferences and transcript
+distillation — while keeping normal session context minimal. The guidelines only appear when the agent is actively
+writing to the soul.
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    Claude Code Session                   │
@@ -26,7 +31,8 @@ terminates and provides the transcript path directly, so no agent involvement is
 │                                                         │
 │  ... normal session ...                                 │
 │                                                         │
-│  User says "remember X" ──► agent edits soul.md         │
+│  User says "remember X" ──► agent calls leiter instill  │
+│                           ──► agent edits soul.md       │
 │                                                         │
 │  User says "distill" ──► agent calls leiter distill     │
 │                           ──► reads new logs            │
@@ -61,7 +67,7 @@ The frontmatter contains metadata used by the CLI:
 ```markdown
 ---
 last_distilled: 2026-02-23T17:00:00Z
-soul_version: 1
+soul_version: 2
 ---
 
 (soul content here — see Soul Template)
@@ -163,9 +169,9 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
    **Soul file location:** Must include the literal path `~/.leiter/soul.md`. Must tell the agent to use its
    Read/Edit/Write tools to modify this file directly.
 
-   **When to edit the soul directly:** When the user says "remember", "learn", "always", "never", or similar
-   preference-setting language. The agent should read the soul, find the appropriate section, and add the preference. No
-   CLI command is needed for this — the agent edits the file directly.
+   **When to instill preferences:** When the user says "remember", "learn", "instill", "always", "never", or similar
+   preference-setting language. The agent should run `leiter instill "<what the user wants remembered>"` and follow the
+   instructions it outputs.
 
    **Session transcripts:** Session transcripts are saved automatically by the SessionEnd hook. The agent does not need
    to do anything — no manual logging is required.
@@ -182,6 +188,10 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
 
 If `~/.leiter/soul.md` does not exist, outputs a message telling the agent that leiter is not initialized and to suggest
 the user run `leiter agent-setup`.
+
+The soul content is output inline (not as a file path reference) so that it survives context compaction in long
+sessions. The agent receives the full soul text in the SessionStart hook output, ensuring preferences remain available
+even after earlier messages are compressed.
 
 ### `leiter session-end`
 
@@ -224,11 +234,28 @@ Outputs session logs that haven't been processed since the last distillation.
 
 **Output (stdout):**
 
-- If new logs exist: the concatenated content of all new session log files, with filename headers separating each entry
+- If new logs exist: soul-writing guidelines (emitted once, before the first log entry) followed by the concatenated
+  content of all new session log files, with filename headers separating each entry
 - If no new logs: a message indicating there are no new session logs to process
 
 After the agent processes the distill output and updates the soul, the agent is responsible for updating the
 `last_distilled` timestamp in the soul file's frontmatter to the current time.
+
+### `leiter instill <text>`
+
+Outputs agent instructions for adding a preference to the soul file. Called by the agent when the user expresses a
+preference ("remember", "learn", "instill", "always", "never", or similar language).
+
+**Input:** A positional argument containing the preference or fact the user wants remembered.
+
+**Output (stdout):**
+
+1. The user's preference, quoted for clarity
+2. Soul-writing guidelines (shared with `leiter distill`) covering entry format, specificity, placement, contradiction
+   resolution, and examples
+3. Instruction to read `~/.leiter/soul.md` and edit the appropriate section
+
+See the Architecture section for why guidelines are shared between `instill` and `distill`.
 
 ### `leiter nudge`
 
@@ -351,9 +378,11 @@ Fires once when the session terminates. The `leiter session-end` command reads t
 ### User Asks the Agent to Learn Something
 
 1. User says "learn to always use snake_case for Rust functions"
-2. Agent reads `~/.leiter/soul.md`
-3. Agent edits the appropriate section to add the preference
-4. Preference is active in all future sessions
+2. Agent runs `leiter instill "always use snake_case for Rust functions"`
+3. Agent receives writing guidelines and the quoted preference
+4. Agent reads `~/.leiter/soul.md`
+5. Agent edits the appropriate section following the guidelines
+6. Preference is active in all future sessions
 
 ### Soul Upgrade
 

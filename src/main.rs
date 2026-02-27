@@ -36,6 +36,11 @@ pub enum Command {
     Context,
     /// Output unprocessed session logs for distillation
     Distill,
+    /// Output soul-writing instructions for a preference
+    Instill {
+        /// The preference or fact to remember
+        text: String,
+    },
     /// Nudge about stale undistilled logs
     Nudge,
     /// Handle the Claude Code SessionEnd hook
@@ -86,6 +91,9 @@ fn main() -> Result<()> {
         }
         Command::Distill => {
             commands::distill::run(&home, &mut std::io::stdout())?;
+        }
+        Command::Instill { text } => {
+            commands::instill::run(&home, &mut std::io::stdout(), text)?;
         }
         Command::Nudge => {
             commands::nudge::run(&home, &mut std::io::stdout())?;
