@@ -1,6 +1,6 @@
 [package]
 name = "leiter"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 homepage = "https://github.com/scode/leiter"
 repository = "https://github.com/scode/leiter"
