@@ -36,7 +36,8 @@ Then proceed:
 7. Verify the changelog heading exists: `rg -n "^## \[$VERSION\]" CHANGELOG.md`
 8. Create a release PR with commit message `chore: release $VERSION`. The PR must include `Cargo.toml`, `Cargo.lock`,
    and `CHANGELOG.md` (CHANGELOG.md will be untracked on first release — `gt add` it before committing).
-9. **Stop and ask the user for confirmation before merging and tagging.**
+9. **Stop and explicitly ask the user for confirmation before merging and tagging.** Do not silently wait — tell the
+   user you are ready to merge and tag, and ask them to confirm.
 10. Merge the PR: `gh pr merge <number> --squash`
 11. Sync and checkout main: `gt sync --all`, `gt checkout main`.
 12. Tag the merge commit and push: `git tag v$VERSION && git push origin v$VERSION`
