@@ -16,9 +16,9 @@ use crate::log_filename::parse_log_filename;
 use crate::paths;
 use crate::templates::NUDGE_MESSAGE;
 
-pub fn run(home: &Path, out: &mut impl Write) -> Result<()> {
-    let soul_path = paths::soul_path(home);
-    let logs_dir = paths::logs_dir(home);
+pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
+    let soul_path = paths::soul_path(state_dir);
+    let logs_dir = paths::logs_dir(state_dir);
 
     let Ok(content) = fs::read_to_string(&soul_path) else {
         return Ok(());
@@ -59,26 +59,26 @@ mod tests {
     use crate::log_filename::generate_log_filename;
     use chrono::Utc;
 
-    fn setup_home() -> tempfile::TempDir {
+    fn setup_state_dir() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         agent_setup::run(tmp.path(), &mut Vec::new()).unwrap();
         tmp
     }
 
-    fn run_nudge(home: &Path) -> String {
+    fn run_nudge(state_dir: &Path) -> String {
         let mut out = Vec::new();
-        run(home, &mut out).unwrap();
+        run(state_dir, &mut out).unwrap();
         String::from_utf8(out).unwrap()
     }
 
-    fn write_log(home: &Path, ts: chrono::DateTime<Utc>, session_id: &str) {
+    fn write_log(state_dir: &Path, ts: chrono::DateTime<Utc>, session_id: &str) {
         let filename = generate_log_filename(ts, session_id);
-        let path = paths::logs_dir(home).join(filename);
+        let path = paths::logs_dir(state_dir).join(filename);
         fs::write(path, "log content\n").unwrap();
     }
 
-    fn set_last_distilled(home: &Path, ts: chrono::DateTime<Utc>) {
-        let soul_path = paths::soul_path(home);
+    fn set_last_distilled(state_dir: &Path, ts: chrono::DateTime<Utc>) {
+        let soul_path = paths::soul_path(state_dir);
         let content = fs::read_to_string(&soul_path).unwrap();
         let (mut fm, body) = parse_soul(&content).unwrap();
         fm.last_distilled = ts;
@@ -87,24 +87,23 @@ mod tests {
 
     #[test]
     fn no_logs_outputs_nothing() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let output = run_nudge(tmp.path());
         assert!(output.is_empty());
     }
 
     #[test]
     fn stale_undistilled_log_outputs_nudge() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let stale_ts = Utc::now() - chrono::Duration::hours(48);
         write_log(tmp.path(), stale_ts, "stale-sess");
-        // last_distilled is epoch from agent-setup, so stale_ts >= epoch
         let output = run_nudge(tmp.path());
         assert!(output.contains("undistilled leiter session logs"));
     }
 
     #[test]
     fn recent_undistilled_log_outputs_nothing() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let recent_ts = Utc::now() - chrono::Duration::hours(1);
         write_log(tmp.path(), recent_ts, "recent-sess");
         let output = run_nudge(tmp.path());
@@ -113,10 +112,9 @@ mod tests {
 
     #[test]
     fn already_distilled_stale_log_outputs_nothing() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let stale_ts = Utc::now() - chrono::Duration::hours(48);
         write_log(tmp.path(), stale_ts, "old-sess");
-        // Set last_distilled to after the log
         set_last_distilled(tmp.path(), Utc::now());
         let output = run_nudge(tmp.path());
         assert!(output.is_empty());
@@ -125,15 +123,13 @@ mod tests {
     #[test]
     fn missing_soul_outputs_nothing() {
         let tmp = tempfile::tempdir().unwrap();
-        // No soul, no logs dir — should not error
         let output = run_nudge(tmp.path());
         assert!(output.is_empty());
     }
 
     #[test]
     fn missing_logs_dir_outputs_nothing() {
-        let tmp = setup_home();
-        // Remove the logs directory
+        let tmp = setup_state_dir();
         fs::remove_dir_all(paths::logs_dir(tmp.path())).unwrap();
         let output = run_nudge(tmp.path());
         assert!(output.is_empty());
@@ -141,19 +137,8 @@ mod tests {
 
     #[test]
     fn boundary_exactly_24h_outputs_nothing() {
-        let tmp = setup_home();
-        // A log exactly at the 24h boundary should NOT trigger (< cutoff, not <=)
-        let ts = Utc::now() - chrono::Duration::hours(24);
-        write_log(tmp.path(), ts, "boundary-sess");
-
-        // The log timestamp is truncated to seconds in the filename, while cutoff
-        // uses full precision. A log at exactly now-24h will have its filename
-        // timestamp at or just before cutoff, so it may or may not trigger. We
-        // push it 1 second into the future to ensure it's definitely not stale.
+        let tmp = setup_state_dir();
         let not_stale_ts = Utc::now() - chrono::Duration::hours(24) + chrono::Duration::seconds(2);
-        // Remove the previous log and write one that's clearly not stale
-        let _ = fs::remove_dir_all(paths::logs_dir(tmp.path()));
-        fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
         write_log(tmp.path(), not_stale_ts, "boundary-sess2");
 
         let output = run_nudge(tmp.path());
@@ -162,7 +147,7 @@ mod tests {
 
     #[test]
     fn just_over_24h_outputs_nudge() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let ts = Utc::now() - chrono::Duration::hours(25);
         write_log(tmp.path(), ts, "stale-sess");
         let output = run_nudge(tmp.path());
@@ -171,7 +156,7 @@ mod tests {
 
     #[test]
     fn mix_of_stale_and_recent_outputs_nudge() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let stale_ts = Utc::now() - chrono::Duration::hours(48);
         let recent_ts = Utc::now() - chrono::Duration::hours(1);
         write_log(tmp.path(), stale_ts, "stale-sess");
@@ -182,7 +167,7 @@ mod tests {
 
     #[test]
     fn unparseable_filenames_ignored() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let bad_path = paths::logs_dir(tmp.path()).join("not-a-log.txt");
         fs::write(bad_path, "junk").unwrap();
         let output = run_nudge(tmp.path());

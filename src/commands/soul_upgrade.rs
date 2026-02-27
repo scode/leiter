@@ -24,8 +24,8 @@ use crate::templates::{
 /// built-in template version. If up to date, says so. If outdated, outputs
 /// the changelog of intervening versions, the full current template, and
 /// migration instructions for the agent to follow.
-pub fn run(home: &Path, out: &mut impl Write) -> Result<()> {
-    let soul_path = paths::soul_path(home);
+pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
+    let soul_path = paths::soul_path(state_dir);
     let content = fs::read_to_string(&soul_path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             LeiterError::SoulNotFound.into()
@@ -74,20 +74,20 @@ mod tests {
     use crate::commands::agent_setup;
     use crate::frontmatter::serialize_soul;
 
-    fn setup_home() -> tempfile::TempDir {
+    fn setup_state_dir() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         agent_setup::run(tmp.path(), &mut Vec::new()).unwrap();
         tmp
     }
 
-    fn run_upgrade(home: &Path) -> String {
+    fn run_upgrade(state_dir: &Path) -> String {
         let mut out = Vec::new();
-        run(home, &mut out).unwrap();
+        run(state_dir, &mut out).unwrap();
         String::from_utf8(out).unwrap()
     }
 
-    fn set_soul_version(home: &Path, version: u32) {
-        let soul_path = paths::soul_path(home);
+    fn set_soul_version(state_dir: &Path, version: u32) {
+        let soul_path = paths::soul_path(state_dir);
         let content = fs::read_to_string(&soul_path).unwrap();
         let (mut fm, body) = parse_soul(&content).unwrap();
         fm.soul_version = version;
@@ -96,14 +96,14 @@ mod tests {
 
     #[test]
     fn up_to_date_reports_current() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let output = run_upgrade(tmp.path());
         assert!(output.contains("up to date"));
     }
 
     #[test]
     fn outdated_includes_changelog() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         set_soul_version(tmp.path(), 0);
 
         let output = run_upgrade(tmp.path());
@@ -114,7 +114,7 @@ mod tests {
 
     #[test]
     fn outdated_includes_template() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         set_soul_version(tmp.path(), 0);
 
         let output = run_upgrade(tmp.path());
@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn outdated_includes_migration_instructions() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         set_soul_version(tmp.path(), 0);
 
         let output = run_upgrade(tmp.path());

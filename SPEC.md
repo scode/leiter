@@ -53,9 +53,9 @@ writing to the soul.
 
 ## State Directory
 
-All state lives under `~/.leiter/`. This is hardcoded for now regardless of platform. If the `LEITER_HOME` environment
-variable is set, it overrides the home directory (so state lives under `$LEITER_HOME/.leiter/` instead). This is
-intended for testing — it allows integration tests to isolate state without touching the real home directory.
+All state lives under `~/.leiter/`. This is the default regardless of platform. If the `LEITER_HOME` environment
+variable is set, it points directly to the state directory (so state lives under `$LEITER_HOME/`, not
+`$LEITER_HOME/.leiter/`). This allows relocating leiter state for testing or multi-profile setups.
 
 ### `~/.leiter/soul.md`
 

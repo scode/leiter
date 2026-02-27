@@ -1,7 +1,7 @@
 //! `leiter session-end` — handle the Claude Code SessionEnd event.
 //!
 //! Reads the SessionEnd hook JSON from stdin (which includes `session_id` and
-//! `transcript_path`), then copies the transcript to `~/.leiter/logs/`.
+//! `transcript_path`), then copies the transcript to the leiter logs directory.
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -19,8 +19,8 @@ struct SessionEndInput {
     transcript_path: String,
 }
 
-pub fn run(home: &Path, input: &mut impl Read, out: &mut impl Write) -> Result<()> {
-    let logs_dir = paths::logs_dir(home);
+pub fn run(state_dir: &Path, input: &mut impl Read, out: &mut impl Write) -> Result<()> {
+    let logs_dir = paths::logs_dir(state_dir);
 
     if !logs_dir.is_dir() {
         bail!("logs directory does not exist: {}", logs_dir.display());
@@ -65,26 +65,26 @@ mod tests {
     use std::fs;
     use std::io::Cursor;
 
-    fn setup_home() -> tempfile::TempDir {
+    fn setup_state_dir() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         agent_setup::run(tmp.path(), &mut Vec::new()).unwrap();
         tmp
     }
 
-    fn run_session_end(home: &Path, session_id: &str, transcript_path: &str) -> String {
+    fn run_session_end(state_dir: &Path, session_id: &str, transcript_path: &str) -> String {
         let json = serde_json::json!({
             "session_id": session_id,
             "transcript_path": transcript_path,
         });
         let mut input = Cursor::new(json.to_string().into_bytes());
         let mut out = Vec::new();
-        run(home, &mut input, &mut out).unwrap();
+        run(state_dir, &mut input, &mut out).unwrap();
         String::from_utf8(out).unwrap()
     }
 
     #[test]
     fn copies_transcript_to_logs_dir() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let transcript_file = tempfile::NamedTempFile::new().unwrap();
         fs::write(transcript_file.path(), b"{\"role\":\"user\"}\n").unwrap();
 
@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn filename_has_correct_format() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let transcript_file = tempfile::NamedTempFile::new().unwrap();
         fs::write(transcript_file.path(), b"data").unwrap();
 
@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn confirmation_includes_file_path() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let transcript_file = tempfile::NamedTempFile::new().unwrap();
         fs::write(transcript_file.path(), b"data").unwrap();
 
@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn missing_transcript_file_errors() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let json = serde_json::json!({
             "session_id": "sess1",
             "transcript_path": "/nonexistent/transcript.jsonl",
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn invalid_json_errors() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let mut input = Cursor::new(b"not json at all".to_vec());
         let mut out = Vec::new();
         let result = run(tmp.path(), &mut input, &mut out);
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn extra_fields_ignored() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let transcript_file = tempfile::NamedTempFile::new().unwrap();
         fs::write(transcript_file.path(), b"data").unwrap();
 
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn timestamp_reflects_current_time() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let transcript_file = tempfile::NamedTempFile::new().unwrap();
         fs::write(transcript_file.path(), b"data").unwrap();
 

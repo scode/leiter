@@ -1,39 +1,36 @@
 //! Path construction for the `~/.leiter/` state directory.
 //!
-//! All leiter state lives under a single directory in the user's home. These
-//! functions build the canonical paths. They take `home` as a parameter so
+//! All leiter state lives under a single directory. These functions build the
+//! canonical paths. Commands receive the state directory as a parameter so
 //! callers (and tests) can substitute a different root.
 
 use std::path::{Path, PathBuf};
 
 use crate::errors::LeiterError;
 
-/// Resolve the user's home directory.
+/// Resolve the leiter state directory.
 ///
-/// Checks `LEITER_HOME` first (used by integration tests to isolate state),
-/// then falls back to `dirs::home_dir()`. This is the only function that
-/// consults runtime environment state — everything else is pure path
-/// construction.
-pub fn home_dir() -> Result<PathBuf, LeiterError> {
-    if let Ok(home) = std::env::var("LEITER_HOME") {
-        return Ok(PathBuf::from(home));
+/// Checks `LEITER_HOME` first — when set, it points directly to the state
+/// directory (no `.leiter/` suffix appended). Falls back to
+/// `~/.leiter/`. This is the only function that consults runtime environment
+/// state — everything else is pure path construction.
+pub fn state_dir() -> Result<PathBuf, LeiterError> {
+    if let Ok(dir) = std::env::var("LEITER_HOME") {
+        return Ok(PathBuf::from(dir));
     }
-    dirs::home_dir().ok_or(LeiterError::HomeNotFound)
+    Ok(dirs::home_dir()
+        .ok_or(LeiterError::HomeNotFound)?
+        .join(".leiter"))
 }
 
-/// Root of leiter's state directory (`<home>/.leiter/`).
-pub fn leiter_dir(home: &Path) -> PathBuf {
-    home.join(".leiter")
+/// Path to the soul file (`<state_dir>/soul.md`).
+pub fn soul_path(state_dir: &Path) -> PathBuf {
+    state_dir.join("soul.md")
 }
 
-/// Path to the soul file (`<home>/.leiter/soul.md`).
-pub fn soul_path(home: &Path) -> PathBuf {
-    leiter_dir(home).join("soul.md")
-}
-
-/// Path to the session logs directory (`<home>/.leiter/logs/`).
-pub fn logs_dir(home: &Path) -> PathBuf {
-    leiter_dir(home).join("logs")
+/// Path to the session logs directory (`<state_dir>/logs/`).
+pub fn logs_dir(state_dir: &Path) -> PathBuf {
+    state_dir.join("logs")
 }
 
 #[cfg(test)]
@@ -42,30 +39,24 @@ mod tests {
 
     use std::path::Path;
 
-    fn fake_home() -> &'static Path {
-        Path::new("/fake/home")
-    }
-
-    #[test]
-    fn leiter_dir_ends_with_dot_leiter() {
-        assert!(leiter_dir(fake_home()).ends_with(".leiter"));
+    fn fake_state_dir() -> &'static Path {
+        Path::new("/fake/state")
     }
 
     #[test]
     fn soul_path_ends_with_soul_md() {
-        assert!(soul_path(fake_home()).ends_with(".leiter/soul.md"));
+        assert!(soul_path(fake_state_dir()).ends_with("soul.md"));
     }
 
     #[test]
     fn logs_dir_ends_with_logs() {
-        assert!(logs_dir(fake_home()).ends_with(".leiter/logs"));
+        assert!(logs_dir(fake_state_dir()).ends_with("logs"));
     }
 
     #[test]
-    fn paths_are_under_home() {
-        let home = fake_home();
-        assert!(leiter_dir(home).starts_with(home));
-        assert!(soul_path(home).starts_with(home));
-        assert!(logs_dir(home).starts_with(home));
+    fn paths_are_under_state_dir() {
+        let dir = fake_state_dir();
+        assert!(soul_path(dir).starts_with(dir));
+        assert!(logs_dir(dir).starts_with(dir));
     }
 }

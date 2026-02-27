@@ -80,29 +80,29 @@ fn main() -> Result<()> {
 
     debug!("dispatching command");
 
-    let home = paths::home_dir()?;
+    let state_dir = paths::state_dir()?;
 
     match &cli.command {
         Command::AgentSetup => {
-            commands::agent_setup::run(&home, &mut std::io::stdout())?;
+            commands::agent_setup::run(&state_dir, &mut std::io::stdout())?;
         }
         Command::Context => {
-            commands::context::run(&home, &mut std::io::stdout())?;
+            commands::context::run(&state_dir, &mut std::io::stdout())?;
         }
         Command::Distill => {
-            commands::distill::run(&home, &mut std::io::stdout())?;
+            commands::distill::run(&state_dir, &mut std::io::stdout())?;
         }
         Command::Instill { text } => {
-            commands::instill::run(&home, &mut std::io::stdout(), text)?;
+            commands::instill::run(&state_dir, &mut std::io::stdout(), text)?;
         }
         Command::Nudge => {
-            commands::nudge::run(&home, &mut std::io::stdout())?;
+            commands::nudge::run(&state_dir, &mut std::io::stdout())?;
         }
         Command::SessionEnd => {
-            commands::session_end::run(&home, &mut std::io::stdin(), &mut std::io::stdout())?;
+            commands::session_end::run(&state_dir, &mut std::io::stdin(), &mut std::io::stdout())?;
         }
         Command::SoulUpgrade => {
-            commands::soul_upgrade::run(&home, &mut std::io::stdout())?;
+            commands::soul_upgrade::run(&state_dir, &mut std::io::stdout())?;
         }
     }
 
