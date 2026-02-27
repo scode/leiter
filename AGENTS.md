@@ -8,6 +8,10 @@
 Always run `dprint fmt` before considering your work done. This applies after any file changes — implementation,
 refactoring, documentation edits, etc.
 
+# Releasing
+
+When the user asks to "make a release" or "cut a release", follow the Releasing section of `CONTRIBUTING.md`.
+
 # Rust checks
 
 Before considering your work done, run `cargo fmt`, `cargo clippy --all-targets --all-features -- -D warnings`, and
