@@ -48,9 +48,9 @@ use crate::templates::SOUL_WRITING_GUIDELINES;
 /// Outputs all session logs whose filename timestamps are >= `last_distilled`
 /// from the soul frontmatter, sorted chronologically. Each log is preceded by
 /// a header line with the filename.
-pub fn run(home: &Path, out: &mut impl Write) -> Result<()> {
-    let soul_path = paths::soul_path(home);
-    let logs_dir = paths::logs_dir(home);
+pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
+    let soul_path = paths::soul_path(state_dir);
+    let logs_dir = paths::logs_dir(state_dir);
 
     let content = fs::read_to_string(&soul_path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -187,20 +187,20 @@ mod tests {
     use crate::log_filename::generate_log_filename;
     use chrono::{TimeZone, Utc};
 
-    fn setup_home() -> tempfile::TempDir {
+    fn setup_state_dir() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         agent_setup::run(tmp.path(), &mut Vec::new()).unwrap();
         tmp
     }
 
-    fn run_distill(home: &Path) -> String {
+    fn run_distill(state_dir: &Path) -> String {
         let mut out = Vec::new();
-        run(home, &mut out).unwrap();
+        run(state_dir, &mut out).unwrap();
         String::from_utf8(out).unwrap()
     }
 
     fn write_log(
-        home: &Path,
+        state_dir: &Path,
         year: i32,
         month: u32,
         day: u32,
@@ -210,13 +210,13 @@ mod tests {
     ) {
         let ts = Utc.with_ymd_and_hms(year, month, day, hour, 0, 0).unwrap();
         let filename = generate_log_filename(ts, session_id);
-        let path = paths::logs_dir(home).join(filename);
+        let path = paths::logs_dir(state_dir).join(filename);
         fs::write(path, content).unwrap();
     }
 
-    fn set_last_distilled(home: &Path, year: i32, month: u32, day: u32, hour: u32) {
+    fn set_last_distilled(state_dir: &Path, year: i32, month: u32, day: u32, hour: u32) {
         let ts = Utc.with_ymd_and_hms(year, month, day, hour, 0, 0).unwrap();
-        let soul_path = paths::soul_path(home);
+        let soul_path = paths::soul_path(state_dir);
         let content = fs::read_to_string(&soul_path).unwrap();
         let (mut fm, body) = parse_soul(&content).unwrap();
         fm.last_distilled = ts;
@@ -225,14 +225,14 @@ mod tests {
 
     #[test]
     fn no_logs_at_all() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let output = run_distill(tmp.path());
         assert!(output.contains("No new session logs to process"));
     }
 
     #[test]
     fn all_logs_older_than_last_distilled() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         write_log(tmp.path(), 2026, 1, 1, 10, "old", "old content");
         set_last_distilled(tmp.path(), 2026, 6, 1, 0);
 
@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn log_with_timestamp_equal_to_last_distilled_is_included() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         write_log(tmp.path(), 2026, 6, 1, 0, "exact", "exact content");
         set_last_distilled(tmp.path(), 2026, 6, 1, 0);
 
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn log_with_timestamp_after_last_distilled_is_included() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         write_log(tmp.path(), 2026, 7, 1, 0, "new", "new content");
         set_last_distilled(tmp.path(), 2026, 6, 1, 0);
 
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn multiple_logs_in_chronological_order() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         write_log(tmp.path(), 2026, 3, 1, 0, "second", "BBB");
         write_log(tmp.path(), 2026, 1, 1, 0, "first", "AAA");
         write_log(tmp.path(), 2026, 5, 1, 0, "third", "CCC");
@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn each_log_has_filename_header() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         write_log(tmp.path(), 2026, 1, 1, 0, "sess1", "content1");
 
         let output = run_distill(tmp.path());
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn non_json_content_preserved_verbatim() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let original = "line one\n  indented\n\nlast line\n";
         write_log(tmp.path(), 2026, 1, 1, 0, "sess1", original);
 
@@ -296,10 +296,9 @@ mod tests {
 
     #[test]
     fn unparseable_filenames_silently_skipped() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         write_log(tmp.path(), 2026, 1, 1, 0, "good", "good content");
 
-        // Write a file with an unparseable name.
         let bad_path = paths::logs_dir(tmp.path()).join("not-a-log.txt");
         fs::write(bad_path, "bad").unwrap();
 
@@ -310,7 +309,7 @@ mod tests {
 
     #[test]
     fn output_includes_writing_guidelines() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         write_log(tmp.path(), 2026, 1, 1, 0, "sess1", "content");
 
         let output = run_distill(tmp.path());
@@ -319,7 +318,7 @@ mod tests {
 
     #[test]
     fn guidelines_appear_before_logs() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         write_log(tmp.path(), 2026, 1, 1, 0, "sess1", "content");
 
         let output = run_distill(tmp.path());
@@ -330,7 +329,7 @@ mod tests {
 
     #[test]
     fn no_guidelines_when_no_logs() {
-        let tmp = setup_home();
+        let tmp = setup_state_dir();
         let output = run_distill(tmp.path());
         assert!(!output.contains("Soul-writing guidelines"));
     }
@@ -338,7 +337,6 @@ mod tests {
     #[test]
     fn missing_soul_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        // Create logs dir but no soul file.
         fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
 
         let mut out = Vec::new();

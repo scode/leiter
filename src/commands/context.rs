@@ -19,8 +19,8 @@ use crate::templates::CONTEXT_PREAMBLE;
 /// If it doesn't exist, outputs a message suggesting `leiter agent-setup`.
 /// Either way, exits successfully — the SessionStart hook should never fail
 /// the session.
-pub fn run(home: &Path, out: &mut impl Write) -> Result<()> {
-    let soul_path = paths::soul_path(home);
+pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
+    let soul_path = paths::soul_path(state_dir);
 
     if !soul_path.exists() {
         writeln!(
@@ -41,15 +41,15 @@ mod tests {
     use super::*;
     use crate::commands::agent_setup;
 
-    fn run_context(home: &Path) -> String {
+    fn run_context(state_dir: &Path) -> String {
         let mut out = Vec::new();
-        run(home, &mut out).unwrap();
+        run(state_dir, &mut out).unwrap();
         String::from_utf8(out).unwrap()
     }
 
-    fn setup_and_context(home: &Path) -> String {
-        agent_setup::run(home, &mut Vec::new()).unwrap();
-        run_context(home)
+    fn setup_and_context(state_dir: &Path) -> String {
+        agent_setup::run(state_dir, &mut Vec::new()).unwrap();
+        run_context(state_dir)
     }
 
     #[test]
@@ -82,11 +82,11 @@ mod tests {
     #[test]
     fn soul_content_reproduced_verbatim() {
         let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        agent_setup::run(home, &mut Vec::new()).unwrap();
+        let dir = tmp.path();
+        agent_setup::run(dir, &mut Vec::new()).unwrap();
 
-        let soul_content = fs::read_to_string(paths::soul_path(home)).unwrap();
-        let output = run_context(home);
+        let soul_content = fs::read_to_string(paths::soul_path(dir)).unwrap();
+        let output = run_context(dir);
 
         assert!(output.ends_with(&soul_content));
     }

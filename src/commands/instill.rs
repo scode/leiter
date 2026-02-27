@@ -17,7 +17,7 @@ use crate::templates::SOUL_WRITING_GUIDELINES;
 ///
 /// Outputs the user's preference (quoted), the shared soul-writing
 /// guidelines, and an instruction to edit `~/.leiter/soul.md`.
-pub fn run(_home: &Path, out: &mut impl Write, text: &str) -> Result<()> {
+pub fn run(_state_dir: &Path, out: &mut impl Write, text: &str) -> Result<()> {
     writeln!(out, "The user wants you to remember:\n")?;
     for line in text.lines() {
         writeln!(out, "> {line}")?;
@@ -38,9 +38,9 @@ mod tests {
     use std::path::PathBuf;
 
     fn run_instill(text: &str) -> String {
-        let home = PathBuf::from("/unused");
+        let dir = PathBuf::from("/unused");
         let mut out = Vec::new();
-        run(&home, &mut out, text).unwrap();
+        run(&dir, &mut out, text).unwrap();
         String::from_utf8(out).unwrap()
     }
 
