@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use tracing::info;
 
-use crate::frontmatter::{SoulFrontmatter, serialize_soul};
+use crate::frontmatter::{SoulFrontmatter, parse_soul, serialize_soul};
 use crate::paths;
 use crate::templates::{
     AGENT_SETUP_INSTRUCTIONS, SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH, SOUL_TEMPLATE,
@@ -61,11 +61,40 @@ fn init_filesystem(state_dir: &Path) -> Result<()> {
             .with_context(|| format!("failed to write {}", soul_path.display()))?;
         info!("created {}", soul_path.display());
     } else {
-        info!(
-            "soul file already exists, skipping: {}",
-            soul_path.display()
-        );
+        info!("soul file already exists, updating epochs");
+        update_epochs(&soul_path)?;
     }
+
+    Ok(())
+}
+
+/// Update setup epoch fields in an existing soul file's frontmatter.
+///
+/// Preserves all other frontmatter fields and the body. If the frontmatter
+/// can't be parsed, silently skips — a corrupt soul shouldn't block setup.
+fn update_epochs(soul_path: &Path) -> Result<()> {
+    let content = fs::read_to_string(soul_path)
+        .with_context(|| format!("failed to read {}", soul_path.display()))?;
+
+    let (mut fm, body) = match parse_soul(&content) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            info!("skipping epoch update, frontmatter unparseable: {e}");
+            return Ok(());
+        }
+    };
+
+    if fm.setup_soft_epoch == SETUP_SOFT_EPOCH && fm.setup_hard_epoch == SETUP_HARD_EPOCH {
+        info!("epochs already current");
+        return Ok(());
+    }
+
+    fm.setup_soft_epoch = SETUP_SOFT_EPOCH;
+    fm.setup_hard_epoch = SETUP_HARD_EPOCH;
+    let updated = serialize_soul(&fm, body);
+    fs::write(soul_path, &updated)
+        .with_context(|| format!("failed to write {}", soul_path.display()))?;
+    info!("updated epochs to soft={SETUP_SOFT_EPOCH}, hard={SETUP_HARD_EPOCH}");
 
     Ok(())
 }
@@ -77,7 +106,15 @@ fn epoch() -> DateTime<Utc> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frontmatter::parse_soul;
+    use crate::frontmatter::{parse_soul, serialize_soul};
+
+    /// Return everything after the closing `---\n` frontmatter delimiter.
+    /// This is the raw file suffix — byte-for-byte what follows the frontmatter.
+    fn raw_body(content: &str) -> &str {
+        let after_opening = content.strip_prefix("---\n").unwrap();
+        let (_, body) = after_opening.split_once("\n---\n").unwrap();
+        body
+    }
 
     fn run_setup(state_dir: &Path) -> String {
         let mut out = Vec::new();
@@ -132,6 +169,70 @@ mod tests {
 
         let content = fs::read_to_string(&soul).unwrap();
         assert_eq!(content, "modified");
+    }
+
+    #[test]
+    fn rerun_updates_stale_epochs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        run_setup(dir);
+
+        let soul = paths::soul_path(dir);
+        let content = fs::read_to_string(&soul).unwrap();
+        let (mut fm, body) = parse_soul(&content).unwrap();
+
+        // Simulate an older soul with outdated epochs.
+        fm.setup_soft_epoch = 0;
+        fm.setup_hard_epoch = 0;
+        fs::write(&soul, serialize_soul(&fm, body)).unwrap();
+        let before_body = raw_body(&fs::read_to_string(&soul).unwrap()).to_owned();
+
+        run_setup(dir);
+
+        let updated = fs::read_to_string(&soul).unwrap();
+        let (updated_fm, _) = parse_soul(&updated).unwrap();
+        assert_eq!(updated_fm.setup_soft_epoch, SETUP_SOFT_EPOCH);
+        assert_eq!(updated_fm.setup_hard_epoch, SETUP_HARD_EPOCH);
+        assert_eq!(updated_fm.last_distilled, fm.last_distilled);
+        assert_eq!(updated_fm.soul_version, fm.soul_version);
+        // Raw bytes after frontmatter are identical.
+        assert_eq!(raw_body(&updated), before_body);
+    }
+
+    #[test]
+    fn rerun_preserves_modified_body() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        run_setup(dir);
+
+        let soul = paths::soul_path(dir);
+        let content = fs::read_to_string(&soul).unwrap();
+        let (mut fm, _) = parse_soul(&content).unwrap();
+        fm.setup_soft_epoch = 0;
+        let custom_body = "# My customized soul\n\nLearned preferences here.\n";
+        fs::write(&soul, serialize_soul(&fm, custom_body)).unwrap();
+
+        run_setup(dir);
+
+        let updated = fs::read_to_string(&soul).unwrap();
+        let (updated_fm, _) = parse_soul(&updated).unwrap();
+        assert_eq!(updated_fm.setup_soft_epoch, SETUP_SOFT_EPOCH);
+        // Raw bytes after frontmatter are identical.
+        assert_eq!(raw_body(&updated), custom_body);
+    }
+
+    #[test]
+    fn rerun_with_unparseable_frontmatter_does_not_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        run_setup(dir);
+
+        let soul = paths::soul_path(dir);
+        fs::write(&soul, "---\ngarbage: true\n---\nbody\n").unwrap();
+
+        // Should not panic or return error.
+        let output = run_setup(dir);
+        assert!(output.contains("leiter context"));
     }
 
     #[test]
