@@ -1,60 +1,83 @@
 name: CI
 
 on:
-  push:
   pull_request:
+    branches:
+      - "**"
+  push:
+    branches:
+      - main
 
 env:
   CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   dprint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dprint/check@v2.2
 
   fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - run: rustup toolchain install stable --profile minimal --component rustfmt
-      - uses: actions/cache@v4
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-fmt-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-fmt-
-      - run: cargo fmt --check
+          toolchain: stable
+          components: rustfmt
+          cache: true
+      - run: cargo fmt -- --check
 
   clippy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - run: rustup toolchain install stable --profile minimal --component clippy
-      - uses: actions/cache@v4
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-clippy-
-      - run: cargo clippy -- -D warnings
+          toolchain: stable
+          components: clippy
+          cache: true
+      - run: cargo clippy --all-targets --all-features -- -D warnings
 
-  test:
+  doc:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - run: rustup toolchain install stable --profile minimal
-      - uses: actions/cache@v4
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-test-
-      - run: cargo test
+          toolchain: nightly
+          cache: true
+      - run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: --cfg docsrs
+
+  test-linux:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.ref_name == 'main'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+      - run: cargo generate-lockfile
+        if: hashFiles('Cargo.lock') == ''
+      - run: cargo test --locked --all-features --all-targets
+
+  test-macos:
+    if: ${{ false }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+      - run: cargo generate-lockfile
+        if: hashFiles('Cargo.lock') == ''
+      - run: cargo test --locked --all-features --all-targets

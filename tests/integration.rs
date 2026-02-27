@@ -9,8 +9,6 @@ use predicates::prelude::*;
 use std::fs;
 use std::path::Path;
 
-use serde_json;
-
 fn leiter(home: &Path) -> Command {
     let mut cmd = cargo_bin_cmd!("leiter");
     cmd.env("LEITER_HOME", home.as_os_str());
