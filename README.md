@@ -7,6 +7,12 @@ persistent "soul" that shapes future agent behavior.
 ## Install
 
 ```sh
+brew install scode/dist-tap/leiter
+```
+
+Or from source:
+
+```sh
 cargo install --path .
 ```
 

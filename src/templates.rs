@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn soul_template_version_is_positive() {
-        assert!(SOUL_TEMPLATE_VERSION > 0);
+        const { assert!(SOUL_TEMPLATE_VERSION > 0) };
     }
 
     #[test]
