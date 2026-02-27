@@ -15,7 +15,10 @@ use tracing::info;
 
 use crate::frontmatter::{SoulFrontmatter, serialize_soul};
 use crate::paths;
-use crate::templates::{AGENT_SETUP_INSTRUCTIONS, SOUL_TEMPLATE, SOUL_TEMPLATE_VERSION};
+use crate::templates::{
+    AGENT_SETUP_INSTRUCTIONS, SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH, SOUL_TEMPLATE,
+    SOUL_TEMPLATE_VERSION,
+};
 
 /// Run the agent-setup command.
 ///
@@ -50,6 +53,8 @@ fn init_filesystem(state_dir: &Path) -> Result<()> {
         let frontmatter = SoulFrontmatter {
             last_distilled: epoch(),
             soul_version: SOUL_TEMPLATE_VERSION,
+            setup_soft_epoch: SETUP_SOFT_EPOCH,
+            setup_hard_epoch: SETUP_HARD_EPOCH,
         };
         let content = serialize_soul(&frontmatter, SOUL_TEMPLATE);
         fs::write(&soul_path, &content)

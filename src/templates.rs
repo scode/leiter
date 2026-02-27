@@ -8,6 +8,16 @@
 /// changes, so `leiter soul-upgrade` can detect drift.
 pub const SOUL_TEMPLATE_VERSION: u32 = 2;
 
+/// Setup epoch for soft (nudge) compatibility checks. Only bumped when
+/// a leiter upgrade introduces changes that benefit from user action but
+/// are not strictly required.
+pub const SETUP_SOFT_EPOCH: u32 = 1;
+
+/// Setup epoch for hard (blocking) compatibility checks. Only bumped when
+/// a leiter upgrade introduces changes that require user action before
+/// the session can proceed.
+pub const SETUP_HARD_EPOCH: u32 = 1;
+
 /// Initial content for `~/.leiter/soul.md` (body only, no frontmatter).
 ///
 /// Section headings guide the agent toward capturing specific kinds of
