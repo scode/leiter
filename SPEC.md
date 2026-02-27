@@ -157,9 +157,11 @@ configure Claude Code hooks.
 
 1. Create `~/.leiter/` directory (no-op if exists)
 2. Create `~/.leiter/logs/` directory (no-op if exists)
-3. Create `~/.leiter/soul.md` from the soul template, with `last_distilled: 1970-01-01T00:00:00Z`, `soul_version` set to
-   the current template version, and `setup_soft_epoch`/`setup_hard_epoch` set to the binary's current epoch values in
-   the frontmatter (skip if `soul.md` already exists)
+3. If `~/.leiter/soul.md` does not exist, create it from the soul template with `last_distilled: 1970-01-01T00:00:00Z`,
+   `soul_version` set to the current template version, and `setup_soft_epoch`/`setup_hard_epoch` set to the binary's
+   current epoch values in the frontmatter. If `soul.md` already exists, update only the `setup_soft_epoch` and
+   `setup_hard_epoch` fields to the binary's current values (preserving all other frontmatter and body content). If the
+   existing frontmatter cannot be parsed, skip the epoch update silently
 
 **Output (stdout):** Natural language instructions telling the agent to configure Claude Code hooks in
 `~/.claude/settings.json`. The output includes:

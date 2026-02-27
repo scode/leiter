@@ -1,14 +1,14 @@
 //! `leiter context` — inject soul content and agent instructions into the session.
 //!
-//! Called by the SessionStart hook on every session start. Outputs the preamble
-//! (explaining how to interact with leiter) followed by the full soul file, so
-//! the agent has all learned preferences in context.
+//! Called by the SessionStart hook on every session start. Checks setup epoch
+//! compatibility, then outputs the preamble (explaining how to interact with
+//! leiter) followed by the full soul file. Hard epoch mismatches block the
+//! session; soft mismatches produce a nudge.
 
+use std::cmp::Ordering;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-
-use std::cmp::Ordering;
 
 use anyhow::Result;
 use tracing::warn;
@@ -45,7 +45,7 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
             Ordering::Less => {
                 writeln!(
                     out,
-                    "Leiter setup is incompatible: the leiter binary is newer than the soul on disk (setup_hard_epoch: soul={}, binary={}). This likely means the binary was upgraded but setup was not re-run. Tell Claude: \"Run the shell command `leiter agent-setup` and follow the instructions it outputs on stdout.\"",
+                    "ACTION REQUIRED: Leiter setup is incompatible (setup_hard_epoch: soul={}, binary={}). The binary was upgraded but setup was not re-run. Before responding to the user's first message, tell them: \"Leiter setup needs to be re-run — please run `leiter agent-setup` in your terminal and follow the instructions, then start a new session.\" Do not attempt to use leiter commands in this session.",
                     fm.setup_hard_epoch, SETUP_HARD_EPOCH,
                 )?;
                 return Ok(());
@@ -53,7 +53,7 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
             Ordering::Greater => {
                 writeln!(
                     out,
-                    "Leiter setup is incompatible: the soul on disk is newer than this leiter binary (setup_hard_epoch: soul={}, binary={}). This likely means a newer binary was used to set up the soul. Please upgrade the leiter binary.",
+                    "ACTION REQUIRED: Leiter setup is incompatible (setup_hard_epoch: soul={}, binary={}). The soul was created by a newer leiter binary than the one currently installed. Before responding to the user's first message, tell them: \"Your leiter binary is outdated — please upgrade it, then start a new session.\" Do not attempt to use leiter commands in this session.",
                     fm.setup_hard_epoch, SETUP_HARD_EPOCH,
                 )?;
                 return Ok(());
@@ -65,14 +65,14 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
             Ordering::Less => {
                 writeln!(
                     out,
-                    "Note: The leiter binary is newer than the soul on disk (setup_soft_epoch: soul={}, binary={}). This likely means the binary was upgraded but setup was not re-run. When convenient, tell Claude: \"Run the shell command `leiter agent-setup` and follow the instructions it outputs on stdout.\"\n",
+                    "Before responding to the user's first message, briefly mention that leiter setup is slightly behind the binary (setup_soft_epoch: soul={}, binary={}). Suggest they run `leiter agent-setup` when convenient. Keep it to one short sentence.\n",
                     fm.setup_soft_epoch, SETUP_SOFT_EPOCH,
                 )?;
             }
             Ordering::Greater => {
                 writeln!(
                     out,
-                    "Note: The soul on disk is newer than this leiter binary (setup_soft_epoch: soul={}, binary={}). This likely means a newer binary was used to set up the soul. Consider upgrading the leiter binary when convenient.\n",
+                    "Before responding to the user's first message, briefly mention that the leiter binary is slightly behind the setup (setup_soft_epoch: soul={}, binary={}). Suggest they upgrade leiter when convenient. Keep it to one short sentence.\n",
                     fm.setup_soft_epoch, SETUP_SOFT_EPOCH,
                 )?;
             }
@@ -165,7 +165,7 @@ mod tests {
             SETUP_HARD_EPOCH.saturating_sub(1),
         );
         let output = run_context(tmp.path());
-        assert!(output.contains("binary is newer than the soul"));
+        assert!(output.contains("ACTION REQUIRED"));
         assert!(output.contains("leiter agent-setup"));
         assert!(!output.contains(CONTEXT_PREAMBLE));
     }
@@ -175,8 +175,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
         let output = run_context(tmp.path());
-        assert!(output.contains("soul on disk is newer than this leiter binary"));
-        assert!(output.contains("upgrade the leiter binary"));
+        assert!(output.contains("ACTION REQUIRED"));
+        assert!(output.contains("binary is outdated"));
         assert!(!output.contains(CONTEXT_PREAMBLE));
     }
 
@@ -189,7 +189,7 @@ mod tests {
             SETUP_HARD_EPOCH,
         );
         let output = run_context(tmp.path());
-        assert!(output.contains("binary is newer than the soul"));
+        assert!(output.contains("setup is slightly behind"));
         assert!(output.contains("leiter agent-setup"));
         assert!(output.contains(CONTEXT_PREAMBLE));
     }
@@ -199,8 +199,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH + 1, SETUP_HARD_EPOCH);
         let output = run_context(tmp.path());
-        assert!(output.contains("soul on disk is newer than this leiter binary"));
-        assert!(output.contains("upgrading the leiter binary"));
+        assert!(output.contains("binary is slightly behind"));
+        assert!(output.contains("upgrade leiter"));
         assert!(output.contains(CONTEXT_PREAMBLE));
     }
 
