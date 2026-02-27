@@ -68,6 +68,8 @@ The frontmatter contains metadata used by the CLI:
 ---
 last_distilled: 2026-02-23T17:00:00Z
 soul_version: 2
+setup_soft_epoch: 1
+setup_hard_epoch: 1
 ---
 
 (soul content here — see Soul Template)
@@ -76,9 +78,36 @@ soul_version: 2
 - `last_distilled`: timestamp used by `leiter distill` to determine which session logs are new
 - `soul_version`: integer matching the version of the soul template used to create this file, used by
   `leiter soul-upgrade` to detect drift
+- `setup_soft_epoch`: integer tracking the soft setup epoch. When the binary's expected soft epoch doesn't match the
+  soul's value, `leiter context` outputs a nudge but still injects the soul. See Setup Epochs below
+- `setup_hard_epoch`: integer tracking the hard setup epoch. When the binary's expected hard epoch doesn't match the
+  soul's value, `leiter context` blocks the session (does not inject the soul). See Setup Epochs below
+
+Both epoch fields default to 1 when absent (for backward compatibility with souls created before epochs were
+introduced).
 
 The agent edits the soul file directly using its Read/Edit/Write tools. The CLI only writes to this file during
 `leiter agent-setup` to create the initial soul from the template; after that, all modifications are made by the agent.
+
+### Setup Epochs
+
+The leiter binary may evolve in ways that require user action beyond just upgrading the binary — for example, re-running
+`leiter agent-setup` to update hook configuration. Setup epochs detect this condition and alert the user.
+
+There are two independent epochs, each a monotonic integer starting at 1:
+
+- **`setup_soft_epoch`**: Bumped when a leiter upgrade introduces changes that benefit from user action but are not
+  strictly required. A mismatch produces a nudge but does not block the session.
+- **`setup_hard_epoch`**: Bumped when a leiter upgrade introduces changes that require user action before the session
+  can function correctly. A mismatch blocks the session (the soul is not injected).
+
+The binary has compiled-in expected values for both epochs. When `leiter context` runs, it compares the soul's epoch
+values against the binary's expected values. The check uses exact equality — both older and newer souls are flagged,
+since the binary cannot make assumptions about unknown future epochs.
+
+Epochs are independent of `soul_version`. The soul version tracks template format changes (handled by
+`leiter soul-upgrade`). Epochs track integration changes (hooks, settings, etc.) that require user action outside the
+soul file.
 
 ### Soul Template (built into the binary)
 
@@ -128,8 +157,9 @@ configure Claude Code hooks.
 
 1. Create `~/.leiter/` directory (no-op if exists)
 2. Create `~/.leiter/logs/` directory (no-op if exists)
-3. Create `~/.leiter/soul.md` from the soul template, with `last_distilled: 1970-01-01T00:00:00Z` and `soul_version` set
-   to the current template version in the frontmatter (skip if `soul.md` already exists)
+3. Create `~/.leiter/soul.md` from the soul template, with `last_distilled: 1970-01-01T00:00:00Z`, `soul_version` set to
+   the current template version, and `setup_soft_epoch`/`setup_hard_epoch` set to the binary's current epoch values in
+   the frontmatter (skip if `soul.md` already exists)
 
 **Output (stdout):** Natural language instructions telling the agent to configure Claude Code hooks in
 `~/.claude/settings.json`. The output includes:
@@ -158,6 +188,19 @@ session, the user sees the instructions and can paste them into a session or app
 ### `leiter context`
 
 Outputs the soul content and agent instructions. Called by the SessionStart hook.
+
+**Behavior:**
+
+1. If the soul file does not exist, output a message suggesting `leiter agent-setup` and return
+2. Read the soul file and attempt to parse its frontmatter
+3. If frontmatter is parseable, check setup epochs (see Setup Epochs):
+   - If `setup_hard_epoch` does not exactly match the binary's expected value: output an error message and return
+     without injecting the soul. The message differs based on direction — if the soul's epoch is lower, suggest running
+     `leiter agent-setup`; if higher, suggest upgrading the binary
+   - If `setup_soft_epoch` does not exactly match the binary's expected value: output a nudge message (different for
+     older vs. newer soul) but continue to inject the soul normally
+4. If frontmatter parsing fails, skip epoch checks and proceed (fail-open — a corrupt frontmatter should not block the
+   session entirely)
 
 **Output (stdout):**
 

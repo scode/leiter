@@ -20,6 +20,18 @@ pub struct SoulFrontmatter {
     /// Tracks which soul template version this file was created from,
     /// so `leiter soul-upgrade` can detect drift.
     pub soul_version: u32,
+    /// Setup epoch for soft (nudge) compatibility checks.
+    /// Defaults to 1 for souls created before epochs were introduced.
+    #[serde(default = "default_setup_epoch")]
+    pub setup_soft_epoch: u32,
+    /// Setup epoch for hard (blocking) compatibility checks.
+    /// Defaults to 1 for souls created before epochs were introduced.
+    #[serde(default = "default_setup_epoch")]
+    pub setup_hard_epoch: u32,
+}
+
+fn default_setup_epoch() -> u32 {
+    1
 }
 
 /// Extract frontmatter and body from a soul file's content.
@@ -64,6 +76,8 @@ mod tests {
         SoulFrontmatter {
             last_distilled: Utc.with_ymd_and_hms(2026, 2, 23, 17, 0, 0).unwrap(),
             soul_version: 1,
+            setup_soft_epoch: 1,
+            setup_hard_epoch: 1,
         }
     }
 
