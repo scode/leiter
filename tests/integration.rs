@@ -97,7 +97,7 @@ fn setup_install_then_session_end_then_distill() {
         .stdout(predicate::str::contains("Transcript saved"));
 
     leiter(dir)
-        .arg("distill")
+        .args(["soul", "distill"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Integration test transcript."))
@@ -137,7 +137,7 @@ fn distill_with_epoch_last_distilled_includes_all_logs() {
         .success();
 
     leiter(dir)
-        .arg("distill")
+        .args(["soul", "distill"])
         .assert()
         .success()
         .stdout(predicate::str::contains("First log."))
@@ -257,7 +257,7 @@ fn distill_dry_run_reports_obsolete_without_deleting() {
 
     // Dry-run should report the obsolete file
     leiter(dir)
-        .args(["distill", "--dry-run"])
+        .args(["soul", "distill", "--dry-run"])
         .assert()
         .success()
         .stdout(predicate::str::contains("would be deleted"))
@@ -279,7 +279,7 @@ fn distill_deletes_obsolete_logs() {
     let obsolete_name = "20250101T000000Z-old-sess.jsonl";
     fs::write(logs_dir.join(obsolete_name), "obsolete content\n").unwrap();
 
-    leiter(dir).arg("distill").assert().success();
+    leiter(dir).args(["soul", "distill"]).assert().success();
 
     // Obsolete file should be deleted
     assert!(!logs_dir.join(obsolete_name).exists());

@@ -1,4 +1,4 @@
-//! `leiter distill` — output new session logs for the agent to distill.
+//! `leiter soul distill` — output new session logs for the agent to distill.
 //!
 //! Reads the `last_distilled` timestamp from the soul frontmatter, scans the
 //! logs directory for files with timestamps >= that value, and outputs them

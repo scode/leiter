@@ -15,7 +15,7 @@ use crate::errors::LeiterError;
 /// to coordinate distillation timing and template upgrades.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SoulFrontmatter {
-    /// Used by `leiter distill` to select only unprocessed session logs.
+    /// Used by `leiter soul distill` to select only unprocessed session logs.
     pub last_distilled: DateTime<Utc>,
     /// Tracks which soul template version this file was created from,
     /// so `leiter soul-upgrade` can detect drift.

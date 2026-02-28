@@ -26,9 +26,9 @@ fn parses_hook_context() {
 }
 
 #[test]
-fn parses_distill() {
-    // distill requires ~/.leiter/soul.md which may not exist.
-    let assert = leiter().arg("distill").assert();
+fn parses_soul_distill() {
+    // soul distill requires ~/.leiter/soul.md which may not exist.
+    let assert = leiter().args(["soul", "distill"]).assert();
     assert.stderr(predicate::str::contains("unrecognized subcommand").not());
 }
 
