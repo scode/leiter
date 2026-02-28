@@ -9,7 +9,7 @@ use std::path::Path;
 use crate::paths;
 
 /// Current soul template version. Bumped whenever the template structure
-/// changes, so `leiter soul-upgrade` can detect drift.
+/// changes, so `leiter soul upgrade` can detect drift.
 pub const SOUL_TEMPLATE_VERSION: u32 = 2;
 
 /// Setup epoch for soft (nudge) compatibility checks. Only bumped when
@@ -68,7 +68,7 @@ Record these so the same mistakes are not repeated.
 ";
 
 /// Version changelog for the soul template. Each entry describes what changed
-/// in that version, so `leiter soul-upgrade` can show the agent what to migrate.
+/// in that version, so `leiter soul upgrade` can show the agent what to migrate.
 pub const SOUL_TEMPLATE_CHANGELOG: &[(u32, &str)] = &[
     (
         1,
@@ -134,7 +134,7 @@ pub fn context_preamble(state_dir: &Path) -> String {
          \n\
          When the user asks to distill session logs, run `leiter soul distill`. This outputs new session logs. Read through them, update the soul with new learnings, then update `last_distilled` in the soul file's frontmatter to the current UTC ISO 8601 timestamp (e.g., 2026-02-23T17:00:00Z).\n\
          \n\
-         When the user asks to upgrade the leiter soul, run `leiter soul-upgrade`. If the soul template is outdated, this outputs migration instructions and the new template. Follow the instructions to restructure the soul while preserving all learned preferences.\n\
+         When the user asks to upgrade the leiter soul, run `leiter soul upgrade`. If the soul template is outdated, this outputs migration instructions and the new template. Follow the instructions to restructure the soul while preserving all learned preferences.\n\
          \n\
          IMPORTANT: The `leiter hook session-end` hook command writes to `{dir}/` which is outside the default sandbox allowed paths. Ensure it is run outside the sandbox (i.e., with sandbox disabled) or writes will fail with \"Operation not permitted\".\n\
          \n\
@@ -147,7 +147,7 @@ pub const NUDGE_MESSAGE: &str = "\
 ACTION REQUIRED: There are undistilled leiter session logs older than 24 hours. Before responding to the user's first message, briefly let them know by saying something like: \"You have undistilled leiter session logs. Want me to run a distillation?\" Keep it to one short sentence — do not explain what distillation is.
 ";
 
-/// Migration instructions output by `leiter soul-upgrade` when the soul
+/// Migration instructions output by `leiter soul upgrade` when the soul
 /// template is outdated. Tells the agent how to restructure the existing
 /// soul content into the new template format.
 pub fn soul_upgrade_instructions(state_dir: &Path) -> String {
@@ -294,7 +294,7 @@ mod tests {
         for literal in [
             "/test/state/soul.md",
             "leiter soul distill",
-            "leiter soul-upgrade",
+            "leiter soul upgrade",
             "leiter soul instill",
         ] {
             assert!(

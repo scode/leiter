@@ -142,7 +142,7 @@ mod tests {
         assert!(output.contains("remember"));
         assert!(output.contains("session log"));
         assert!(output.contains("leiter soul distill"));
-        assert!(output.contains("leiter soul-upgrade"));
+        assert!(output.contains("leiter soul upgrade"));
     }
 
     #[test]

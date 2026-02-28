@@ -45,8 +45,6 @@ pub enum Command {
         #[command(subcommand)]
         command: SoulCommand,
     },
-    /// Detect and output soul template migration instructions
-    SoulUpgrade,
 }
 
 #[derive(Subcommand)]
@@ -70,6 +68,8 @@ pub enum SoulCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Detect and output soul template migration instructions
+    Upgrade,
 }
 
 #[derive(Subcommand)]
@@ -138,6 +138,9 @@ fn main() -> Result<()> {
             SoulCommand::Distill { dry_run } => {
                 commands::distill::run(&state_dir, &mut std::io::stdout(), *dry_run)?;
             }
+            SoulCommand::Upgrade => {
+                commands::soul_upgrade::run(&state_dir, &mut std::io::stdout())?;
+            }
         },
         Command::Setup { command } => match command {
             SetupCommand::Install => {
@@ -147,9 +150,6 @@ fn main() -> Result<()> {
                 commands::agent_uninstall::run(&state_dir, &mut std::io::stdout())?;
             }
         },
-        Command::SoulUpgrade => {
-            commands::soul_upgrade::run(&state_dir, &mut std::io::stdout())?;
-        }
     }
 
     Ok(())
