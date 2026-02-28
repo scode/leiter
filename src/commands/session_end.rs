@@ -1,4 +1,4 @@
-//! `leiter session-end` — handle the Claude Code SessionEnd event.
+//! `leiter hook session-end` — handle the Claude Code SessionEnd event.
 //!
 //! Reads the SessionEnd hook JSON from stdin (which includes `session_id` and
 //! `transcript_path`), then copies the transcript to the leiter logs directory.

@@ -60,7 +60,7 @@ fn session_end_saves_transcript() {
     });
 
     leiter(dir)
-        .arg("session-end")
+        .args(["hook", "session-end"])
         .write_stdin(json.to_string())
         .assert()
         .success()
@@ -90,7 +90,7 @@ fn agent_setup_then_session_end_then_distill() {
     });
 
     leiter(dir)
-        .arg("session-end")
+        .args(["hook", "session-end"])
         .write_stdin(json.to_string())
         .assert()
         .success()
@@ -119,7 +119,7 @@ fn distill_with_epoch_last_distilled_includes_all_logs() {
         "transcript_path": transcript1.to_str().unwrap(),
     });
     leiter(dir)
-        .arg("session-end")
+        .args(["hook", "session-end"])
         .write_stdin(json1.to_string())
         .assert()
         .success();
@@ -131,7 +131,7 @@ fn distill_with_epoch_last_distilled_includes_all_logs() {
         "transcript_path": transcript2.to_str().unwrap(),
     });
     leiter(dir)
-        .arg("session-end")
+        .args(["hook", "session-end"])
         .write_stdin(json2.to_string())
         .assert()
         .success();
@@ -250,7 +250,7 @@ fn distill_dry_run_reports_obsolete_without_deleting() {
         "transcript_path": transcript.to_str().unwrap(),
     });
     leiter(dir)
-        .arg("session-end")
+        .args(["hook", "session-end"])
         .write_stdin(json.to_string())
         .assert()
         .success();
@@ -296,7 +296,7 @@ fn agent_uninstall_outputs_hook_removal_instructions() {
         .success()
         .stdout(predicate::str::contains("leiter hook context"))
         .stdout(predicate::str::contains("leiter hook nudge"))
-        .stdout(predicate::str::contains("leiter session-end"))
+        .stdout(predicate::str::contains("leiter hook session-end"))
         .stdout(predicate::str::contains(format!("{}/", dir.display())))
         .stdout(predicate::str::contains("leiter agent-setup"));
 }

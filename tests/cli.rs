@@ -43,7 +43,7 @@ fn parses_hook_nudge() {
 fn parses_session_end() {
     // session-end reads JSON from stdin, so it will fail with empty input,
     // but we verify the subcommand is recognized (no "unrecognized subcommand").
-    let assert = leiter().arg("session-end").assert();
+    let assert = leiter().args(["hook", "session-end"]).assert();
     assert.stderr(predicate::str::contains("unrecognized subcommand").not());
 }
 

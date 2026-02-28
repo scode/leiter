@@ -136,7 +136,7 @@ pub fn context_preamble(state_dir: &Path) -> String {
          \n\
          When the user asks to upgrade the leiter soul, run `leiter soul-upgrade`. If the soul template is outdated, this outputs migration instructions and the new template. Follow the instructions to restructure the soul while preserving all learned preferences.\n\
          \n\
-         IMPORTANT: The `leiter session-end` hook command writes to `{dir}/` which is outside the default sandbox allowed paths. Ensure it is run outside the sandbox (i.e., with sandbox disabled) or writes will fail with \"Operation not permitted\".\n\
+         IMPORTANT: The `leiter hook session-end` hook command writes to `{dir}/` which is outside the default sandbox allowed paths. Ensure it is run outside the sandbox (i.e., with sandbox disabled) or writes will fail with \"Operation not permitted\".\n\
          \n\
          ---\n"
     )
@@ -185,7 +185,7 @@ pub fn agent_uninstall_instructions(state_dir: &Path) -> String {
 
 Read `~/.claude/settings.json`.
 
-Find and remove all hook entries whose `command` field contains `"leiter hook context"`, `"leiter hook nudge"`, or `"leiter session-end"`.
+Find and remove all hook entries whose `command` field contains `"leiter hook context"`, `"leiter hook nudge"`, or `"leiter hook session-end"`.
 
 If removing leiter hooks causes a hook group object's `hooks` array to become empty, remove the entire group object from its parent array (e.g., from the `SessionStart` or `SessionEnd` array).
 
@@ -210,7 +210,7 @@ pub const AGENT_SETUP_INSTRUCTIONS: &str = r#"Configure Claude Code hooks for le
 
 Read `~/.claude/settings.json` (or create it with `{}` if it doesn't exist).
 
-Check whether leiter hooks are already present by looking for hook commands containing `"leiter hook context"`, `"leiter hook nudge"`, or `"leiter session-end"` anywhere in the existing hooks.
+Check whether leiter hooks are already present by looking for hook commands containing `"leiter hook context"`, `"leiter hook nudge"`, or `"leiter hook session-end"` anywhere in the existing hooks.
 
 The desired leiter hooks are shown below. There are three cases:
 
@@ -242,7 +242,7 @@ SessionEnd hook group:
   "hooks": [
     {
       "type": "command",
-      "command": "leiter session-end"
+      "command": "leiter hook session-end"
     }
   ]
 }
@@ -362,7 +362,7 @@ mod tests {
     fn agent_setup_instructions_contain_hook_commands() {
         assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter hook context"));
         assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter hook nudge"));
-        assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter session-end"));
+        assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter hook session-end"));
     }
 
     #[test]
@@ -370,7 +370,7 @@ mod tests {
         assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""type": "command""#));
         assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter hook context""#));
         assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter hook nudge""#));
-        assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter session-end""#));
+        assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter hook session-end""#));
     }
 
     #[test]
@@ -386,7 +386,7 @@ mod tests {
         let instructions = agent_uninstall_instructions(Path::new("/test/state"));
         assert!(instructions.contains("leiter hook context"));
         assert!(instructions.contains("leiter hook nudge"));
-        assert!(instructions.contains("leiter session-end"));
+        assert!(instructions.contains("leiter hook session-end"));
     }
 
     #[test]
