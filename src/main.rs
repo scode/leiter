@@ -37,6 +37,10 @@ pub enum Command {
     },
     /// Claude-specific agent commands
     Claude {
+        /// Override Claude Code home directory (default: ~/.claude/)
+        #[arg(long)]
+        claude_home: Option<std::path::PathBuf>,
+
         #[command(subcommand)]
         command: ClaudeCommand,
     },
@@ -49,10 +53,14 @@ pub enum Command {
 
 #[derive(Subcommand)]
 pub enum ClaudeCommand {
-    /// First-time setup and hook configuration
+    /// Install leiter plugin files and initialize state
     Install,
-    /// Remove leiter hooks from Claude Code
+    /// Remove leiter plugin files from Claude Code
     Uninstall,
+    /// Output hook configuration instructions for the agent
+    AgentSetupInstructions,
+    /// Output hook removal instructions for the agent
+    AgentTeardownInstructions,
 }
 
 #[derive(Subcommand)]
@@ -147,14 +155,32 @@ fn main() -> Result<()> {
                 commands::mark_distilled::run(&state_dir, &mut std::io::stdout())?;
             }
         },
-        Command::Claude { command } => match command {
-            ClaudeCommand::Install => {
-                commands::agent_setup::run(&state_dir, &mut std::io::stdout())?;
+        Command::Claude {
+            claude_home,
+            command,
+        } => {
+            let claude_home = match claude_home {
+                Some(p) => p.clone(),
+                None => paths::default_claude_home()?,
+            };
+            match command {
+                ClaudeCommand::Install => {
+                    commands::agent_setup::run(&state_dir, &claude_home)?;
+                }
+                ClaudeCommand::Uninstall => {
+                    commands::agent_uninstall::run(&state_dir, &claude_home)?;
+                }
+                ClaudeCommand::AgentSetupInstructions => {
+                    commands::agent_setup::agent_setup_instructions(&mut std::io::stdout())?;
+                }
+                ClaudeCommand::AgentTeardownInstructions => {
+                    commands::agent_uninstall::agent_teardown_instructions(
+                        &state_dir,
+                        &mut std::io::stdout(),
+                    )?;
+                }
             }
-            ClaudeCommand::Uninstall => {
-                commands::agent_uninstall::run(&state_dir, &mut std::io::stdout())?;
-            }
-        },
+        }
     }
 
     Ok(())

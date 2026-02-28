@@ -35,3 +35,9 @@ required behavior. Do not deviate from it without an intentional spec change (up
 
 During code review, always read SPEC.md and verify the code under review complies with it. Flag any drift between
 implementation and spec.
+
+# stdout vs logging
+
+stdout is reserved for in-band output the agent reads (hook context, setup/teardown instructions, distill output, etc.).
+All other output — status messages, confirmations, diagnostics — must use `tracing` crate logging (`info!`, `warn!`,
+etc.), which goes to stderr.

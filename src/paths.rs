@@ -33,6 +33,18 @@ pub fn logs_dir(state_dir: &Path) -> PathBuf {
     state_dir.join("logs")
 }
 
+/// Default Claude Code home directory (`$HOME/.claude/`).
+pub fn default_claude_home() -> Result<PathBuf, LeiterError> {
+    Ok(dirs::home_dir()
+        .ok_or(LeiterError::HomeNotFound)?
+        .join(".claude"))
+}
+
+/// Path to a specific skill directory (`<claude_home>/skills/<name>/`).
+pub fn skill_dir(claude_home: &Path, name: &str) -> PathBuf {
+    claude_home.join("skills").join(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,5 +70,22 @@ mod tests {
         let dir = fake_state_dir();
         assert!(soul_path(dir).starts_with(dir));
         assert!(logs_dir(dir).starts_with(dir));
+    }
+
+    fn fake_claude_home() -> &'static Path {
+        Path::new("/fake/claude")
+    }
+
+    #[test]
+    fn skill_dir_contains_name() {
+        let dir = skill_dir(fake_claude_home(), "leiter-setup");
+        assert!(dir.ends_with("leiter-setup"));
+        assert!(dir.starts_with(fake_claude_home()));
+    }
+
+    #[test]
+    fn claude_paths_are_under_claude_home() {
+        let ch = fake_claude_home();
+        assert!(skill_dir(ch, "test").starts_with(ch));
     }
 }
