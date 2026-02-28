@@ -5,11 +5,13 @@
 //! pollution). Silently succeeds when leiter is not initialized.
 
 use std::fs;
+use std::io::ErrorKind;
 use std::io::Write;
 use std::path::Path;
 
 use anyhow::Result;
 use chrono::Utc;
+use tracing::warn;
 
 use crate::frontmatter::parse_soul;
 use crate::log_filename::collect_log_entries;
@@ -20,14 +22,34 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
     let soul_path = paths::soul_path(state_dir);
     let logs_dir = paths::logs_dir(state_dir);
 
-    let Ok(content) = fs::read_to_string(&soul_path) else {
-        return Ok(());
+    // This hook runs on every SessionStart. By design it must never block startup:
+    // if state is unreadable or malformed, we degrade to "no nudge" and let the
+    // session continue, while logging diagnostics for debugging.
+    let content = match fs::read_to_string(&soul_path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            warn!("failed to read soul file {}: {err}", soul_path.display());
+            return Ok(());
+        }
     };
-    let Ok((fm, _)) = parse_soul(&content) else {
-        return Ok(());
+    let (fm, _) = match parse_soul(&content) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            warn!("failed to parse soul file {}: {err}", soul_path.display());
+            return Ok(());
+        }
     };
-    let Ok(entries) = collect_log_entries(&logs_dir) else {
-        return Ok(());
+    let entries = match collect_log_entries(&logs_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            warn!(
+                "failed to read logs directory {}: {err}",
+                logs_dir.display()
+            );
+            return Ok(());
+        }
     };
 
     let cutoff = Utc::now() - chrono::Duration::hours(24);
@@ -155,6 +177,15 @@ mod tests {
         let tmp = setup_state_dir();
         let bad_path = paths::logs_dir(tmp.path()).join("not-a-log.txt");
         fs::write(bad_path, "junk").unwrap();
+        let output = run_nudge(tmp.path());
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn malformed_soul_outputs_nothing() {
+        let tmp = setup_state_dir();
+        fs::write(paths::soul_path(tmp.path()), "not frontmatter").unwrap();
+
         let output = run_nudge(tmp.path());
         assert!(output.is_empty());
     }
