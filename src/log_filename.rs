@@ -29,14 +29,9 @@ pub fn generate_log_filename(timestamp: DateTime<Utc>, session_id: &str) -> Stri
 /// may contain hyphens — only the first hyphen after the timestamp is used
 /// as the separator.
 pub fn parse_log_filename(filename: &str) -> Result<(DateTime<Utc>, String), LeiterError> {
-    let stem = filename
-        .strip_suffix(".jsonl")
-        .or_else(|| filename.strip_suffix(".md"))
-        .ok_or_else(|| {
-            LeiterError::LogFilenameParse(format!(
-                "log filename missing .jsonl or .md extension: {filename}"
-            ))
-        })?;
+    let stem = filename.strip_suffix(".jsonl").ok_or_else(|| {
+        LeiterError::LogFilenameParse(format!("log filename missing .jsonl extension: {filename}"))
+    })?;
 
     // Timestamp is fixed-width (16 chars: YYYYMMDDTHHMMSSZ), followed by a hyphen.
     if stem.len() < 18 || stem.as_bytes()[16] != b'-' {
@@ -84,10 +79,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_accepts_legacy_md_extension() {
-        let (timestamp, session_id) = parse_log_filename("20260223T173000Z-abc123.md").unwrap();
-        assert_eq!(timestamp, ts(2026, 2, 23, 17, 30, 0));
-        assert_eq!(session_id, "abc123");
+    fn parse_rejects_legacy_md_extension() {
+        assert!(parse_log_filename("20260223T173000Z-abc123.md").is_err());
     }
 
     #[test]
@@ -107,12 +100,12 @@ mod tests {
 
     #[test]
     fn parse_rejects_bad_timestamp() {
-        assert!(parse_log_filename("not-a-timestamp-abc123.md").is_err());
+        assert!(parse_log_filename("not-a-timestamp-abc123.jsonl").is_err());
     }
 
     #[test]
     fn parse_rejects_missing_session_id() {
-        assert!(parse_log_filename("20260223T173000Z-.md").is_err());
+        assert!(parse_log_filename("20260223T173000Z-.jsonl").is_err());
     }
 
     #[test]

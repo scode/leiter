@@ -308,8 +308,9 @@ Outputs session logs that haven't been processed since the last distillation.
 
 **Log pre-processing:** JSONL session logs are pre-processed to extract user-visible content — user messages and
 assistant text responses — filtering out tool results, tool invocations, progress events, thinking blocks, and other
-non-user-facing content. For non-JSONL files or lines with unrecognized JSON structures, the raw content is included
-as-is (fail-useful: no user content is silently lost).
+non-user-facing content. Leiter only processes files that match the expected log filename format
+`<YYYYMMDDTHHMMSSZ>-<session_id>.jsonl`; files that do not match this format are ignored. Within matching JSONL files,
+lines with unrecognized JSON structures are included as-is (fail-useful: no user content is silently lost).
 
 **Obsolete log cleanup:** After outputting new logs (or reporting that there are none), the command collects log files
 whose filename timestamps are strictly before `last_distilled` — these have already been processed by a prior
