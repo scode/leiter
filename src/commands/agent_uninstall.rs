@@ -28,7 +28,7 @@ mod tests {
     #[test]
     fn output_contains_hook_detection_strings() {
         let output = run_uninstall();
-        assert!(output.contains("leiter context"));
+        assert!(output.contains("leiter hook context"));
         assert!(output.contains("leiter nudge"));
         assert!(output.contains("leiter session-end"));
     }

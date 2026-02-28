@@ -22,26 +22,26 @@ distillation — while keeping normal session context minimal. The guidelines on
 writing to the soul.
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Claude Code Session                   │
-│                                                         │
-│  SessionStart hook ──► leiter context ──► soul + agent  │
-│                        leiter nudge       instructions  │
-│                                           injected      │
-│                                                         │
-│  ... normal session ...                                 │
-│                                                         │
-│  User says "remember X" ──► agent calls leiter instill  │
-│                           ──► agent edits soul.md       │
-│                                                         │
-│  User says "distill" ──► agent calls leiter distill     │
-│                           ──► reads new logs            │
-│                           ──► agent edits soul.md       │
-│                           ──► agent updates frontmatter │
-│                                                         │
-│  SessionEnd hook ──► leiter session-end                 │
-│                      ──► copies transcript to logs/     │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                       Claude Code Session                    │
+│                                                              │
+│  SessionStart hook ──► leiter hook context ──► soul + agent  │
+│                        leiter nudge            instructions  │
+│                                                injected      │
+│                                                              │
+│  ... normal session ...                                      │
+│                                                              │
+│  User says "remember X" ──► agent calls leiter instill       │
+│                           ──► agent edits soul.md            │
+│                                                              │
+│  User says "distill" ──► agent calls leiter distill          │
+│                           ──► reads new logs                 │
+│                           ──► agent edits soul.md            │
+│                           ──► agent updates frontmatter      │
+│                                                              │
+│  SessionEnd hook ──► leiter session-end                      │
+│                      ──► copies transcript to logs/          │
+└──────────────────────────────────────────────────────────────┘
 
 ~/.leiter/
 ├── soul.md              # The "leiter soul" — agent instructions
@@ -84,9 +84,9 @@ setup_hard_epoch: 1
 - `soul_version`: integer matching the version of the soul template used to create this file, used by
   `leiter soul-upgrade` to detect drift
 - `setup_soft_epoch`: integer tracking the soft setup epoch. When the binary's expected soft epoch doesn't match the
-  soul's value, `leiter context` outputs a nudge but still injects the soul. See Setup Epochs below
+  soul's value, `leiter hook context` outputs a nudge but still injects the soul. See Setup Epochs below
 - `setup_hard_epoch`: integer tracking the hard setup epoch. When the binary's expected hard epoch doesn't match the
-  soul's value, `leiter context` blocks the session (does not inject the soul). See Setup Epochs below
+  soul's value, `leiter hook context` blocks the session (does not inject the soul). See Setup Epochs below
 
 Both epoch fields default to 1 when absent (for backward compatibility with souls created before epochs were
 introduced).
@@ -106,9 +106,9 @@ There are two independent epochs, each a monotonic integer starting at 1:
 - **`setup_hard_epoch`**: Bumped when a leiter upgrade introduces changes that require user action before the session
   can function correctly. A mismatch blocks the session (the soul is not injected).
 
-The binary has compiled-in expected values for both epochs. When `leiter context` runs, it compares the soul's epoch
-values against the binary's expected values. The check uses exact equality — both older and newer souls are flagged,
-since the binary cannot make assumptions about unknown future epochs.
+The binary has compiled-in expected values for both epochs. When `leiter hook context` runs, it compares the soul's
+epoch values against the binary's expected values. The check uses exact equality — both older and newer souls are
+flagged, since the binary cannot make assumptions about unknown future epochs.
 
 Epochs are independent of `soul_version`. The soul version tracks template format changes (handled by
 `leiter soul-upgrade`). Epochs track integration changes (hooks, settings, etc.) that require user action outside the
@@ -175,7 +175,7 @@ configure Claude Code hooks.
    section below)
 2. Instructions for the agent to:
    - Read `~/.claude/settings.json` (or create it with `{}` if it doesn't exist)
-   - Check whether leiter hooks are already present by looking for hook commands containing `"leiter context"`,
+   - Check whether leiter hooks are already present by looking for hook commands containing `"leiter hook context"`,
      `"leiter nudge"`, or `"leiter session-end"`
    - If no leiter hooks are found, append the leiter hook groups to the existing `SessionStart` and `SessionEnd` arrays
      (creating those arrays if they don't exist), preserving all existing hooks
@@ -200,8 +200,8 @@ filesystem changes — the command only emits instructions.
 **Output (stdout):** Instructions telling the agent to:
 
 1. Read `~/.claude/settings.json`
-2. Find and remove hook entries whose commands contain `"leiter context"`, `"leiter nudge"`, or `"leiter session-end"`
-   (the same detection strings used by `agent-setup`)
+2. Find and remove hook entries whose commands contain `"leiter hook context"`, `"leiter nudge"`, or
+   `"leiter session-end"` (the same detection strings used by `agent-setup`)
 3. If a hook group becomes empty after removal, remove the entire group object from its parent array
 4. If a `SessionStart` or `SessionEnd` array becomes empty, remove it from the `hooks` object
 5. Preserve all non-leiter hooks
@@ -209,7 +209,7 @@ filesystem changes — the command only emits instructions.
 7. If no leiter hooks are found, report that hooks are already removed
 8. After hook removal, tell the user how to fully clean up (`~/.leiter/` and the binary) and how to re-enable leiter
 
-### `leiter context`
+### `leiter hook context`
 
 Outputs the soul content and agent instructions. Called by the SessionStart hook.
 
@@ -338,7 +338,7 @@ See the Architecture section for why guidelines are shared between `instill` and
 ### `leiter nudge`
 
 Checks for stale undistilled session logs and outputs a nudge if any exist. Called by the SessionStart hook (after
-`leiter context`) to remind the agent to suggest distillation.
+`leiter hook context`) to remind the agent to suggest distillation.
 
 **Behavior:**
 
@@ -395,7 +395,7 @@ The following hooks are configured in `~/.claude/settings.json` by the agent dur
         "hooks": [
           {
             "type": "command",
-            "command": "leiter context"
+            "command": "leiter hook context"
           },
           {
             "type": "command",
@@ -409,8 +409,8 @@ The following hooks are configured in `~/.claude/settings.json` by the agent dur
 ```
 
 Fires on every session start (new, resume, clear, compact). The stdout output is added as context for the agent. The
-`leiter context` hook injects the soul and agent instructions; the `leiter nudge` hook outputs a distillation reminder
-only when stale undistilled logs exist (otherwise it outputs nothing, adding zero context).
+`leiter hook context` hook injects the soul and agent instructions; the `leiter nudge` hook outputs a distillation
+reminder only when stale undistilled logs exist (otherwise it outputs nothing, adding zero context).
 
 ### SessionEnd Hook
 
@@ -448,8 +448,8 @@ Fires once when the session terminates. The `leiter session-end` command reads t
 
 ### Normal Session (After Setup)
 
-1. Session starts → SessionStart hook fires → `leiter context` outputs soul + instructions, `leiter nudge` outputs a
-   distillation reminder if stale logs exist → agent has leiter context
+1. Session starts → SessionStart hook fires → `leiter hook context` outputs soul + instructions, `leiter nudge` outputs
+   a distillation reminder if stale logs exist → agent has leiter hook context
 2. Normal session proceeds
 3. Session ends → SessionEnd hook fires → `leiter session-end` copies transcript to `~/.leiter/logs/`
 

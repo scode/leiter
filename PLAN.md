@@ -35,21 +35,21 @@ append **(DONE)** to the step's header line.
 
 ---
 
-## Step 1: Move `context` → `hook context` **(creates Hook group)**
+## Step 1: Move `context` → `hook context` **(creates Hook group)** **(DONE)**
 
-- [ ] Add `Hook` subcommand group to clap with `HookCommand` enum containing `Context`
-- [ ] Update dispatch in `main.rs` to route `Hook(HookCommand::Context)` → `commands::context::run`
-- [ ] Remove old `Context` variant from top-level `Command` enum
-- [ ] Update template strings: `"leiter context"` → `"leiter hook context"` in `CONTEXT_PREAMBLE`,
+- [x] Add `Hook` subcommand group to clap with `HookCommand` enum containing `Context`
+- [x] Update dispatch in `main.rs` to route `Hook(HookCommand::Context)` → `commands::context::run`
+- [x] Remove old `Context` variant from top-level `Command` enum
+- [x] Update template strings: `"leiter context"` → `"leiter hook context"` in `CONTEXT_PREAMBLE`,
       `AGENT_SETUP_INSTRUCTIONS`, `AGENT_UNINSTALL_INSTRUCTIONS`, and any detection strings
-- [ ] Update all tests referencing `"leiter context"` (templates tests, agent_setup tests, agent_uninstall tests,
+- [x] Update all tests referencing `"leiter context"` (templates tests, agent_setup tests, agent_uninstall tests,
       context tests, integration tests)
-- [ ] Update SPEC.md: all occurrences of `leiter context` → `leiter hook context`
-- [ ] Run checks (`dprint fmt`, `cargo fmt`, `cargo clippy`, `cargo test`)
-- [ ] Audit test coverage: grep for all remaining references to the old and new command string across src/ and tests/;
+- [x] Update SPEC.md: all occurrences of `leiter context` → `leiter hook context`
+- [x] Run checks (`dprint fmt`, `cargo fmt`, `cargo clippy`, `cargo test`)
+- [x] Audit test coverage: grep for all remaining references to the old and new command string across src/ and tests/;
       verify every code path that produces or checks the string is tested. Add missing tests if found
-- [ ] Run `pre-pr-review-swarm`, address feedback
-- [ ] Create PR via `scode-graphite`, STOP
+- [x] Run `pre-pr-review-swarm`, address feedback
+- [x] Create PR via `scode-graphite`, STOP
 
 ## Step 2: Move `nudge` → `hook nudge`
 

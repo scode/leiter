@@ -34,13 +34,16 @@ pub enum Command {
     AgentSetup,
     /// Remove leiter hooks from Claude Code
     AgentUninstall,
-    /// Output soul content and agent instructions
-    Context,
     /// Output new session logs for distillation
     Distill {
         /// Report obsolete files without deleting them
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Claude Code hook commands
+    Hook {
+        #[command(subcommand)]
+        command: HookCommand,
     },
     /// Output soul-writing instructions for a preference
     Instill {
@@ -53,6 +56,12 @@ pub enum Command {
     SessionEnd,
     /// Detect and output soul template migration instructions
     SoulUpgrade,
+}
+
+#[derive(Subcommand)]
+pub enum HookCommand {
+    /// Output soul content and agent instructions
+    Context,
 }
 
 impl Cli {
@@ -95,9 +104,11 @@ fn main() -> Result<()> {
         Command::AgentUninstall => {
             commands::agent_uninstall::run(&state_dir, &mut std::io::stdout())?;
         }
-        Command::Context => {
-            commands::context::run(&state_dir, &mut std::io::stdout())?;
-        }
+        Command::Hook { command } => match command {
+            HookCommand::Context => {
+                commands::context::run(&state_dir, &mut std::io::stdout())?;
+            }
+        },
         Command::Distill { dry_run } => {
             commands::distill::run(&state_dir, &mut std::io::stdout(), *dry_run)?;
         }

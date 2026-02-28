@@ -21,8 +21,8 @@ fn parses_agent_uninstall() {
 }
 
 #[test]
-fn parses_context() {
-    leiter().arg("context").assert().success();
+fn parses_hook_context() {
+    leiter().args(["hook", "context"]).assert().success();
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn parses_soul_upgrade() {
 #[test]
 fn default_level_is_info_no_debug_output() {
     leiter()
-        .arg("context")
+        .args(["hook", "context"])
         .assert()
         .success()
         .stderr(predicate::str::contains("dispatching command").not());
@@ -68,7 +68,7 @@ fn default_level_is_info_no_debug_output() {
 #[test]
 fn verbose_sets_debug() {
     leiter()
-        .args(["-v", "context"])
+        .args(["-v", "hook", "context"])
         .assert()
         .success()
         .stderr(predicate::str::contains("dispatching command"));
@@ -77,7 +77,7 @@ fn verbose_sets_debug() {
 #[test]
 fn double_verbose_sets_trace() {
     leiter()
-        .args(["-vv", "context"])
+        .args(["-vv", "hook", "context"])
         .assert()
         .success()
         .stderr(predicate::str::contains("dispatching command"));
@@ -86,7 +86,7 @@ fn double_verbose_sets_trace() {
 #[test]
 fn quiet_sets_warn() {
     leiter()
-        .args(["-q", "context"])
+        .args(["-q", "hook", "context"])
         .assert()
         .success()
         .stderr(predicate::str::contains("dispatching command").not());
@@ -95,7 +95,7 @@ fn quiet_sets_warn() {
 #[test]
 fn double_quiet_sets_error() {
     leiter()
-        .args(["-qq", "context"])
+        .args(["-qq", "hook", "context"])
         .assert()
         .success()
         .stderr(predicate::str::contains("dispatching command").not());
@@ -104,7 +104,7 @@ fn double_quiet_sets_error() {
 #[test]
 fn log_level_trace_overrides_quiet() {
     leiter()
-        .args(["--log-level=TRACE", "-q", "context"])
+        .args(["--log-level=TRACE", "-q", "hook", "context"])
         .assert()
         .success()
         .stderr(predicate::str::contains("dispatching command"));
@@ -113,7 +113,7 @@ fn log_level_trace_overrides_quiet() {
 #[test]
 fn log_level_warn_overrides_verbose() {
     leiter()
-        .args(["--log-level=WARN", "-v", "context"])
+        .args(["--log-level=WARN", "-v", "hook", "context"])
         .assert()
         .success()
         .stderr(predicate::str::contains("dispatching command").not());

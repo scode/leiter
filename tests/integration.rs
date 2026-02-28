@@ -36,7 +36,7 @@ fn agent_setup_then_context_injects_soul() {
     leiter(dir).arg("agent-setup").assert().success();
 
     leiter(dir)
-        .arg("context")
+        .args(["hook", "context"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Leiter is a self-training system"))
@@ -169,7 +169,10 @@ fn stdout_stderr_separation() {
 
     leiter(dir).arg("agent-setup").assert().success();
 
-    let assert = leiter(dir).args(["-v", "context"]).assert().success();
+    let assert = leiter(dir)
+        .args(["-v", "hook", "context"])
+        .assert()
+        .success();
 
     let output = assert.get_output();
     let stdout = String::from_utf8(output.stdout.clone()).unwrap();
@@ -291,7 +294,7 @@ fn agent_uninstall_outputs_hook_removal_instructions() {
         .arg("agent-uninstall")
         .assert()
         .success()
-        .stdout(predicate::str::contains("leiter context"))
+        .stdout(predicate::str::contains("leiter hook context"))
         .stdout(predicate::str::contains("leiter nudge"))
         .stdout(predicate::str::contains("leiter session-end"))
         .stdout(predicate::str::contains(format!("{}/", dir.display())))

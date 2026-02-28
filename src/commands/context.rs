@@ -1,4 +1,4 @@
-//! `leiter context` — inject soul content and agent instructions into the session.
+//! `leiter hook context` — inject soul content and agent instructions into the session.
 //!
 //! Called by the SessionStart hook on every session start. Checks setup epoch
 //! compatibility, then outputs the preamble (explaining how to interact with
