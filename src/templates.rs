@@ -176,7 +176,7 @@ from empty sections.
     )
 }
 
-/// Instructions output by `leiter agent-uninstall` telling the agent how to
+/// Instructions output by `leiter setup uninstall` telling the agent how to
 /// remove leiter hooks from `~/.claude/settings.json`.
 pub fn agent_uninstall_instructions(state_dir: &Path) -> String {
     let dir = state_dir.display();

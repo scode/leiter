@@ -30,8 +30,6 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Remove leiter hooks from Claude Code
-    AgentUninstall,
     /// Output new session logs for distillation
     Distill {
         /// Report obsolete files without deleting them
@@ -61,6 +59,8 @@ pub enum Command {
 pub enum SetupCommand {
     /// First-time setup and hook configuration
     Install,
+    /// Remove leiter hooks from Claude Code
+    Uninstall,
 }
 
 #[derive(Subcommand)]
@@ -107,9 +107,6 @@ fn main() -> Result<()> {
     let state_dir = paths::state_dir()?;
 
     match &cli.command {
-        Command::AgentUninstall => {
-            commands::agent_uninstall::run(&state_dir, &mut std::io::stdout())?;
-        }
         Command::Hook { command } => match command {
             HookCommand::Context => {
                 commands::context::run(&state_dir, &mut std::io::stdout())?;
@@ -134,6 +131,9 @@ fn main() -> Result<()> {
         Command::Setup { command } => match command {
             SetupCommand::Install => {
                 commands::agent_setup::run(&state_dir, &mut std::io::stdout())?;
+            }
+            SetupCommand::Uninstall => {
+                commands::agent_uninstall::run(&state_dir, &mut std::io::stdout())?;
             }
         },
         Command::SoulUpgrade => {
