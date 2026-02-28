@@ -37,6 +37,6 @@ mod tests {
     fn output_contains_cleanup_guidance() {
         let output = run_uninstall();
         assert!(output.contains("/test/state/"));
-        assert!(output.contains("leiter agent-setup"));
+        assert!(output.contains("leiter setup install"));
     }
 }

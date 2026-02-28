@@ -30,8 +30,6 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// First-time setup
-    AgentSetup,
     /// Remove leiter hooks from Claude Code
     AgentUninstall,
     /// Output new session logs for distillation
@@ -50,8 +48,19 @@ pub enum Command {
         /// The preference or fact to remember
         text: String,
     },
+    /// Setup and installation commands
+    Setup {
+        #[command(subcommand)]
+        command: SetupCommand,
+    },
     /// Detect and output soul template migration instructions
     SoulUpgrade,
+}
+
+#[derive(Subcommand)]
+pub enum SetupCommand {
+    /// First-time setup and hook configuration
+    Install,
 }
 
 #[derive(Subcommand)]
@@ -98,9 +107,6 @@ fn main() -> Result<()> {
     let state_dir = paths::state_dir()?;
 
     match &cli.command {
-        Command::AgentSetup => {
-            commands::agent_setup::run(&state_dir, &mut std::io::stdout())?;
-        }
         Command::AgentUninstall => {
             commands::agent_uninstall::run(&state_dir, &mut std::io::stdout())?;
         }
@@ -125,6 +131,11 @@ fn main() -> Result<()> {
         Command::Instill { text } => {
             commands::instill::run(&state_dir, &mut std::io::stdout(), text)?;
         }
+        Command::Setup { command } => match command {
+            SetupCommand::Install => {
+                commands::agent_setup::run(&state_dir, &mut std::io::stdout())?;
+            }
+        },
         Command::SoulUpgrade => {
             commands::soul_upgrade::run(&state_dir, &mut std::io::stdout())?;
         }
