@@ -232,7 +232,7 @@ mod tests {
 
         // Should not panic or return error.
         let output = run_setup(dir);
-        assert!(output.contains("leiter context"));
+        assert!(output.contains("leiter hook context"));
     }
 
     #[test]
@@ -252,7 +252,7 @@ mod tests {
     fn output_contains_setup_instructions() {
         let tmp = tempfile::tempdir().unwrap();
         let output = run_setup(tmp.path());
-        assert!(output.contains("leiter context"));
+        assert!(output.contains("leiter hook context"));
         assert!(output.contains("leiter session-end"));
     }
 
