@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 use tracing::{Level, debug};
 
 #[derive(Parser)]
-#[command(name = "leiter", about = "Self-training system for Claude Code")]
+#[command(name = "leiter", about = "Self-training system for Claude Code", version = env!("LEITER_VERSION"))]
 pub struct Cli {
     /// Increase verbosity (-v for DEBUG, -vv for TRACE)
     #[arg(short = 'v', action = clap::ArgAction::Count, global = true)]

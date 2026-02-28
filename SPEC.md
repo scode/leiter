@@ -150,6 +150,16 @@ The `leiter` binary is a Rust CLI tool. Key technical choices:
 - **Error handling:** `thiserror` for structured error types where callers need to match on variants. `anyhow` for
   propagation in top-level and command handler code where the specific error type doesn't matter.
 
+## Version
+
+The root command supports `--version` / `-V`. The displayed version is determined at build time:
+
+- If the build runs on a commit with an exact git tag (e.g., `v0.3.0`): the tag is used as the version (with the `v`
+  prefix stripped)
+- Otherwise (main, feature branches, git unavailable): the version is `0.0.0-dev`
+
+The version in `Cargo.toml` exists for cargo-dist and crates.io metadata; it is not used as the displayed version.
+
 ## CLI Commands
 
 The `leiter` binary is assumed to be installed in `$PATH`.
