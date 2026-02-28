@@ -1,4 +1,4 @@
-//! `leiter setup uninstall` — outputs instructions to remove leiter hooks.
+//! `leiter claude uninstall` — outputs instructions to remove leiter hooks.
 //!
 //! This command outputs natural language instructions for the agent to remove
 //! leiter hooks from `~/.claude/settings.json`. It makes no filesystem changes.
@@ -37,6 +37,6 @@ mod tests {
     fn output_contains_cleanup_guidance() {
         let output = run_uninstall();
         assert!(output.contains("/test/state/"));
-        assert!(output.contains("leiter setup install"));
+        assert!(output.contains("leiter claude install"));
     }
 }

@@ -92,13 +92,13 @@ Both epoch fields default to 1 when absent (for backward compatibility with soul
 introduced).
 
 The agent edits the soul file directly using its Read/Edit/Write tools. The CLI only writes to this file during
-`leiter setup install` to create the initial soul from the template; after that, all modifications are made by the
+`leiter claude install` to create the initial soul from the template; after that, all modifications are made by the
 agent.
 
 ### Setup Epochs
 
 The leiter binary may evolve in ways that require user action beyond just upgrading the binary — for example, re-running
-`leiter setup install` to update hook configuration. Setup epochs detect this condition and alert the user.
+`leiter claude install` to update hook configuration. Setup epochs detect this condition and alert the user.
 
 There are two independent epochs, each a monotonic integer starting at 1:
 
@@ -118,7 +118,7 @@ soul file.
 ### Soul Template (built into the binary)
 
 The `leiter` binary contains a built-in soul template (~1 page) that defines the initial structure and categories for
-the soul. When `leiter setup install` creates `~/.leiter/soul.md`, it writes this template as the initial content (with
+the soul. When `leiter claude install` creates `~/.leiter/soul.md`, it writes this template as the initial content (with
 the `last_distilled` frontmatter prepended). The template nudges the agent toward capturing specific kinds of
 information.
 
@@ -154,7 +154,7 @@ The `leiter` binary is a Rust CLI tool. Key technical choices:
 
 The `leiter` binary is assumed to be installed in `$PATH`.
 
-### `leiter setup install`
+### `leiter claude install`
 
 First-time setup. Performs deterministic initialization and then outputs natural language instructions for the agent to
 configure Claude Code hooks.
@@ -193,7 +193,7 @@ If any deterministic step fails, the output instructs the agent to relay the err
 This command is designed to be run inside a Claude Code session where the agent acts on the output. If run outside a
 session, the user sees the instructions and can paste them into a session or apply them manually.
 
-### `leiter setup uninstall`
+### `leiter claude uninstall`
 
 Outputs natural language instructions for the agent to remove leiter hooks from `~/.claude/settings.json`. Makes no
 filesystem changes — the command only emits instructions.
@@ -202,7 +202,7 @@ filesystem changes — the command only emits instructions.
 
 1. Read `~/.claude/settings.json`
 2. Find and remove hook entries whose commands contain `"leiter hook context"`, `"leiter hook nudge"`, or
-   `"leiter hook session-end"` (the same detection strings used by `leiter setup install`)
+   `"leiter hook session-end"` (the same detection strings used by `leiter claude install`)
 3. If a hook group becomes empty after removal, remove the entire group object from its parent array
 4. If a `SessionStart` or `SessionEnd` array becomes empty, remove it from the `hooks` object
 5. Preserve all non-leiter hooks
@@ -216,12 +216,12 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
 
 **Behavior:**
 
-1. If the soul file does not exist, output a message suggesting `leiter setup install` and return
+1. If the soul file does not exist, output a message suggesting `leiter claude install` and return
 2. Read the soul file and attempt to parse its frontmatter
 3. If frontmatter is parseable, check setup epochs (see Setup Epochs):
    - If `setup_hard_epoch` does not exactly match the binary's expected value: output an error message and return
      without injecting the soul. The message differs based on direction — if the soul's epoch is lower, suggest running
-     `leiter setup install`; if higher, suggest upgrading the binary
+     `leiter claude install`; if higher, suggest upgrading the binary
    - If `setup_soft_epoch` does not exactly match the binary's expected value: output a nudge message (different for
      older vs. newer soul) but continue to inject the soul normally
 4. If frontmatter parsing fails, skip epoch checks and proceed (fail-open — a corrupt frontmatter should not block the
@@ -255,7 +255,7 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
 2. The full contents of `~/.leiter/soul.md`
 
 If `~/.leiter/soul.md` does not exist, outputs a message telling the agent that leiter is not initialized and to suggest
-the user run `leiter setup install`.
+the user run `leiter claude install`.
 
 The soul content is output inline (not as a file path reference) so that it survives context compaction in long
 sessions. The agent receives the full soul text in the SessionStart hook output, ensuring preferences remain available
@@ -384,7 +384,7 @@ when the soul template is modified in future code changes. The agent performs th
 
 ## Hook Configuration
 
-The following hooks are configured in `~/.claude/settings.json` by the agent during `leiter setup install`:
+The following hooks are configured in `~/.claude/settings.json` by the agent during `leiter claude install`:
 
 ### SessionStart Hook
 
@@ -441,7 +441,7 @@ Fires once when the session terminates. The `leiter hook session-end` command re
 
 1. User installs `leiter` binary
 2. In a Claude Code session, user says "set up leiter"
-3. Agent runs `leiter setup install`
+3. Agent runs `leiter claude install`
 4. The command creates `~/.leiter/` structure and outputs instructions
 5. Agent reads the instructions and edits `~/.claude/settings.json` to add hooks
 6. User reviews and approves the settings change

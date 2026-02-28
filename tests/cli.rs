@@ -7,17 +7,26 @@ fn leiter() -> Command {
 }
 
 #[test]
-fn parses_setup_install() {
-    // setup install tries to create ~/.leiter/ which may fail in sandboxed
+fn parses_claude_install() {
+    // claude install tries to create ~/.leiter/ which may fail in sandboxed
     // environments, so we just verify the subcommand is recognized (no
     // "unrecognized subcommand" error).
-    let assert = leiter().args(["setup", "install"]).assert();
+    let assert = leiter().args(["claude", "install"]).assert();
     assert.stderr(predicate::str::contains("unrecognized subcommand").not());
 }
 
 #[test]
-fn parses_setup_uninstall() {
-    leiter().args(["setup", "uninstall"]).assert().success();
+fn parses_claude_uninstall() {
+    leiter().args(["claude", "uninstall"]).assert().success();
+}
+
+#[test]
+fn legacy_setup_subcommand_is_rejected() {
+    leiter()
+        .args(["setup", "install"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unrecognized subcommand"));
 }
 
 #[test]

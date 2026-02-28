@@ -35,10 +35,10 @@ pub enum Command {
         #[command(subcommand)]
         command: HookCommand,
     },
-    /// Setup and installation commands
-    Setup {
+    /// Claude-specific agent commands
+    Claude {
         #[command(subcommand)]
-        command: SetupCommand,
+        command: ClaudeCommand,
     },
     /// Soul management commands
     Soul {
@@ -48,7 +48,7 @@ pub enum Command {
 }
 
 #[derive(Subcommand)]
-pub enum SetupCommand {
+pub enum ClaudeCommand {
     /// First-time setup and hook configuration
     Install,
     /// Remove leiter hooks from Claude Code
@@ -142,11 +142,11 @@ fn main() -> Result<()> {
                 commands::soul_upgrade::run(&state_dir, &mut std::io::stdout())?;
             }
         },
-        Command::Setup { command } => match command {
-            SetupCommand::Install => {
+        Command::Claude { command } => match command {
+            ClaudeCommand::Install => {
                 commands::agent_setup::run(&state_dir, &mut std::io::stdout())?;
             }
-            SetupCommand::Uninstall => {
+            ClaudeCommand::Uninstall => {
                 commands::agent_uninstall::run(&state_dir, &mut std::io::stdout())?;
             }
         },
