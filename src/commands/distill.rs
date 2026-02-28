@@ -203,27 +203,21 @@ fn filter_session_log(content: &str, out: &mut impl Write) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent_setup;
+    use crate::commands::test_support::{bytes_to_string, setup_state_dir};
     use crate::frontmatter::serialize_soul;
     use crate::log_filename::generate_log_filename;
     use chrono::{TimeZone, Utc};
 
-    fn setup_state_dir() -> tempfile::TempDir {
-        let tmp = tempfile::tempdir().unwrap();
-        agent_setup::run(tmp.path(), &mut Vec::new()).unwrap();
-        tmp
-    }
-
     fn run_distill(state_dir: &Path) -> String {
         let mut out = Vec::new();
         run(state_dir, &mut out, false).unwrap();
-        String::from_utf8(out).unwrap()
+        bytes_to_string(out)
     }
 
     fn run_distill_dry(state_dir: &Path) -> String {
         let mut out = Vec::new();
         run(state_dir, &mut out, true).unwrap();
-        String::from_utf8(out).unwrap()
+        bytes_to_string(out)
     }
 
     fn write_log(
