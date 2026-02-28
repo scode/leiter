@@ -14,7 +14,7 @@ names, flags/options, arguments, output contract, exit codes, or documented usag
 
 Use `refactor`, `style`, `test`, `chore`, `ci`, `docs`, and `doc` only when behavior is not user-visible.
 
-PR title enforcement is implemented in `.github/workflows/conventional-commit-pr-title.yml`.
+PR title enforcement is implemented in `.github/workflows/pr.yml`.
 
 ## Changelog
 
