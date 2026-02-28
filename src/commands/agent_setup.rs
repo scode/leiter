@@ -1,4 +1,4 @@
-//! `leiter agent-setup` — first-time initialization and hook configuration instructions.
+//! `leiter setup install` — first-time initialization and hook configuration instructions.
 //!
 //! Creates the leiter state directory structure and initial soul file, then
 //! prints instructions for the agent to wire up Claude Code hooks. If any
@@ -20,7 +20,7 @@ use crate::templates::{
     SOUL_TEMPLATE_VERSION,
 };
 
-/// Run the agent-setup command.
+/// Run the `leiter setup install` command.
 ///
 /// Creates directories and the initial soul file under `state_dir`, then
 /// writes setup instructions to `out`. If the filesystem steps fail, writes
@@ -30,7 +30,7 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
     if let Err(e) = init_filesystem(state_dir) {
         write!(
             out,
-            "leiter agent-setup failed during initialization:\n\n  {e:#}\n\nPlease relay this error to the user.\n"
+            "leiter setup install failed during initialization:\n\n  {e:#}\n\nPlease relay this error to the user.\n"
         )?;
         return Ok(());
     }

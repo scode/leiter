@@ -81,20 +81,20 @@ append **(DONE)** to the step's header line.
 - [x] Run `pre-pr-review-swarm`, address feedback
 - [x] Create PR via `scode-graphite`, STOP
 
-## Step 4: Move `agent-setup` → `setup install` **(creates Setup group)**
+## Step 4: Move `agent-setup` → `setup install` **(creates Setup group)** **(DONE)**
 
-- [ ] Add `Setup` subcommand group to clap with `SetupCommand` enum containing `Install`
-- [ ] Update dispatch in `main.rs` to route `Setup(SetupCommand::Install)` → `commands::agent_setup::run`
-- [ ] Remove old `AgentSetup` variant from top-level `Command` enum
-- [ ] Update template strings: `"leiter agent-setup"` → `"leiter setup install"` in `CONTEXT_PREAMBLE`,
+- [x] Add `Setup` subcommand group to clap with `SetupCommand` enum containing `Install`
+- [x] Update dispatch in `main.rs` to route `Setup(SetupCommand::Install)` → `commands::agent_setup::run`
+- [x] Remove old `AgentSetup` variant from top-level `Command` enum
+- [x] Update template strings: `"leiter agent-setup"` → `"leiter setup install"` in `CONTEXT_PREAMBLE`,
       `AGENT_UNINSTALL_INSTRUCTIONS`, context.rs error/nudge messages, and agent_setup.rs error output
-- [ ] Update all tests referencing `"leiter agent-setup"`
-- [ ] Update SPEC.md: all occurrences of `leiter agent-setup` → `leiter setup install`, rename the section heading from
+- [x] Update all tests referencing `"leiter agent-setup"`
+- [x] Update SPEC.md: all occurrences of `leiter agent-setup` → `leiter setup install`, rename the section heading from
       `leiter agent-setup` to `leiter setup install`
-- [ ] Run checks (`dprint fmt`, `cargo fmt`, `cargo clippy`, `cargo test`)
-- [ ] Audit test coverage: grep for all remaining references to the old and new command string across src/ and tests/;
+- [x] Run checks (`dprint fmt`, `cargo fmt`, `cargo clippy`, `cargo test`)
+- [x] Audit test coverage: grep for all remaining references to the old and new command string across src/ and tests/;
       verify every code path that produces or checks the string is tested. Add missing tests if found
-- [ ] Run `pre-pr-review-swarm`, address feedback
+- [x] Run `pre-pr-review-swarm`, address feedback
 - [ ] Create PR via `scode-graphite`, STOP
 
 ## Step 5: Move `agent-uninstall` → `setup uninstall`

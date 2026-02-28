@@ -7,11 +7,11 @@ fn leiter() -> Command {
 }
 
 #[test]
-fn parses_agent_setup() {
-    // agent-setup tries to create ~/.leiter/ which may fail in sandboxed
+fn parses_setup_install() {
+    // setup install tries to create ~/.leiter/ which may fail in sandboxed
     // environments, so we just verify the subcommand is recognized (no
     // "unrecognized subcommand" error).
-    let assert = leiter().arg("agent-setup").assert();
+    let assert = leiter().args(["setup", "install"]).assert();
     assert.stderr(predicate::str::contains("unrecognized subcommand").not());
 }
 
