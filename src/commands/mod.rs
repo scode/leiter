@@ -3,6 +3,7 @@ pub mod agent_uninstall;
 pub mod context;
 pub mod distill;
 pub mod instill;
+pub mod mark_distilled;
 pub mod nudge;
 pub mod session_end;
 pub mod soul_upgrade;

@@ -302,6 +302,26 @@ fn claude_uninstall_outputs_hook_removal_instructions() {
 }
 
 #[test]
+fn mark_distilled_updates_timestamp() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    leiter(dir).args(["claude", "install"]).assert().success();
+
+    leiter(dir)
+        .args(["soul", "mark-distilled"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("last_distilled set to "));
+
+    let content = fs::read_to_string(dir.join("soul.md")).unwrap();
+    assert!(
+        !content.contains("last_distilled: 1970-01-01T00:00:00Z"),
+        "timestamp should have been updated from epoch"
+    );
+}
+
+#[test]
 fn soul_upgrade_reports_up_to_date_after_claude_install() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();

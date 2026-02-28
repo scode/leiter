@@ -70,6 +70,8 @@ pub enum SoulCommand {
     },
     /// Detect and output soul template migration instructions
     Upgrade,
+    /// Set last_distilled to the current time
+    MarkDistilled,
 }
 
 #[derive(Subcommand)]
@@ -140,6 +142,9 @@ fn main() -> Result<()> {
             }
             SoulCommand::Upgrade => {
                 commands::soul_upgrade::run(&state_dir, &mut std::io::stdout())?;
+            }
+            SoulCommand::MarkDistilled => {
+                commands::mark_distilled::run(&state_dir, &mut std::io::stdout())?;
             }
         },
         Command::Claude { command } => match command {
