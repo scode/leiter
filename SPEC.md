@@ -26,7 +26,7 @@ writing to the soul.
 │                       Claude Code Session                    │
 │                                                              │
 │  SessionStart hook ──► leiter hook context ──► soul + agent  │
-│                        leiter nudge            instructions  │
+│                        leiter hook nudge        instructions  │
 │                                                injected      │
 │                                                              │
 │  ... normal session ...                                      │
@@ -176,7 +176,7 @@ configure Claude Code hooks.
 2. Instructions for the agent to:
    - Read `~/.claude/settings.json` (or create it with `{}` if it doesn't exist)
    - Check whether leiter hooks are already present by looking for hook commands containing `"leiter hook context"`,
-     `"leiter nudge"`, or `"leiter session-end"`
+     `"leiter hook nudge"`, or `"leiter session-end"`
    - If no leiter hooks are found, append the leiter hook groups to the existing `SessionStart` and `SessionEnd` arrays
      (creating those arrays if they don't exist), preserving all existing hooks
    - If leiter hooks are found but don't match the expected set (e.g., after a leiter upgrade changed the hook
@@ -200,7 +200,7 @@ filesystem changes — the command only emits instructions.
 **Output (stdout):** Instructions telling the agent to:
 
 1. Read `~/.claude/settings.json`
-2. Find and remove hook entries whose commands contain `"leiter hook context"`, `"leiter nudge"`, or
+2. Find and remove hook entries whose commands contain `"leiter hook context"`, `"leiter hook nudge"`, or
    `"leiter session-end"` (the same detection strings used by `agent-setup`)
 3. If a hook group becomes empty after removal, remove the entire group object from its parent array
 4. If a `SessionStart` or `SessionEnd` array becomes empty, remove it from the `hooks` object
@@ -335,7 +335,7 @@ preference ("remember", "learn", "instill", "always", "never", or similar langua
 
 See the Architecture section for why guidelines are shared between `instill` and `distill`.
 
-### `leiter nudge`
+### `leiter hook nudge`
 
 Checks for stale undistilled session logs and outputs a nudge if any exist. Called by the SessionStart hook (after
 `leiter hook context`) to remind the agent to suggest distillation.
@@ -399,7 +399,7 @@ The following hooks are configured in `~/.claude/settings.json` by the agent dur
           },
           {
             "type": "command",
-            "command": "leiter nudge"
+            "command": "leiter hook nudge"
           }
         ]
       }
@@ -409,7 +409,7 @@ The following hooks are configured in `~/.claude/settings.json` by the agent dur
 ```
 
 Fires on every session start (new, resume, clear, compact). The stdout output is added as context for the agent. The
-`leiter hook context` hook injects the soul and agent instructions; the `leiter nudge` hook outputs a distillation
+`leiter hook context` hook injects the soul and agent instructions; the `leiter hook nudge` hook outputs a distillation
 reminder only when stale undistilled logs exist (otherwise it outputs nothing, adding zero context).
 
 ### SessionEnd Hook
@@ -448,8 +448,8 @@ Fires once when the session terminates. The `leiter session-end` command reads t
 
 ### Normal Session (After Setup)
 
-1. Session starts → SessionStart hook fires → `leiter hook context` outputs soul + instructions, `leiter nudge` outputs
-   a distillation reminder if stale logs exist → agent has leiter hook context
+1. Session starts → SessionStart hook fires → `leiter hook context` outputs soul + instructions, `leiter hook nudge`
+   outputs a distillation reminder if stale logs exist → agent has leiter hook context
 2. Normal session proceeds
 3. Session ends → SessionEnd hook fires → `leiter session-end` copies transcript to `~/.leiter/logs/`
 

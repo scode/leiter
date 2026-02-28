@@ -142,7 +142,7 @@ pub fn context_preamble(state_dir: &Path) -> String {
     )
 }
 
-/// Nudge message output by `leiter nudge` when stale undistilled logs exist.
+/// Nudge message output by `leiter hook nudge` when stale undistilled logs exist.
 pub const NUDGE_MESSAGE: &str = "\
 ACTION REQUIRED: There are undistilled leiter session logs older than 24 hours. Before responding to the user's first message, briefly let them know by saying something like: \"You have undistilled leiter session logs. Want me to run a distillation?\" Keep it to one short sentence — do not explain what distillation is.
 ";
@@ -185,7 +185,7 @@ pub fn agent_uninstall_instructions(state_dir: &Path) -> String {
 
 Read `~/.claude/settings.json`.
 
-Find and remove all hook entries whose `command` field contains `"leiter hook context"`, `"leiter nudge"`, or `"leiter session-end"`.
+Find and remove all hook entries whose `command` field contains `"leiter hook context"`, `"leiter hook nudge"`, or `"leiter session-end"`.
 
 If removing leiter hooks causes a hook group object's `hooks` array to become empty, remove the entire group object from its parent array (e.g., from the `SessionStart` or `SessionEnd` array).
 
@@ -210,7 +210,7 @@ pub const AGENT_SETUP_INSTRUCTIONS: &str = r#"Configure Claude Code hooks for le
 
 Read `~/.claude/settings.json` (or create it with `{}` if it doesn't exist).
 
-Check whether leiter hooks are already present by looking for hook commands containing `"leiter hook context"`, `"leiter nudge"`, or `"leiter session-end"` anywhere in the existing hooks.
+Check whether leiter hooks are already present by looking for hook commands containing `"leiter hook context"`, `"leiter hook nudge"`, or `"leiter session-end"` anywhere in the existing hooks.
 
 The desired leiter hooks are shown below. There are three cases:
 
@@ -230,7 +230,7 @@ SessionStart hook group:
     },
     {
       "type": "command",
-      "command": "leiter nudge"
+      "command": "leiter hook nudge"
     }
   ]
 }
@@ -361,7 +361,7 @@ mod tests {
     #[test]
     fn agent_setup_instructions_contain_hook_commands() {
         assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter hook context"));
-        assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter nudge"));
+        assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter hook nudge"));
         assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter session-end"));
     }
 
@@ -369,7 +369,7 @@ mod tests {
     fn agent_setup_instructions_contain_hook_json_structure() {
         assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""type": "command""#));
         assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter hook context""#));
-        assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter nudge""#));
+        assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter hook nudge""#));
         assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter session-end""#));
     }
 
@@ -385,7 +385,7 @@ mod tests {
     fn agent_uninstall_instructions_contain_hook_detection_strings() {
         let instructions = agent_uninstall_instructions(Path::new("/test/state"));
         assert!(instructions.contains("leiter hook context"));
-        assert!(instructions.contains("leiter nudge"));
+        assert!(instructions.contains("leiter hook nudge"));
         assert!(instructions.contains("leiter session-end"));
     }
 

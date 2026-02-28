@@ -51,20 +51,20 @@ append **(DONE)** to the step's header line.
 - [x] Run `pre-pr-review-swarm`, address feedback
 - [x] Create PR via `scode-graphite`, STOP
 
-## Step 2: Move `nudge` → `hook nudge`
+## Step 2: Move `nudge` → `hook nudge` **(DONE)**
 
-- [ ] Add `Nudge` variant to `HookCommand` enum
-- [ ] Update dispatch in `main.rs`
-- [ ] Remove old `Nudge` variant from top-level `Command` enum
-- [ ] Update template strings: `"leiter nudge"` → `"leiter hook nudge"` in `AGENT_SETUP_INSTRUCTIONS`,
+- [x] Add `Nudge` variant to `HookCommand` enum
+- [x] Update dispatch in `main.rs`
+- [x] Remove old `Nudge` variant from top-level `Command` enum
+- [x] Update template strings: `"leiter nudge"` → `"leiter hook nudge"` in `AGENT_SETUP_INSTRUCTIONS`,
       `AGENT_UNINSTALL_INSTRUCTIONS`, and any detection strings
-- [ ] Update all tests referencing `"leiter nudge"`
-- [ ] Update SPEC.md: all occurrences of `leiter nudge` → `leiter hook nudge`
-- [ ] Run checks (`dprint fmt`, `cargo fmt`, `cargo clippy`, `cargo test`)
-- [ ] Audit test coverage: grep for all remaining references to the old and new command string across src/ and tests/;
+- [x] Update all tests referencing `"leiter nudge"`
+- [x] Update SPEC.md: all occurrences of `leiter nudge` → `leiter hook nudge`
+- [x] Run checks (`dprint fmt`, `cargo fmt`, `cargo clippy`, `cargo test`)
+- [x] Audit test coverage: grep for all remaining references to the old and new command string across src/ and tests/;
       verify every code path that produces or checks the string is tested. Add missing tests if found
-- [ ] Run `pre-pr-review-swarm`, address feedback
-- [ ] Create PR via `scode-graphite`, STOP
+- [x] Run `pre-pr-review-swarm`, address feedback
+- [x] Create PR via `scode-graphite`, STOP
 
 ## Step 3: Move `session-end` → `hook session-end`
 
