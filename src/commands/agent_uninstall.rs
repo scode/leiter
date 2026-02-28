@@ -30,7 +30,7 @@ mod tests {
         let output = run_uninstall();
         assert!(output.contains("leiter hook context"));
         assert!(output.contains("leiter hook nudge"));
-        assert!(output.contains("leiter session-end"));
+        assert!(output.contains("leiter hook session-end"));
     }
 
     #[test]

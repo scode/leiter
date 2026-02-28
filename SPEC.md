@@ -39,7 +39,7 @@ writing to the soul.
 │                           ──► agent edits soul.md            │
 │                           ──► agent updates frontmatter      │
 │                                                              │
-│  SessionEnd hook ──► leiter session-end                      │
+│  SessionEnd hook ──► leiter hook session-end                 │
 │                      ──► copies transcript to logs/          │
 └──────────────────────────────────────────────────────────────┘
 
@@ -176,7 +176,7 @@ configure Claude Code hooks.
 2. Instructions for the agent to:
    - Read `~/.claude/settings.json` (or create it with `{}` if it doesn't exist)
    - Check whether leiter hooks are already present by looking for hook commands containing `"leiter hook context"`,
-     `"leiter hook nudge"`, or `"leiter session-end"`
+     `"leiter hook nudge"`, or `"leiter hook session-end"`
    - If no leiter hooks are found, append the leiter hook groups to the existing `SessionStart` and `SessionEnd` arrays
      (creating those arrays if they don't exist), preserving all existing hooks
    - If leiter hooks are found but don't match the expected set (e.g., after a leiter upgrade changed the hook
@@ -201,7 +201,7 @@ filesystem changes — the command only emits instructions.
 
 1. Read `~/.claude/settings.json`
 2. Find and remove hook entries whose commands contain `"leiter hook context"`, `"leiter hook nudge"`, or
-   `"leiter session-end"` (the same detection strings used by `agent-setup`)
+   `"leiter hook session-end"` (the same detection strings used by `agent-setup`)
 3. If a hook group becomes empty after removal, remove the entire group object from its parent array
 4. If a `SessionStart` or `SessionEnd` array becomes empty, remove it from the `hooks` object
 5. Preserve all non-leiter hooks
@@ -260,7 +260,7 @@ The soul content is output inline (not as a file path reference) so that it surv
 sessions. The agent receives the full soul text in the SessionStart hook output, ensuring preferences remain available
 even after earlier messages are compressed.
 
-### `leiter session-end`
+### `leiter hook session-end`
 
 Hook handler for the Claude Code SessionEnd event. Reads the SessionEnd hook JSON from stdin and copies the session
 transcript to the logs directory.
@@ -422,7 +422,7 @@ reminder only when stale undistilled logs exist (otherwise it outputs nothing, a
         "hooks": [
           {
             "type": "command",
-            "command": "leiter session-end"
+            "command": "leiter hook session-end"
           }
         ]
       }
@@ -431,7 +431,7 @@ reminder only when stale undistilled logs exist (otherwise it outputs nothing, a
 }
 ```
 
-Fires once when the session terminates. The `leiter session-end` command reads the SessionEnd hook JSON from stdin
+Fires once when the session terminates. The `leiter hook session-end` command reads the SessionEnd hook JSON from stdin
 (which includes `session_id` and `transcript_path`) and copies the transcript to `~/.leiter/logs/`.
 
 ## Flows
@@ -451,7 +451,7 @@ Fires once when the session terminates. The `leiter session-end` command reads t
 1. Session starts → SessionStart hook fires → `leiter hook context` outputs soul + instructions, `leiter hook nudge`
    outputs a distillation reminder if stale logs exist → agent has leiter hook context
 2. Normal session proceeds
-3. Session ends → SessionEnd hook fires → `leiter session-end` copies transcript to `~/.leiter/logs/`
+3. Session ends → SessionEnd hook fires → `leiter hook session-end` copies transcript to `~/.leiter/logs/`
 
 ### User Asks the Agent to Learn Something
 
