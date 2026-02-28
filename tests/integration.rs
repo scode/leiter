@@ -17,6 +17,17 @@ fn leiter(state_dir: &Path) -> Command {
     cmd
 }
 
+fn set_last_distilled(dir: &Path, timestamp: &str) {
+    let soul_path = dir.join("soul.md");
+    let original = fs::read_to_string(&soul_path).unwrap();
+    let updated = original.replace(
+        "last_distilled: 1970-01-01T00:00:00Z",
+        &format!("last_distilled: {timestamp}"),
+    );
+    assert_ne!(updated, original, "last_distilled replacement must match");
+    fs::write(&soul_path, updated).unwrap();
+}
+
 #[test]
 fn agent_setup_then_context_injects_soul() {
     let tmp = tempfile::tempdir().unwrap();
@@ -214,6 +225,61 @@ fn instill_outputs_guidelines_and_preference() {
         .success()
         .stdout(predicate::str::contains("always use snake_case"))
         .stdout(predicate::str::contains("Soul-writing guidelines"));
+}
+
+#[test]
+fn distill_dry_run_reports_obsolete_without_deleting() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    leiter(dir).arg("agent-setup").assert().success();
+    set_last_distilled(dir, "2026-01-01T00:00:00Z");
+
+    let logs_dir = dir.join("logs");
+    let obsolete_name = "20250101T000000Z-old-sess.jsonl";
+    fs::write(logs_dir.join(obsolete_name), "obsolete content\n").unwrap();
+
+    // Create a new log via session-end (timestamp is now, after last_distilled)
+    let transcript = dir.join("transcript.jsonl");
+    fs::write(&transcript, "Fresh content.\n").unwrap();
+    let json = serde_json::json!({
+        "session_id": "new-sess",
+        "transcript_path": transcript.to_str().unwrap(),
+    });
+    leiter(dir)
+        .arg("session-end")
+        .write_stdin(json.to_string())
+        .assert()
+        .success();
+
+    // Dry-run should report the obsolete file
+    leiter(dir)
+        .args(["distill", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would be deleted"))
+        .stdout(predicate::str::contains(obsolete_name));
+
+    // File should still exist
+    assert!(logs_dir.join(obsolete_name).exists());
+}
+
+#[test]
+fn distill_deletes_obsolete_logs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    leiter(dir).arg("agent-setup").assert().success();
+    set_last_distilled(dir, "2026-01-01T00:00:00Z");
+
+    let logs_dir = dir.join("logs");
+    let obsolete_name = "20250101T000000Z-old-sess.jsonl";
+    fs::write(logs_dir.join(obsolete_name), "obsolete content\n").unwrap();
+
+    leiter(dir).arg("distill").assert().success();
+
+    // Obsolete file should be deleted
+    assert!(!logs_dir.join(obsolete_name).exists());
 }
 
 #[test]

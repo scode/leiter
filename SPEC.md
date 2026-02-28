@@ -288,6 +288,12 @@ assistant text responses — filtering out tool results, tool invocations, progr
 non-user-facing content. For non-JSONL files or lines with unrecognized JSON structures, the raw content is included
 as-is (fail-useful: no user content is silently lost).
 
+**Obsolete log cleanup:** After outputting new logs (or reporting that there are none), the command collects log files
+whose filename timestamps are strictly before `last_distilled` — these have already been processed by a prior
+distillation and are no longer needed. It deletes them. If `--dry-run` is passed, it reports which files would be
+deleted instead of deleting them. Deletion is best-effort: failures are logged as warnings but do not fail the command.
+If there are no obsolete logs, nothing is printed about cleanup.
+
 After the agent processes the distill output and updates the soul, the agent is responsible for updating the
 `last_distilled` timestamp in the soul file's frontmatter to the current time.
 
@@ -459,5 +465,4 @@ Fires once when the session terminates. The `leiter session-end` command reads t
 - Multiple user profiles or project-specific souls
 - Automatic distillation (always user-triggered)
 - Soul backup
-- Session log rotation or cleanup
 - API key management or direct Claude API calls from the CLI

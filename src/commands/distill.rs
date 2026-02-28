@@ -5,6 +5,10 @@
 //! chronologically. The inclusive comparison ensures a log written in the same
 //! second as the distillation timestamp is not lost.
 //!
+//! After output, deletes log files with timestamps strictly before
+//! `last_distilled` (already processed by a prior distillation). With
+//! `--dry-run`, reports what would be deleted instead.
+//!
 //! ## JSONL pre-processing
 //!
 //! Claude Code session transcripts are JSONL files where each line is a JSON
@@ -47,8 +51,10 @@ use crate::templates::SOUL_WRITING_GUIDELINES;
 ///
 /// Outputs all session logs whose filename timestamps are >= `last_distilled`
 /// from the soul frontmatter, sorted chronologically. Each log is preceded by
-/// a header line with the filename.
-pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
+/// a header line with the filename. Then deletes obsolete logs (timestamps
+/// strictly before `last_distilled`). With `dry_run`, reports what would be
+/// deleted instead.
+pub fn run(state_dir: &Path, out: &mut impl Write, dry_run: bool) -> Result<()> {
     let soul_path = paths::soul_path(state_dir);
     let logs_dir = paths::logs_dir(state_dir);
 
@@ -65,6 +71,7 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
         .with_context(|| format!("failed to read logs directory: {}", logs_dir.display()))?;
 
     let mut logs = Vec::new();
+    let mut obsolete = Vec::new();
 
     for entry in entries {
         let entry = entry?;
@@ -79,24 +86,47 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
 
         if ts >= fm.last_distilled {
             logs.push((ts, filename_str.to_string(), entry.path()));
+        } else {
+            obsolete.push((filename_str.to_string(), entry.path()));
         }
     }
 
     if logs.is_empty() {
         writeln!(out, "No new session logs to process.")?;
-        return Ok(());
+    } else {
+        logs.sort_by_key(|(ts, _, _)| *ts);
+
+        write!(out, "{SOUL_WRITING_GUIDELINES}")?;
+
+        for (_, filename, path) in &logs {
+            let content = fs::read_to_string(path)
+                .with_context(|| format!("failed to read log file: {}", path.display()))?;
+            writeln!(out, "## {filename}\n")?;
+            filter_session_log(&content, out)?;
+            writeln!(out)?;
+        }
     }
 
-    logs.sort_by_key(|(ts, _, _)| *ts);
+    if !obsolete.is_empty() {
+        obsolete.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    write!(out, "{SOUL_WRITING_GUIDELINES}")?;
-
-    for (_, filename, path) in &logs {
-        let content = fs::read_to_string(path)
-            .with_context(|| format!("failed to read log file: {}", path.display()))?;
-        writeln!(out, "## {filename}\n")?;
-        filter_session_log(&content, out)?;
-        writeln!(out)?;
+        if dry_run {
+            writeln!(out, "Obsolete logs that would be deleted:")?;
+            for (filename, _) in &obsolete {
+                writeln!(out, "  {filename}")?;
+            }
+        } else {
+            for (filename, path) in &obsolete {
+                match fs::remove_file(path) {
+                    Ok(()) => {
+                        tracing::debug!("deleted obsolete log: {filename}");
+                    }
+                    Err(e) => {
+                        tracing::warn!("failed to delete obsolete log {filename}: {e}");
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
@@ -195,7 +225,13 @@ mod tests {
 
     fn run_distill(state_dir: &Path) -> String {
         let mut out = Vec::new();
-        run(state_dir, &mut out).unwrap();
+        run(state_dir, &mut out, false).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    fn run_distill_dry(state_dir: &Path) -> String {
+        let mut out = Vec::new();
+        run(state_dir, &mut out, true).unwrap();
         String::from_utf8(out).unwrap()
     }
 
@@ -340,7 +376,7 @@ mod tests {
         fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
 
         let mut out = Vec::new();
-        let result = run(tmp.path(), &mut out);
+        let result = run(tmp.path(), &mut out, false);
         assert!(result.is_err());
     }
 
@@ -509,5 +545,77 @@ mod tests {
         })
         .to_string();
         assert_eq!(filter(&line), "[user]: hello from array\n");
+    }
+
+    // --- obsolete log cleanup tests ---
+
+    #[test]
+    fn obsolete_logs_deleted() {
+        let tmp = setup_state_dir();
+        write_log(tmp.path(), 2026, 1, 1, 10, "old", "old content");
+        write_log(tmp.path(), 2026, 7, 1, 0, "new", "new content");
+        set_last_distilled(tmp.path(), 2026, 6, 1, 0);
+
+        let output = run_distill(tmp.path());
+        assert!(output.contains("new content"));
+        assert!(!output.contains("old content"));
+
+        let remaining: Vec<_> = fs::read_dir(paths::logs_dir(tmp.path()))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining[0].contains("new"));
+    }
+
+    #[test]
+    fn obsolete_logs_dry_run_does_not_delete() {
+        let tmp = setup_state_dir();
+        write_log(tmp.path(), 2026, 1, 1, 10, "old", "old content");
+        write_log(tmp.path(), 2026, 7, 1, 0, "new", "new content");
+        set_last_distilled(tmp.path(), 2026, 6, 1, 0);
+
+        let output = run_distill_dry(tmp.path());
+        assert!(output.contains("would be deleted"));
+        assert!(output.contains("old"));
+
+        let remaining: Vec<_> = fs::read_dir(paths::logs_dir(tmp.path())).unwrap().collect();
+        assert_eq!(remaining.len(), 2);
+    }
+
+    #[test]
+    fn no_obsolete_logs_no_cleanup_output() {
+        let tmp = setup_state_dir();
+        write_log(tmp.path(), 2026, 7, 1, 0, "new", "new content");
+        set_last_distilled(tmp.path(), 2026, 6, 1, 0);
+
+        let output = run_distill(tmp.path());
+        assert!(!output.contains("deleted"));
+        assert!(!output.contains("would be deleted"));
+        assert!(!output.contains("Obsolete"));
+    }
+
+    #[test]
+    fn all_obsolete_no_new_logs() {
+        let tmp = setup_state_dir();
+        write_log(tmp.path(), 2026, 1, 1, 10, "old", "old content");
+        set_last_distilled(tmp.path(), 2026, 6, 1, 0);
+
+        let output = run_distill(tmp.path());
+        assert!(output.contains("No new session logs to process"));
+
+        let remaining: Vec<_> = fs::read_dir(paths::logs_dir(tmp.path())).unwrap().collect();
+        assert_eq!(remaining.len(), 0);
+    }
+
+    #[test]
+    fn unparseable_filenames_not_deleted() {
+        let tmp = setup_state_dir();
+        let bad_path = paths::logs_dir(tmp.path()).join("not-a-log.txt");
+        fs::write(&bad_path, "bad").unwrap();
+        set_last_distilled(tmp.path(), 2026, 6, 1, 0);
+
+        run_distill(tmp.path());
+        assert!(bad_path.exists(), "unparseable file must not be deleted");
     }
 }
