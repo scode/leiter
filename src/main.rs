@@ -35,7 +35,11 @@ pub enum Command {
     /// Output soul content and agent instructions
     Context,
     /// Output new session logs for distillation
-    Distill,
+    Distill {
+        /// Report obsolete files without deleting them
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Output soul-writing instructions for a preference
     Instill {
         /// The preference or fact to remember
@@ -89,8 +93,8 @@ fn main() -> Result<()> {
         Command::Context => {
             commands::context::run(&state_dir, &mut std::io::stdout())?;
         }
-        Command::Distill => {
-            commands::distill::run(&state_dir, &mut std::io::stdout())?;
+        Command::Distill { dry_run } => {
+            commands::distill::run(&state_dir, &mut std::io::stdout(), *dry_run)?;
         }
         Command::Instill { text } => {
             commands::instill::run(&state_dir, &mut std::io::stdout(), text)?;
