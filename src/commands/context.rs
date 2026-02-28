@@ -24,7 +24,7 @@ use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH, context_preamble};
 /// session (no soul injected). Soft epoch mismatches produce a nudge but
 /// still inject the soul.
 ///
-/// If the soul doesn't exist, outputs a message suggesting `leiter setup install`.
+/// If the soul doesn't exist, outputs a message suggesting `leiter claude install`.
 /// Either way, exits successfully — the SessionStart hook should never fail
 /// the session.
 pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
@@ -33,7 +33,7 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
     if !soul_path.exists() {
         writeln!(
             out,
-            "Leiter is not initialized. Run `leiter setup install` to set up."
+            "Leiter is not initialized. Run `leiter claude install` to set up."
         )?;
         return Ok(());
     }
@@ -45,7 +45,7 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
             Ordering::Less => {
                 writeln!(
                     out,
-                    "ACTION REQUIRED: Leiter setup is incompatible (setup_hard_epoch: soul={}, binary={}). The binary was upgraded but setup was not re-run. Before responding to the user's first message, tell them: \"Leiter setup needs to be re-run — please run `leiter setup install` in your terminal and follow the instructions, then start a new session.\" Do not attempt to use leiter commands in this session.",
+                    "ACTION REQUIRED: Leiter setup is incompatible (setup_hard_epoch: soul={}, binary={}). The binary was upgraded but setup was not re-run. Before responding to the user's first message, tell them: \"Leiter setup needs to be re-run — please run `leiter claude install` in your terminal and follow the instructions, then start a new session.\" Do not attempt to use leiter commands in this session.",
                     fm.setup_hard_epoch, SETUP_HARD_EPOCH,
                 )?;
                 return Ok(());
@@ -65,7 +65,7 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
             Ordering::Less => {
                 writeln!(
                     out,
-                    "Before responding to the user's first message, briefly mention that leiter setup is slightly behind the binary (setup_soft_epoch: soul={}, binary={}). Suggest they run `leiter setup install` when convenient. Keep it to one short sentence.\n",
+                    "Before responding to the user's first message, briefly mention that leiter setup is slightly behind the binary (setup_soft_epoch: soul={}, binary={}). Suggest they run `leiter claude install` when convenient. Keep it to one short sentence.\n",
                     fm.setup_soft_epoch, SETUP_SOFT_EPOCH,
                 )?;
             }
@@ -129,7 +129,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let output = run_context(tmp.path());
         assert!(output.contains("not initialized"));
-        assert!(output.contains("leiter setup install"));
+        assert!(output.contains("leiter claude install"));
     }
 
     #[test]
@@ -167,7 +167,7 @@ mod tests {
         );
         let output = run_context(tmp.path());
         assert!(output.contains("ACTION REQUIRED"));
-        assert!(output.contains("leiter setup install"));
+        assert!(output.contains("leiter claude install"));
         assert!(!output.contains(&context_preamble(tmp.path())));
     }
 
@@ -191,7 +191,7 @@ mod tests {
         );
         let output = run_context(tmp.path());
         assert!(output.contains("setup is slightly behind"));
-        assert!(output.contains("leiter setup install"));
+        assert!(output.contains("leiter claude install"));
         assert!(output.contains(&context_preamble(tmp.path())));
     }
 

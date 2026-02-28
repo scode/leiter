@@ -21,7 +21,7 @@ cargo install --path .
 In a Claude Code session, paste the following prompt:
 
 ```
-Run the shell command `leiter setup install` and follow the instructions it outputs on stdout.
+Run the shell command `leiter claude install` and follow the instructions it outputs on stdout.
 ```
 
 This initializes `~/.leiter/` and configures Claude Code hooks. Once done, leiter is active on every future session.

@@ -176,7 +176,7 @@ from empty sections.
     )
 }
 
-/// Instructions output by `leiter setup uninstall` telling the agent how to
+/// Instructions output by `leiter claude uninstall` telling the agent how to
 /// remove leiter hooks from `~/.claude/settings.json`.
 pub fn agent_uninstall_instructions(state_dir: &Path) -> String {
     let dir = state_dir.display();
@@ -199,12 +199,12 @@ If no leiter hooks are found, report that leiter hooks are already removed.
 
 After removing hooks, tell the user:
 - To completely remove leiter, delete `{dir}/` (this removes the soul and all session logs) and uninstall the binary.
-- To re-enable leiter later, paste the following into a Claude Code session: Run the shell command `leiter setup install` and follow the instructions it outputs on stdout.
+- To re-enable leiter later, paste the following into a Claude Code session: Run the shell command `leiter claude install` and follow the instructions it outputs on stdout.
 "#
     )
 }
 
-/// Instructions output by `leiter setup install` telling the agent how to
+/// Instructions output by `leiter claude install` telling the agent how to
 /// configure Claude Code hooks in `~/.claude/settings.json`.
 pub const AGENT_SETUP_INSTRUCTIONS: &str = r#"Configure Claude Code hooks for leiter by editing `~/.claude/settings.json`.
 
@@ -393,7 +393,7 @@ mod tests {
     fn agent_uninstall_instructions_contain_cleanup_guidance() {
         let instructions = agent_uninstall_instructions(Path::new("/test/state"));
         assert!(instructions.contains("/test/state/"));
-        assert!(instructions.contains("leiter setup install"));
+        assert!(instructions.contains("leiter claude install"));
     }
 
     #[test]
