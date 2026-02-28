@@ -1,4 +1,4 @@
-//! `leiter agent-uninstall` — outputs instructions to remove leiter hooks.
+//! `leiter setup uninstall` — outputs instructions to remove leiter hooks.
 //!
 //! This command outputs natural language instructions for the agent to remove
 //! leiter hooks from `~/.claude/settings.json`. It makes no filesystem changes.

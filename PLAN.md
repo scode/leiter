@@ -95,20 +95,20 @@ append **(DONE)** to the step's header line.
 - [x] Audit test coverage: grep for all remaining references to the old and new command string across src/ and tests/;
       verify every code path that produces or checks the string is tested. Add missing tests if found
 - [x] Run `pre-pr-review-swarm`, address feedback
-- [ ] Create PR via `scode-graphite`, STOP
+- [x] Create PR via `scode-graphite`, STOP
 
-## Step 5: Move `agent-uninstall` → `setup uninstall`
+## Step 5: Move `agent-uninstall` → `setup uninstall` **(DONE)**
 
-- [ ] Add `Uninstall` variant to `SetupCommand` enum
-- [ ] Update dispatch in `main.rs`
-- [ ] Remove old `AgentUninstall` variant from top-level `Command` enum
-- [ ] Update template strings: any reference to `"leiter agent-uninstall"` (if present)
-- [ ] Update all tests referencing `"leiter agent-uninstall"`
-- [ ] Update SPEC.md: all occurrences of `leiter agent-uninstall` → `leiter setup uninstall`, rename the section heading
-- [ ] Run checks (`dprint fmt`, `cargo fmt`, `cargo clippy`, `cargo test`)
-- [ ] Audit test coverage: grep for all remaining references to the old and new command string across src/ and tests/;
+- [x] Add `Uninstall` variant to `SetupCommand` enum
+- [x] Update dispatch in `main.rs`
+- [x] Remove old `AgentUninstall` variant from top-level `Command` enum
+- [x] Update template strings: any reference to `"leiter agent-uninstall"` (if present)
+- [x] Update all tests referencing `"leiter agent-uninstall"`
+- [x] Update SPEC.md: all occurrences of `leiter agent-uninstall` → `leiter setup uninstall`, rename the section heading
+- [x] Run checks (`dprint fmt`, `cargo fmt`, `cargo clippy`, `cargo test`)
+- [x] Audit test coverage: grep for all remaining references to the old and new command string across src/ and tests/;
       verify every code path that produces or checks the string is tested. Add missing tests if found
-- [ ] Run `pre-pr-review-swarm`, address feedback
+- [x] Run `pre-pr-review-swarm`, address feedback
 - [ ] Create PR via `scode-graphite`, STOP
 
 ## Step 6: Move `instill` → `soul instill` **(creates Soul group)**

@@ -16,8 +16,8 @@ fn parses_setup_install() {
 }
 
 #[test]
-fn parses_agent_uninstall() {
-    leiter().arg("agent-uninstall").assert().success();
+fn parses_setup_uninstall() {
+    leiter().args(["setup", "uninstall"]).assert().success();
 }
 
 #[test]

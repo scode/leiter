@@ -193,7 +193,7 @@ If any deterministic step fails, the output instructs the agent to relay the err
 This command is designed to be run inside a Claude Code session where the agent acts on the output. If run outside a
 session, the user sees the instructions and can paste them into a session or apply them manually.
 
-### `leiter agent-uninstall`
+### `leiter setup uninstall`
 
 Outputs natural language instructions for the agent to remove leiter hooks from `~/.claude/settings.json`. Makes no
 filesystem changes — the command only emits instructions.

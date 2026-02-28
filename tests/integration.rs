@@ -286,12 +286,12 @@ fn distill_deletes_obsolete_logs() {
 }
 
 #[test]
-fn agent_uninstall_outputs_hook_removal_instructions() {
+fn setup_uninstall_outputs_hook_removal_instructions() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
     leiter(dir)
-        .arg("agent-uninstall")
+        .args(["setup", "uninstall"])
         .assert()
         .success()
         .stdout(predicate::str::contains("leiter hook context"))
