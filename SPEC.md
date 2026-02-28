@@ -351,8 +351,9 @@ Checks for stale undistilled session logs and outputs a nudge if any exist. Call
    code)
 4. Otherwise: output nothing
 
-If the soul file does not exist or the logs directory does not exist, silently output nothing and exit successfully.
-Leiter may not be initialized yet — the nudge must not break the session.
+If the soul file does not exist or the logs directory does not exist, silently output nothing and exit successfully. If
+the soul file cannot be read, its frontmatter cannot be parsed, or the logs directory cannot be read, also output
+nothing and exit successfully (fail-open). The nudge must not break the session.
 
 **Output (stdout):**
 
