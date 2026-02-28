@@ -139,19 +139,19 @@ append **(DONE)** to the step's header line.
 - [x] Run `pre-pr-review-swarm`, address feedback
 - [x] Create PR via `scode-graphite`, STOP
 
-## Step 8: Move `soul-upgrade` → `soul upgrade`
+## Step 8: Move `soul-upgrade` → `soul upgrade` **(DONE)**
 
-- [ ] Add `Upgrade` variant to `SoulCommand` enum
-- [ ] Update dispatch in `main.rs`
-- [ ] Remove old `SoulUpgrade` variant from top-level `Command` enum
-- [ ] Update template strings: `"leiter soul-upgrade"` → `"leiter soul upgrade"` in `CONTEXT_PREAMBLE`
-- [ ] Update all tests referencing `"leiter soul-upgrade"`
-- [ ] Update SPEC.md: all occurrences of `leiter soul-upgrade` → `leiter soul upgrade`, rename section heading
-- [ ] Run checks (`dprint fmt`, `cargo fmt`, `cargo clippy`, `cargo test`)
-- [ ] Audit test coverage: grep for all remaining references to the old and new command string across src/ and tests/;
+- [x] Add `Upgrade` variant to `SoulCommand` enum
+- [x] Update dispatch in `main.rs`
+- [x] Remove old `SoulUpgrade` variant from top-level `Command` enum
+- [x] Update template strings: `"leiter soul-upgrade"` → `"leiter soul upgrade"` in `CONTEXT_PREAMBLE`
+- [x] Update all tests referencing `"leiter soul-upgrade"`
+- [x] Update SPEC.md: all occurrences of `leiter soul-upgrade` → `leiter soul upgrade`, rename section heading
+- [x] Run checks (`dprint fmt`, `cargo fmt`, `cargo clippy`, `cargo test`)
+- [x] Audit test coverage: grep for all remaining references to the old and new command string across src/ and tests/;
       verify every code path that produces or checks the string is tested. Add missing tests if found
-- [ ] Run `pre-pr-review-swarm`, address feedback
-- [ ] Create PR via `scode-graphite`, STOP
+- [x] Run `pre-pr-review-swarm`, address feedback
+- [x] Create PR via `scode-graphite`, STOP
 
 ## Step 9: Cleanup
 

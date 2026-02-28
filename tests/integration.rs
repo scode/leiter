@@ -309,7 +309,7 @@ fn soul_upgrade_reports_up_to_date_after_setup() {
     leiter(dir).args(["setup", "install"]).assert().success();
 
     leiter(dir)
-        .arg("soul-upgrade")
+        .args(["soul", "upgrade"])
         .assert()
         .success()
         .stdout(predicate::str::contains("up to date"));

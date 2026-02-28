@@ -18,7 +18,7 @@ pub struct SoulFrontmatter {
     /// Used by `leiter soul distill` to select only unprocessed session logs.
     pub last_distilled: DateTime<Utc>,
     /// Tracks which soul template version this file was created from,
-    /// so `leiter soul-upgrade` can detect drift.
+    /// so `leiter soul upgrade` can detect drift.
     pub soul_version: u32,
     /// Setup epoch for soft (nudge) compatibility checks.
     /// Defaults to 1 for souls created before epochs were introduced.

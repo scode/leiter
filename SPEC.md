@@ -82,7 +82,7 @@ setup_hard_epoch: 1
 
 - `last_distilled`: timestamp used by `leiter soul distill` to determine which session logs are new
 - `soul_version`: integer matching the version of the soul template used to create this file, used by
-  `leiter soul-upgrade` to detect drift
+  `leiter soul upgrade` to detect drift
 - `setup_soft_epoch`: integer tracking the soft setup epoch. When the binary's expected soft epoch doesn't match the
   soul's value, `leiter hook context` outputs a nudge but still injects the soul. See Setup Epochs below
 - `setup_hard_epoch`: integer tracking the hard setup epoch. When the binary's expected hard epoch doesn't match the
@@ -112,7 +112,7 @@ epoch values against the binary's expected values. The check uses exact equality
 flagged, since the binary cannot make assumptions about unknown future epochs.
 
 Epochs are independent of `soul_version`. The soul version tracks template format changes (handled by
-`leiter soul-upgrade`). Epochs track integration changes (hooks, settings, etc.) that require user action outside the
+`leiter soul upgrade`). Epochs track integration changes (hooks, settings, etc.) that require user action outside the
 soul file.
 
 ### Soul Template (built into the binary)
@@ -248,7 +248,7 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
    (the user says "distill" or similar), outputs new session logs, and the agent should then update the soul with new
    learnings and update `last_distilled` in the frontmatter to the current UTC ISO 8601 timestamp.
 
-   **Soul upgrade command:** Must include the literal command `leiter soul-upgrade`. Explain that this is user-triggered
+   **Soul upgrade command:** Must include the literal command `leiter soul upgrade`. Explain that this is user-triggered
    (the user says "upgrade the leiter soul" or similar) and outputs migration instructions if the soul template is
    outdated.
 
@@ -358,7 +358,7 @@ Leiter may not be initialized yet — the nudge must not break the session.
 - If stale undistilled logs exist: a short nudge message reminding the agent to suggest distillation
 - Otherwise: nothing (zero context pollution)
 
-### `leiter soul-upgrade`
+### `leiter soul upgrade`
 
 Detects soul template drift and outputs agent instructions to migrate the existing soul to the current template format.
 Invoked by the agent when the user asks to "upgrade the leiter soul".
@@ -467,7 +467,7 @@ Fires once when the session terminates. The `leiter hook session-end` command re
 
 1. User updates `leiter` binary to a newer version
 2. User says "upgrade the leiter soul"
-3. Agent runs `leiter soul-upgrade`
+3. Agent runs `leiter soul upgrade`
 4. If already current: agent relays that no upgrade is needed
 5. If outdated: agent receives the upgrade instructions and new template
 6. Agent reads current `~/.leiter/soul.md`, restructures it into the new format, and updates `soul_version` in the

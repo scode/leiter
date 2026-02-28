@@ -49,8 +49,8 @@ fn parses_session_end() {
 
 #[test]
 fn parses_soul_upgrade() {
-    // soul-upgrade reads ~/.leiter/soul.md which may not exist in sandboxed environments.
-    let assert = leiter().arg("soul-upgrade").assert();
+    // soul upgrade reads ~/.leiter/soul.md which may not exist in sandboxed environments.
+    let assert = leiter().args(["soul", "upgrade"]).assert();
     assert.stderr(predicate::str::contains("unrecognized subcommand").not());
 }
 

@@ -1,4 +1,4 @@
-//! `leiter soul-upgrade` — detect soul template drift and output migration instructions.
+//! `leiter soul upgrade` — detect soul template drift and output migration instructions.
 //!
 //! Compares the `soul_version` in the user's soul file against the current
 //! template version built into the binary. When outdated, outputs a changelog,
@@ -18,7 +18,7 @@ use crate::templates::{
     SOUL_TEMPLATE, SOUL_TEMPLATE_CHANGELOG, SOUL_TEMPLATE_VERSION, soul_upgrade_instructions,
 };
 
-/// Run the soul-upgrade command.
+/// Run the soul upgrade command.
 ///
 /// Reads the soul file's `soul_version` and compares it to the binary's
 /// built-in template version. If up to date, says so. If outdated, outputs
