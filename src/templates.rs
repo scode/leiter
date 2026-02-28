@@ -1,8 +1,12 @@
-//! Agent-facing text constants and the soul template.
+//! Agent-facing text templates and the soul template.
 //!
 //! All natural language that leiter outputs for the agent to read or act on
 //! lives here. Keeping it in one place makes it easy to review the agent's
 //! "interface" holistically and evolve it across versions.
+
+use std::path::Path;
+
+use crate::paths;
 
 /// Current soul template version. Bumped whenever the template structure
 /// changes, so `leiter soul-upgrade` can detect drift.
@@ -18,7 +22,7 @@ pub const SETUP_SOFT_EPOCH: u32 = 1;
 /// the session can proceed.
 pub const SETUP_HARD_EPOCH: u32 = 1;
 
-/// Initial content for `~/.leiter/soul.md` (body only, no frontmatter).
+/// Initial content for the soul file (body only, no frontmatter).
 ///
 /// Section headings guide the agent toward capturing specific kinds of
 /// preferences. The agent fills these in over time by editing the soul file
@@ -116,23 +120,27 @@ only when they are contradicted.
 ///
 /// Covers all the topics the spec requires: identity, soul file location,
 /// when to instill preferences, automatic transcript saving, distillation, and soul upgrade.
-pub const CONTEXT_PREAMBLE: &str = "\
-Leiter is a self-training system that learns your preferences across Claude Code sessions.
-
-Your soul file is at `~/.leiter/soul.md`. Use your Read/Edit/Write tools to modify it directly.
-
-When the user says \"remember\", \"learn\", \"instill\", \"always\", \"never\", or similar preference-setting language, run `leiter instill \"<what the user wants remembered>\"` and follow the instructions it outputs.
-
-Session transcripts are saved automatically when each session ends. No manual logging needed.
-
-When the user asks to distill session logs, run `leiter distill`. This outputs new session logs. Read through them, update the soul with new learnings, then update `last_distilled` in the soul file's frontmatter to the current UTC ISO 8601 timestamp (e.g., 2026-02-23T17:00:00Z).
-
-When the user asks to upgrade the leiter soul, run `leiter soul-upgrade`. If the soul template is outdated, this outputs migration instructions and the new template. Follow the instructions to restructure the soul while preserving all learned preferences.
-
-IMPORTANT: The `leiter session-end` hook command writes to `~/.leiter/` which is outside the default sandbox allowed paths. Ensure it is run outside the sandbox (i.e., with sandbox disabled) or writes will fail with \"Operation not permitted\".
-
----
-";
+pub fn context_preamble(state_dir: &Path) -> String {
+    let soul = paths::soul_path(state_dir).display().to_string();
+    let dir = state_dir.display();
+    format!(
+        "Leiter is a self-training system that learns your preferences across Claude Code sessions.\n\
+         \n\
+         Your soul file is at `{soul}`. Use your Read/Edit/Write tools to modify it directly.\n\
+         \n\
+         When the user says \"remember\", \"learn\", \"instill\", \"always\", \"never\", or similar preference-setting language, run `leiter instill \"<what the user wants remembered>\"` and follow the instructions it outputs.\n\
+         \n\
+         Session transcripts are saved automatically when each session ends. No manual logging needed.\n\
+         \n\
+         When the user asks to distill session logs, run `leiter distill`. This outputs new session logs. Read through them, update the soul with new learnings, then update `last_distilled` in the soul file's frontmatter to the current UTC ISO 8601 timestamp (e.g., 2026-02-23T17:00:00Z).\n\
+         \n\
+         When the user asks to upgrade the leiter soul, run `leiter soul-upgrade`. If the soul template is outdated, this outputs migration instructions and the new template. Follow the instructions to restructure the soul while preserving all learned preferences.\n\
+         \n\
+         IMPORTANT: The `leiter session-end` hook command writes to `{dir}/` which is outside the default sandbox allowed paths. Ensure it is run outside the sandbox (i.e., with sandbox disabled) or writes will fail with \"Operation not permitted\".\n\
+         \n\
+         ---\n"
+    )
+}
 
 /// Nudge message output by `leiter nudge` when stale undistilled logs exist.
 pub const NUDGE_MESSAGE: &str = "\
@@ -142,10 +150,13 @@ ACTION REQUIRED: There are undistilled leiter session logs older than 24 hours. 
 /// Migration instructions output by `leiter soul-upgrade` when the soul
 /// template is outdated. Tells the agent how to restructure the existing
 /// soul content into the new template format.
-pub const SOUL_UPGRADE_INSTRUCTIONS: &str = "\
+pub fn soul_upgrade_instructions(state_dir: &Path) -> String {
+    let soul = paths::soul_path(state_dir).display().to_string();
+    format!(
+        "\
 ## Migration instructions
 
-Rewrite `~/.leiter/soul.md` to match the new template structure above.
+Rewrite `{soul}` to match the new template structure above.
 
 Rules:
 1. Read the current soul file completely before making any changes.
@@ -161,11 +172,16 @@ entries and place them in the closest matching new section.
 version.
 7. Do not add new entries or remove the section description placeholders \
 from empty sections.
-";
+"
+    )
+}
 
 /// Instructions output by `leiter agent-uninstall` telling the agent how to
 /// remove leiter hooks from `~/.claude/settings.json`.
-pub const AGENT_UNINSTALL_INSTRUCTIONS: &str = r#"Remove leiter hooks from Claude Code by editing `~/.claude/settings.json`.
+pub fn agent_uninstall_instructions(state_dir: &Path) -> String {
+    let dir = state_dir.display();
+    format!(
+        r#"Remove leiter hooks from Claude Code by editing `~/.claude/settings.json`.
 
 Read `~/.claude/settings.json`.
 
@@ -182,9 +198,11 @@ Use your Edit tool to make the changes to `~/.claude/settings.json`.
 If no leiter hooks are found, report that leiter hooks are already removed.
 
 After removing hooks, tell the user:
-- To completely remove leiter, delete `~/.leiter/` (this removes the soul and all session logs) and uninstall the binary.
+- To completely remove leiter, delete `{dir}/` (this removes the soul and all session logs) and uninstall the binary.
 - To re-enable leiter later, paste the following into a Claude Code session: Run the shell command `leiter agent-setup` and follow the instructions it outputs on stdout.
-"#;
+"#
+    )
+}
 
 /// Instructions output by `leiter agent-setup` telling the agent how to
 /// configure Claude Code hooks in `~/.claude/settings.json`.
@@ -272,14 +290,15 @@ mod tests {
 
     #[test]
     fn context_preamble_contains_required_literals() {
+        let preamble = context_preamble(Path::new("/test/state"));
         for literal in [
-            "~/.leiter/soul.md",
+            "/test/state/soul.md",
             "leiter distill",
             "leiter soul-upgrade",
             "leiter instill",
         ] {
             assert!(
-                CONTEXT_PREAMBLE.contains(literal),
+                preamble.contains(literal),
                 "context preamble missing: {literal}"
             );
         }
@@ -356,32 +375,36 @@ mod tests {
 
     #[test]
     fn soul_upgrade_instructions_contain_required_elements() {
-        assert!(SOUL_UPGRADE_INSTRUCTIONS.contains("Migration instructions"));
-        assert!(SOUL_UPGRADE_INSTRUCTIONS.contains("soul_version"));
-        assert!(SOUL_UPGRADE_INSTRUCTIONS.contains("~/.leiter/soul.md"));
+        let instructions = soul_upgrade_instructions(Path::new("/test/state"));
+        assert!(instructions.contains("Migration instructions"));
+        assert!(instructions.contains("soul_version"));
+        assert!(instructions.contains("/test/state/soul.md"));
     }
 
     #[test]
     fn agent_uninstall_instructions_contain_hook_detection_strings() {
-        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("leiter context"));
-        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("leiter nudge"));
-        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("leiter session-end"));
+        let instructions = agent_uninstall_instructions(Path::new("/test/state"));
+        assert!(instructions.contains("leiter context"));
+        assert!(instructions.contains("leiter nudge"));
+        assert!(instructions.contains("leiter session-end"));
     }
 
     #[test]
     fn agent_uninstall_instructions_contain_cleanup_guidance() {
-        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("~/.leiter/"));
-        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("leiter agent-setup"));
+        let instructions = agent_uninstall_instructions(Path::new("/test/state"));
+        assert!(instructions.contains("/test/state/"));
+        assert!(instructions.contains("leiter agent-setup"));
     }
 
     #[test]
     fn agent_uninstall_instructions_contain_spec_required_clauses() {
-        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("hook group"));
-        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("empty"));
-        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("SessionStart"));
-        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("SessionEnd"));
-        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("non-leiter hooks"));
-        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("already removed"));
+        let instructions = agent_uninstall_instructions(Path::new("/test/state"));
+        assert!(instructions.contains("hook group"));
+        assert!(instructions.contains("empty"));
+        assert!(instructions.contains("SessionStart"));
+        assert!(instructions.contains("SessionEnd"));
+        assert!(instructions.contains("non-leiter hooks"));
+        assert!(instructions.contains("already removed"));
     }
 
     #[test]

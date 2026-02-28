@@ -53,9 +53,14 @@ writing to the soul.
 
 ## State Directory
 
-All state lives under `~/.leiter/`. This is the default regardless of platform. If the `LEITER_HOME` environment
-variable is set, it points directly to the state directory (so state lives under `$LEITER_HOME/`, not
-`$LEITER_HOME/.leiter/`). This allows relocating leiter state for testing or multi-profile setups.
+All state lives under a single directory. The default is `~/.leiter/`. If the `LEITER_HOME` environment variable is set,
+it points directly to the state directory (so state lives under `$LEITER_HOME/`, not `$LEITER_HOME/.leiter/`). This
+allows relocating leiter state for testing or multi-profile setups.
+
+**No hardcoded paths:** All runtime output — agent-facing instructions, error messages, confirmation messages — must use
+the resolved state directory path. The string `~/.leiter` must never appear in code that produces output; use the state
+directory path obtained from `LEITER_HOME` (or the `$HOME/.leiter` fallback) instead. This ensures that when
+`LEITER_HOME` is set, the agent and user always see the correct paths.
 
 ### `~/.leiter/soul.md`
 
@@ -228,8 +233,8 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
 
    **Identity:** A one-line description of leiter (self-training system that learns across sessions).
 
-   **Soul file location:** Must include the literal path `~/.leiter/soul.md`. Must tell the agent to use its
-   Read/Edit/Write tools to modify this file directly.
+   **Soul file location:** Must include the resolved path to the soul file (the state directory joined with `soul.md`).
+   Must tell the agent to use its Read/Edit/Write tools to modify this file directly.
 
    **When to instill preferences:** When the user says "remember", "learn", "instill", "always", "never", or similar
    preference-setting language. The agent should run `leiter instill "<what the user wants remembered>"` and follow the
@@ -478,7 +483,6 @@ Fires once when the session terminates. The `leiter session-end` command reads t
 
 ## Non-Goals (For Now)
 
-- Cross-platform path handling (hardcoded to `~/.leiter/`)
 - Multiple user profiles or project-specific souls
 - Automatic distillation (always user-triggered)
 - Soul backup

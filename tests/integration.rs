@@ -294,7 +294,7 @@ fn agent_uninstall_outputs_hook_removal_instructions() {
         .stdout(predicate::str::contains("leiter context"))
         .stdout(predicate::str::contains("leiter nudge"))
         .stdout(predicate::str::contains("leiter session-end"))
-        .stdout(predicate::str::contains("~/.leiter/"))
+        .stdout(predicate::str::contains(format!("{}/", dir.display())))
         .stdout(predicate::str::contains("leiter agent-setup"));
 }
 

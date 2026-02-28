@@ -4,13 +4,14 @@
 //! leiter hooks from `~/.claude/settings.json`. It makes no filesystem changes.
 
 use std::io::Write;
+use std::path::Path;
 
 use anyhow::Result;
 
-use crate::templates::AGENT_UNINSTALL_INSTRUCTIONS;
+use crate::templates::agent_uninstall_instructions;
 
-pub fn run(out: &mut impl Write) -> Result<()> {
-    write!(out, "{AGENT_UNINSTALL_INSTRUCTIONS}")?;
+pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
+    write!(out, "{}", agent_uninstall_instructions(state_dir))?;
     Ok(())
 }
 
@@ -20,7 +21,7 @@ mod tests {
 
     fn run_uninstall() -> String {
         let mut out = Vec::new();
-        run(&mut out).unwrap();
+        run(Path::new("/test/state"), &mut out).unwrap();
         String::from_utf8(out).unwrap()
     }
 
@@ -35,7 +36,7 @@ mod tests {
     #[test]
     fn output_contains_cleanup_guidance() {
         let output = run_uninstall();
-        assert!(output.contains("~/.leiter/"));
+        assert!(output.contains("/test/state/"));
         assert!(output.contains("leiter agent-setup"));
     }
 }
