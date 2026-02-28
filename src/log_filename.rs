@@ -5,11 +5,21 @@
 //! timestamp) keeps filenames filesystem-safe and ensures lexicographic sorting
 //! matches chronological order.
 
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use chrono::{DateTime, NaiveDateTime, Utc};
 
 use crate::errors::LeiterError;
 
 const TIMESTAMP_FORMAT: &str = "%Y%m%dT%H%M%SZ";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedLogEntry {
+    pub timestamp: DateTime<Utc>,
+    pub filename: String,
+    pub path: PathBuf,
+}
 
 /// Build a log filename from a timestamp and session ID.
 ///
@@ -56,10 +66,36 @@ pub fn parse_log_filename(filename: &str) -> Result<(DateTime<Utc>, String), Lei
     Ok((naive.and_utc(), session_id.to_string()))
 }
 
+pub fn collect_log_entries(logs_dir: &Path) -> std::io::Result<Vec<ParsedLogEntry>> {
+    let entries = fs::read_dir(logs_dir)?;
+    let mut parsed = Vec::new();
+
+    for entry in entries {
+        let entry = entry?;
+        let filename = entry.file_name();
+        let Some(filename_str) = filename.to_str() else {
+            continue;
+        };
+
+        let Ok((timestamp, _)) = parse_log_filename(filename_str) else {
+            continue;
+        };
+
+        parsed.push(ParsedLogEntry {
+            timestamp,
+            filename: filename_str.to_owned(),
+            path: entry.path(),
+        });
+    }
+
+    Ok(parsed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use std::fs;
 
     fn ts(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(y, mo, d, h, mi, s).unwrap()
@@ -120,5 +156,17 @@ mod tests {
         let earlier = generate_log_filename(ts(2026, 1, 1, 0, 0, 0), "aaa");
         let later = generate_log_filename(ts(2026, 12, 31, 23, 59, 59), "zzz");
         assert!(earlier < later);
+    }
+
+    #[test]
+    fn collect_log_entries_includes_only_valid_log_filenames() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("20260223T173000Z-valid.jsonl"), b"ok").unwrap();
+        fs::write(tmp.path().join("not-a-log.txt"), b"skip").unwrap();
+
+        let entries = collect_log_entries(tmp.path()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].filename, "20260223T173000Z-valid.jsonl");
+        assert_eq!(entries[0].timestamp, ts(2026, 2, 23, 17, 30, 0));
     }
 }

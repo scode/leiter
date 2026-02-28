@@ -12,7 +12,7 @@ use anyhow::Result;
 use chrono::Utc;
 
 use crate::frontmatter::parse_soul;
-use crate::log_filename::parse_log_filename;
+use crate::log_filename::collect_log_entries;
 use crate::paths;
 use crate::templates::NUDGE_MESSAGE;
 
@@ -26,23 +26,14 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
     let Ok((fm, _)) = parse_soul(&content) else {
         return Ok(());
     };
-    let Ok(entries) = fs::read_dir(&logs_dir) else {
+    let Ok(entries) = collect_log_entries(&logs_dir) else {
         return Ok(());
     };
 
     let cutoff = Utc::now() - chrono::Duration::hours(24);
 
     for entry in entries {
-        let Ok(entry) = entry else { continue };
-        let filename = entry.file_name();
-        let Some(filename_str) = filename.to_str() else {
-            continue;
-        };
-        let Ok((ts, _)) = parse_log_filename(filename_str) else {
-            continue;
-        };
-
-        if ts >= fm.last_distilled && ts < cutoff {
+        if entry.timestamp >= fm.last_distilled && entry.timestamp < cutoff {
             write!(out, "{NUDGE_MESSAGE}")?;
             return Ok(());
         }

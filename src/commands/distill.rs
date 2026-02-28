@@ -43,7 +43,7 @@ use serde_json::Value;
 
 use crate::errors::LeiterError;
 use crate::frontmatter::parse_soul;
-use crate::log_filename::parse_log_filename;
+use crate::log_filename::collect_log_entries;
 use crate::paths;
 use crate::templates::SOUL_WRITING_GUIDELINES;
 
@@ -67,40 +67,31 @@ pub fn run(state_dir: &Path, out: &mut impl Write, dry_run: bool) -> Result<()> 
     })?;
     let (fm, _) = parse_soul(&content)?;
 
-    let entries = fs::read_dir(&logs_dir)
+    let entries = collect_log_entries(&logs_dir)
         .with_context(|| format!("failed to read logs directory: {}", logs_dir.display()))?;
 
     let mut logs = Vec::new();
     let mut obsolete = Vec::new();
 
     for entry in entries {
-        let entry = entry?;
-        let filename = entry.file_name();
-        let Some(filename_str) = filename.to_str() else {
-            continue;
-        };
-
-        let Ok((ts, _session_id)) = parse_log_filename(filename_str) else {
-            continue;
-        };
-
-        if ts >= fm.last_distilled {
-            logs.push((ts, filename_str.to_string(), entry.path()));
+        if entry.timestamp >= fm.last_distilled {
+            logs.push(entry);
         } else {
-            obsolete.push((filename_str.to_string(), entry.path()));
+            obsolete.push(entry);
         }
     }
 
     if logs.is_empty() {
         writeln!(out, "No new session logs to process.")?;
     } else {
-        logs.sort_by_key(|(ts, _, _)| *ts);
+        logs.sort_by_key(|entry| entry.timestamp);
 
         write!(out, "{SOUL_WRITING_GUIDELINES}")?;
 
-        for (_, filename, path) in &logs {
-            let content = fs::read_to_string(path)
-                .with_context(|| format!("failed to read log file: {}", path.display()))?;
+        for entry in &logs {
+            let content = fs::read_to_string(&entry.path)
+                .with_context(|| format!("failed to read log file: {}", entry.path.display()))?;
+            let filename = &entry.filename;
             writeln!(out, "=== BEGIN SESSION {filename} ===\n")?;
             filter_session_log(&content, out)?;
             writeln!(out)?;
@@ -108,21 +99,21 @@ pub fn run(state_dir: &Path, out: &mut impl Write, dry_run: bool) -> Result<()> 
     }
 
     if !obsolete.is_empty() {
-        obsolete.sort_by(|(a, _), (b, _)| a.cmp(b));
+        obsolete.sort_by(|a, b| a.filename.cmp(&b.filename));
 
         if dry_run {
             writeln!(out, "Obsolete logs that would be deleted:")?;
-            for (filename, _) in &obsolete {
-                writeln!(out, "  {filename}")?;
+            for entry in &obsolete {
+                writeln!(out, "  {}", entry.filename)?;
             }
         } else {
-            for (filename, path) in &obsolete {
-                match fs::remove_file(path) {
+            for entry in &obsolete {
+                match fs::remove_file(&entry.path) {
                     Ok(()) => {
-                        tracing::debug!("deleted obsolete log: {filename}");
+                        tracing::debug!("deleted obsolete log: {}", entry.filename);
                     }
                     Err(e) => {
-                        tracing::warn!("failed to delete obsolete log {filename}: {e}");
+                        tracing::warn!("failed to delete obsolete log {}: {e}", entry.filename);
                     }
                 }
             }
