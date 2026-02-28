@@ -8,12 +8,27 @@ Allowed types: `feat`, `fix`, `docs`, `doc`, `perf`, `refactor`, `style`, `test`
 
 Scope is optional.
 
+Type must reflect user-visible behavior, not implementation activity. If the CLI interface or behavior changes (command
+names, flags/options, arguments, output contract, exit codes, or documented usage), use `feat`, `fix`, or `perf` (add
+`!` when breaking). Do not classify those as `refactor`.
+
+Use `refactor`, `style`, `test`, `chore`, `ci`, `docs`, and `doc` only when behavior is not user-visible.
+
 PR title enforcement is implemented in `.github/workflows/conventional-commit-pr-title.yml`.
 
 ## Changelog
 
 The changelog is generated with [git-cliff](https://git-cliff.org/) from Conventional Commit messages and lives at
 `CHANGELOG.md` in the repository root.
+
+By default, changelog entries include user-visible types (`feat`, `fix`, `perf`, `revert`) and exclude internal-only
+types (`refactor`, `style`, `test`, `chore`, `ci`, `docs`, `doc`).
+
+Override tags:
+
+- Add `[changelog include]` in the title, body, or footer to force inclusion.
+- Add `[changelog skip]` in the title, body, or footer to force exclusion.
+- If both tags are present, `[changelog skip]` wins.
 
 ## Releasing
 
