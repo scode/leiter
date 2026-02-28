@@ -120,9 +120,9 @@ fn log_level_warn_overrides_verbose() {
 }
 
 #[test]
-fn parses_instill() {
+fn parses_soul_instill() {
     leiter()
-        .args(["instill", "test preference"])
+        .args(["soul", "instill", "test preference"])
         .assert()
         .success();
 }

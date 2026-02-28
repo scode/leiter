@@ -109,21 +109,21 @@ append **(DONE)** to the step's header line.
 - [x] Audit test coverage: grep for all remaining references to the old and new command string across src/ and tests/;
       verify every code path that produces or checks the string is tested. Add missing tests if found
 - [x] Run `pre-pr-review-swarm`, address feedback
-- [ ] Create PR via `scode-graphite`, STOP
+- [x] Create PR via `scode-graphite`, STOP
 
 ## Step 6: Move `instill` → `soul instill` **(creates Soul group)**
 
-- [ ] Add `Soul` subcommand group to clap with `SoulCommand` enum containing `Instill { text: String }`
-- [ ] Update dispatch in `main.rs` to route `Soul(SoulCommand::Instill { text })` → `commands::instill::run`
-- [ ] Remove old `Instill` variant from top-level `Command` enum
-- [ ] Update template strings: `"leiter instill"` → `"leiter soul instill"` in `CONTEXT_PREAMBLE`
-- [ ] Update all tests referencing `"leiter instill"`
-- [ ] Update SPEC.md: all occurrences of `leiter instill` → `leiter soul instill`, rename section heading
-- [ ] Run checks (`dprint fmt`, `cargo fmt`, `cargo clippy`, `cargo test`)
-- [ ] Audit test coverage: grep for all remaining references to the old and new command string across src/ and tests/;
+- [x] Add `Soul` subcommand group to clap with `SoulCommand` enum containing `Instill { text: String }`
+- [x] Update dispatch in `main.rs` to route `Soul(SoulCommand::Instill { text })` → `commands::instill::run`
+- [x] Remove old `Instill` variant from top-level `Command` enum
+- [x] Update template strings: `"leiter instill"` → `"leiter soul instill"` in `CONTEXT_PREAMBLE`
+- [x] Update all tests referencing `"leiter instill"`
+- [x] Update SPEC.md: all occurrences of `leiter instill` → `leiter soul instill`, rename section heading
+- [x] Run checks (`dprint fmt`, `cargo fmt`, `cargo clippy`, `cargo test`)
+- [x] Audit test coverage: grep for all remaining references to the old and new command string across src/ and tests/;
       verify every code path that produces or checks the string is tested. Add missing tests if found
-- [ ] Run `pre-pr-review-swarm`, address feedback
-- [ ] Create PR via `scode-graphite`, STOP
+- [x] Run `pre-pr-review-swarm`, address feedback
+- [x] Create PR via `scode-graphite`, STOP
 
 ## Step 7: Move `distill` → `soul distill`
 

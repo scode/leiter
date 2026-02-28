@@ -41,15 +41,15 @@ pub enum Command {
         #[command(subcommand)]
         command: HookCommand,
     },
-    /// Output soul-writing instructions for a preference
-    Instill {
-        /// The preference or fact to remember
-        text: String,
-    },
     /// Setup and installation commands
     Setup {
         #[command(subcommand)]
         command: SetupCommand,
+    },
+    /// Soul management commands
+    Soul {
+        #[command(subcommand)]
+        command: SoulCommand,
     },
     /// Detect and output soul template migration instructions
     SoulUpgrade,
@@ -61,6 +61,15 @@ pub enum SetupCommand {
     Install,
     /// Remove leiter hooks from Claude Code
     Uninstall,
+}
+
+#[derive(Subcommand)]
+pub enum SoulCommand {
+    /// Output soul-writing instructions for a preference
+    Instill {
+        /// The preference or fact to remember
+        text: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -125,9 +134,11 @@ fn main() -> Result<()> {
         Command::Distill { dry_run } => {
             commands::distill::run(&state_dir, &mut std::io::stdout(), *dry_run)?;
         }
-        Command::Instill { text } => {
-            commands::instill::run(&state_dir, &mut std::io::stdout(), text)?;
-        }
+        Command::Soul { command } => match command {
+            SoulCommand::Instill { text } => {
+                commands::instill::run(&state_dir, &mut std::io::stdout(), text)?;
+            }
+        },
         Command::Setup { command } => match command {
             SetupCommand::Install => {
                 commands::agent_setup::run(&state_dir, &mut std::io::stdout())?;
