@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-02-28
+
+### Added
+
+- Add `leiter agent-uninstall` command (#40)
+- Add CLI restructuring plan (#42)
+
+### Changed
+
+- Clarify release confirmation step (#37)
+- Use prominent session separators in distill output (#39)
+- Honor LEITER_HOME in all runtime output (#41)
+- Move `context` → `hook context` (#43)
+- Move `nudge` → `hook nudge` (#44)
+- Move `session-end` → `hook session-end` (#45)
+- Move `agent-setup` → `setup install` (#46)
+- Move `agent-uninstall` → `setup uninstall` (#47)
+- Move `instill` → `soul instill` (#48)
+- Move distill under soul command (#49)
+- Move soul upgrade under soul group (#50)
+- Cleanup after CLI refactor (#51)
+- Rename setup command to claude (#52)
+
+### Removed
+
+- Delete obsolete logs during distill (#38)
+
 ## [0.2.0] - 2026-02-27
 
 ### Added
@@ -17,6 +44,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Drastically decrease token use through pre-processing (#31)
 - Require Conventional Commits style for PR titles (#32)
 - Honor LEITER_HOME sensibly (#33)
+- Release 0.2.0 (#36)
 
 ### Fixed
 
@@ -75,6 +103,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Set up homebrew/changelog/release (#28)
 - Release 0.1.1 (#29)
 
+[0.3.0]: https://github.com/scode/leiter/compare/v0.2.0..v0.3.0
 [0.2.0]: https://github.com/scode/leiter/compare/v0.1.1..v0.2.0
 [0.1.1]: https://github.com/scode/leiter/tree/v0.1.1
 
