@@ -1,4 +1,4 @@
-//! `leiter nudge` — remind the agent to suggest distillation when stale logs exist.
+//! `leiter hook nudge` — remind the agent to suggest distillation when stale logs exist.
 //!
 //! Checks for undistilled session logs older than 24 hours. If any exist,
 //! outputs a short nudge message. Otherwise outputs nothing (zero context

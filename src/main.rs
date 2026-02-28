@@ -50,8 +50,6 @@ pub enum Command {
         /// The preference or fact to remember
         text: String,
     },
-    /// Nudge about stale undistilled logs
-    Nudge,
     /// Handle the Claude Code SessionEnd hook
     SessionEnd,
     /// Detect and output soul template migration instructions
@@ -62,6 +60,8 @@ pub enum Command {
 pub enum HookCommand {
     /// Output soul content and agent instructions
     Context,
+    /// Nudge about stale undistilled logs
+    Nudge,
 }
 
 impl Cli {
@@ -108,15 +108,15 @@ fn main() -> Result<()> {
             HookCommand::Context => {
                 commands::context::run(&state_dir, &mut std::io::stdout())?;
             }
+            HookCommand::Nudge => {
+                commands::nudge::run(&state_dir, &mut std::io::stdout())?;
+            }
         },
         Command::Distill { dry_run } => {
             commands::distill::run(&state_dir, &mut std::io::stdout(), *dry_run)?;
         }
         Command::Instill { text } => {
             commands::instill::run(&state_dir, &mut std::io::stdout(), text)?;
-        }
-        Command::Nudge => {
-            commands::nudge::run(&state_dir, &mut std::io::stdout())?;
         }
         Command::SessionEnd => {
             commands::session_end::run(&state_dir, &mut std::io::stdin(), &mut std::io::stdout())?;

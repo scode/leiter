@@ -33,9 +33,9 @@ fn parses_distill() {
 }
 
 #[test]
-fn parses_nudge() {
+fn parses_hook_nudge() {
     // nudge reads ~/.leiter/soul.md which may not exist in sandboxed environments.
-    let assert = leiter().arg("nudge").assert();
+    let assert = leiter().args(["hook", "nudge"]).assert();
     assert.stderr(predicate::str::contains("unrecognized subcommand").not());
 }
 

@@ -191,7 +191,7 @@ fn nudge_outputs_nothing_when_no_stale_logs() {
     leiter(dir).arg("agent-setup").assert().success();
 
     leiter(dir)
-        .arg("nudge")
+        .args(["hook", "nudge"])
         .assert()
         .success()
         .stdout(predicate::str::is_empty());
@@ -209,7 +209,7 @@ fn nudge_outputs_message_when_stale_logs_exist() {
     fs::write(logs_dir.join(stale_filename), "stale log content\n").unwrap();
 
     leiter(dir)
-        .arg("nudge")
+        .args(["hook", "nudge"])
         .assert()
         .success()
         .stdout(predicate::str::contains("undistilled leiter session logs"));
@@ -295,7 +295,7 @@ fn agent_uninstall_outputs_hook_removal_instructions() {
         .assert()
         .success()
         .stdout(predicate::str::contains("leiter hook context"))
-        .stdout(predicate::str::contains("leiter nudge"))
+        .stdout(predicate::str::contains("leiter hook nudge"))
         .stdout(predicate::str::contains("leiter session-end"))
         .stdout(predicate::str::contains(format!("{}/", dir.display())))
         .stdout(predicate::str::contains("leiter agent-setup"));
