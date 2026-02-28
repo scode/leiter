@@ -32,6 +32,8 @@ pub struct Cli {
 pub enum Command {
     /// First-time setup
     AgentSetup,
+    /// Remove leiter hooks from Claude Code
+    AgentUninstall,
     /// Output soul content and agent instructions
     Context,
     /// Output new session logs for distillation
@@ -89,6 +91,9 @@ fn main() -> Result<()> {
     match &cli.command {
         Command::AgentSetup => {
             commands::agent_setup::run(&state_dir, &mut std::io::stdout())?;
+        }
+        Command::AgentUninstall => {
+            commands::agent_uninstall::run(&mut std::io::stdout())?;
         }
         Command::Context => {
             commands::context::run(&state_dir, &mut std::io::stdout())?;

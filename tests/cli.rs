@@ -16,6 +16,11 @@ fn parses_agent_setup() {
 }
 
 #[test]
+fn parses_agent_uninstall() {
+    leiter().arg("agent-uninstall").assert().success();
+}
+
+#[test]
 fn parses_context() {
     leiter().arg("context").assert().success();
 }
