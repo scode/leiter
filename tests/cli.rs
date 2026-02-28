@@ -180,6 +180,16 @@ fn parses_soul_instill() {
 }
 
 #[test]
+fn version_flag_prints_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    leiter(tmp.path())
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("leiter "));
+}
+
+#[test]
 fn unknown_subcommand_errors() {
     let tmp = tempfile::tempdir().unwrap();
     leiter(tmp.path())
