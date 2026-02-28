@@ -34,10 +34,10 @@ writing to the soul.
 │  User says "remember X" ──► agent calls leiter soul instill  │
 │                           ──► agent edits soul.md            │
 │                                                              │
-│  User says "distill" ──► agent calls leiter soul distill          │
-│                           ──► reads new logs                 │
-│                           ──► agent edits soul.md            │
-│                           ──► agent updates frontmatter      │
+│  User says "distill" ──► agent spawns sub-agent              │
+│                           ──► sub-agent: leiter soul distill │
+│                           ──► sub-agent edits soul.md        │
+│                        ──► agent: leiter soul mark-distilled │
 │                                                              │
 │  SessionEnd hook ──► leiter hook session-end                 │
 │                      ──► copies transcript to logs/          │
@@ -254,9 +254,11 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
    **Session transcripts:** Session transcripts are saved automatically by the SessionEnd hook. The agent does not need
    to do anything — no manual logging is required.
 
-   **Distillation command:** Must include the literal command `leiter soul distill`. Explain that this is user-triggered
-   (the user says "distill" or similar), outputs new session logs, and the agent should then update the soul with new
-   learnings and update `last_distilled` in the frontmatter to the current UTC ISO 8601 timestamp.
+   **Distillation command:** Must include the literal commands `leiter soul distill` and `leiter soul mark-distilled`.
+   Explain that distillation is user-triggered (the user says "distill" or similar). The agent should delegate the
+   actual distillation work to a sub-agent (which runs `leiter soul distill`, reads the output, and updates the soul),
+   then run `leiter soul mark-distilled` itself after the sub-agent succeeds. The agent must never manually edit
+   `last_distilled` in the frontmatter.
 
    **Soul upgrade command:** Must include the literal command `leiter soul upgrade`. Explain that this is user-triggered
    (the user says "upgrade the leiter soul" or similar) and outputs migration instructions if the soul template is
@@ -328,8 +330,21 @@ distillation and are no longer needed. It deletes them. If `--dry-run` is passed
 deleted instead of deleting them. Deletion is best-effort: failures are logged as warnings but do not fail the command.
 If there are no obsolete logs, nothing is printed about cleanup.
 
-After the agent processes the distill output and updates the soul, the agent is responsible for updating the
-`last_distilled` timestamp in the soul file's frontmatter to the current time.
+### `leiter soul mark-distilled`
+
+Sets `last_distilled` in the soul frontmatter to the current UTC time. This is the only way `last_distilled` should be
+updated — the agent must never edit it manually.
+
+**Behavior:**
+
+1. Read `~/.leiter/soul.md` and parse its frontmatter
+2. Set `last_distilled` to the current UTC time
+3. Write the soul back, preserving the body and all other frontmatter fields
+
+**Output (stdout):** A confirmation message including the exact timestamp that was set.
+
+**Errors:** If the soul file does not exist or its frontmatter cannot be parsed, exit with a non-zero code and an error
+message on stderr.
 
 ### `leiter soul instill <text>`
 
@@ -488,11 +503,9 @@ Fires once when the session terminates. The `leiter hook session-end` command re
 ### Distillation
 
 1. User says "distill my session logs" (or similar natural language)
-2. Agent runs `leiter soul distill`
-3. Agent receives all session logs since last distillation
-4. Agent reads current `~/.leiter/soul.md`
-5. Agent edits the soul to incorporate new learnings
-6. Agent updates `last_distilled` in the frontmatter to the current timestamp
+2. Agent spawns a sub-agent to handle distillation (keeps session log output out of the main context)
+3. Sub-agent runs `leiter soul distill`, reads the output, and updates the soul with new learnings
+4. After the sub-agent completes successfully, the main agent runs `leiter soul mark-distilled`
 
 ## Non-Goals (For Now)
 

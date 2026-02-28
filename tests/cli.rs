@@ -180,6 +180,16 @@ fn parses_soul_instill() {
 }
 
 #[test]
+fn parses_soul_mark_distilled() {
+    let tmp = tempfile::tempdir().unwrap();
+    leiter(tmp.path())
+        .args(["soul", "mark-distilled"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("soul file not found"));
+}
+
+#[test]
 fn version_flag_prints_version() {
     let tmp = tempfile::tempdir().unwrap();
     leiter(tmp.path())
