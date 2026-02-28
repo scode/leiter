@@ -26,9 +26,9 @@ types (`refactor`, `style`, `test`, `chore`, `ci`, `docs`, `doc`).
 
 Override tags:
 
-- Add `[changelog include]` in the title, body, or footer to force inclusion.
-- Add `[changelog skip]` in the title, body, or footer to force exclusion.
-- If both tags are present, `[changelog skip]` wins.
+- Add `changelog: include` in the commit body or footer to force inclusion.
+- Add `changelog: skip` in the commit body or footer to force exclusion.
+- If both tags are present, `changelog: skip` wins.
 
 ## Releasing
 
