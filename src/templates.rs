@@ -80,7 +80,7 @@ pub const SOUL_TEMPLATE_CHANGELOG: &[(u32, &str)] = &[
     ),
 ];
 
-/// Guidelines for writing soul entries, shared by `leiter instill` and
+/// Guidelines for writing soul entries, shared by `leiter soul instill` and
 /// `leiter distill`. Only emitted when the agent is actively writing to
 /// the soul — never in the session preamble.
 pub const SOUL_WRITING_GUIDELINES: &str = "\
@@ -128,7 +128,7 @@ pub fn context_preamble(state_dir: &Path) -> String {
          \n\
          Your soul file is at `{soul}`. Use your Read/Edit/Write tools to modify it directly.\n\
          \n\
-         When the user says \"remember\", \"learn\", \"instill\", \"always\", \"never\", or similar preference-setting language, run `leiter instill \"<what the user wants remembered>\"` and follow the instructions it outputs.\n\
+         When the user says \"remember\", \"learn\", \"instill\", \"always\", \"never\", or similar preference-setting language, run `leiter soul instill \"<what the user wants remembered>\"` and follow the instructions it outputs.\n\
          \n\
          Session transcripts are saved automatically when each session ends. No manual logging needed.\n\
          \n\
@@ -295,7 +295,7 @@ mod tests {
             "/test/state/soul.md",
             "leiter distill",
             "leiter soul-upgrade",
-            "leiter instill",
+            "leiter soul instill",
         ] {
             assert!(
                 preamble.contains(literal),

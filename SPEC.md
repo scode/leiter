@@ -16,7 +16,7 @@ The SessionEnd hook (rather than Stop) is used for session logging because Stop 
 end — which would block the agent on every response to write a log. SessionEnd fires once when the session actually
 terminates and provides the transcript path directly, so no agent involvement is needed to save it.
 
-The `leiter instill` and `leiter distill` commands share a single set of soul-writing guidelines (built into the
+The `leiter soul instill` and `leiter distill` commands share a single set of soul-writing guidelines (built into the
 binary). This ensures consistent entry quality across both learning paths — inline preferences and transcript
 distillation — while keeping normal session context minimal. The guidelines only appear when the agent is actively
 writing to the soul.
@@ -31,7 +31,7 @@ writing to the soul.
 │                                                              │
 │  ... normal session ...                                      │
 │                                                              │
-│  User says "remember X" ──► agent calls leiter instill       │
+│  User says "remember X" ──► agent calls leiter soul instill  │
 │                           ──► agent edits soul.md            │
 │                                                              │
 │  User says "distill" ──► agent calls leiter distill          │
@@ -238,8 +238,8 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
    Must tell the agent to use its Read/Edit/Write tools to modify this file directly.
 
    **When to instill preferences:** When the user says "remember", "learn", "instill", "always", "never", or similar
-   preference-setting language. The agent should run `leiter instill "<what the user wants remembered>"` and follow the
-   instructions it outputs.
+   preference-setting language. The agent should run `leiter soul instill "<what the user wants remembered>"` and follow
+   the instructions it outputs.
 
    **Session transcripts:** Session transcripts are saved automatically by the SessionEnd hook. The agent does not need
    to do anything — no manual logging is required.
@@ -320,7 +320,7 @@ If there are no obsolete logs, nothing is printed about cleanup.
 After the agent processes the distill output and updates the soul, the agent is responsible for updating the
 `last_distilled` timestamp in the soul file's frontmatter to the current time.
 
-### `leiter instill <text>`
+### `leiter soul instill <text>`
 
 Outputs agent instructions for adding a preference to the soul file. Called by the agent when the user expresses a
 preference ("remember", "learn", "instill", "always", "never", or similar language).
@@ -457,7 +457,7 @@ Fires once when the session terminates. The `leiter hook session-end` command re
 ### User Asks the Agent to Learn Something
 
 1. User says "learn to always use snake_case for Rust functions"
-2. Agent runs `leiter instill "always use snake_case for Rust functions"`
+2. Agent runs `leiter soul instill "always use snake_case for Rust functions"`
 3. Agent receives writing guidelines and the quoted preference
 4. Agent reads `~/.leiter/soul.md`
 5. Agent edits the appropriate section following the guidelines

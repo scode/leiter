@@ -1,4 +1,4 @@
-//! `leiter instill` — output soul-writing instructions for a user preference.
+//! `leiter soul instill` — output soul-writing instructions for a user preference.
 //!
 //! Takes the user's preference as a positional argument and outputs a
 //! self-contained instruction block: the quoted preference, shared

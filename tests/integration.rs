@@ -41,7 +41,7 @@ fn setup_install_then_context_injects_soul() {
         .success()
         .stdout(predicate::str::contains("Leiter is a self-training system"))
         .stdout(predicate::str::contains("# Communication Style"))
-        .stdout(predicate::str::contains("leiter instill"));
+        .stdout(predicate::str::contains("leiter soul instill"));
 }
 
 #[test]
@@ -216,14 +216,14 @@ fn nudge_outputs_message_when_stale_logs_exist() {
 }
 
 #[test]
-fn instill_outputs_guidelines_and_preference() {
+fn soul_instill_outputs_guidelines_and_preference() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
     leiter(dir).args(["setup", "install"]).assert().success();
 
     leiter(dir)
-        .args(["instill", "always use snake_case"])
+        .args(["soul", "instill", "always use snake_case"])
         .assert()
         .success()
         .stdout(predicate::str::contains("always use snake_case"))
