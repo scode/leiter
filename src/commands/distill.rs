@@ -5,9 +5,9 @@
 //! chronologically. The inclusive comparison ensures a log written in the same
 //! second as the distillation timestamp is not lost.
 //!
-//! After output, deletes log files with timestamps strictly before
-//! `last_distilled` (already processed by a prior distillation). With
-//! `--dry-run`, reports what would be deleted instead.
+//! After output, performs best-effort deletion of log files with timestamps
+//! strictly before `last_distilled` (already processed by a prior
+//! distillation). With `--dry-run`, reports what would be deleted instead.
 //!
 //! ## JSONL pre-processing
 //!
@@ -101,7 +101,7 @@ pub fn run(state_dir: &Path, out: &mut impl Write, dry_run: bool) -> Result<()> 
         for (_, filename, path) in &logs {
             let content = fs::read_to_string(path)
                 .with_context(|| format!("failed to read log file: {}", path.display()))?;
-            writeln!(out, "## {filename}\n")?;
+            writeln!(out, "=== BEGIN SESSION {filename} ===\n")?;
             filter_session_log(&content, out)?;
             writeln!(out)?;
         }
@@ -317,7 +317,7 @@ mod tests {
         write_log(tmp.path(), 2026, 1, 1, 0, "sess1", "content1");
 
         let output = run_distill(tmp.path());
-        assert!(output.contains("## 20260101T000000Z-sess1.jsonl"));
+        assert!(output.contains("=== BEGIN SESSION 20260101T000000Z-sess1.jsonl ==="));
     }
 
     #[test]
@@ -359,7 +359,9 @@ mod tests {
 
         let output = run_distill(tmp.path());
         let guidelines_pos = output.find("Soul-writing guidelines").unwrap();
-        let log_pos = output.find("## 20260101T000000Z-sess1.jsonl").unwrap();
+        let log_pos = output
+            .find("=== BEGIN SESSION 20260101T000000Z-sess1.jsonl ===")
+            .unwrap();
         assert!(guidelines_pos < log_pos);
     }
 
@@ -617,5 +619,22 @@ mod tests {
 
         run_distill(tmp.path());
         assert!(bad_path.exists(), "unparseable file must not be deleted");
+    }
+
+    #[test]
+    fn log_at_last_distilled_not_deleted() {
+        let tmp = setup_state_dir();
+        write_log(tmp.path(), 2026, 6, 1, 0, "exact", "exact content");
+        set_last_distilled(tmp.path(), 2026, 6, 1, 0);
+
+        let output = run_distill(tmp.path());
+        assert!(output.contains("exact content"));
+
+        let remaining: Vec<_> = fs::read_dir(paths::logs_dir(tmp.path()))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining[0].contains("exact"));
     }
 }

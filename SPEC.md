@@ -275,12 +275,12 @@ Outputs session logs that haven't been processed since the last distillation.
    same second as the distillation timestamp is not lost — this matters because the distillation flow has the agent
    write a session log immediately before running `leiter distill`, and the two timestamps could collide
 3. Sort matching files chronologically
-4. Output their contents, each preceded by a header with the filename
+4. Output their contents, each preceded by a prominent separator: `=== BEGIN SESSION <filename> ===`
 
 **Output (stdout):**
 
 - If new logs exist: soul-writing guidelines (emitted once, before the first log entry) followed by the pre-processed
-  content of all new session log files, with filename headers separating each entry
+  content of all new session log files, each preceded by a `=== BEGIN SESSION <filename> ===` separator
 - If no new logs: a message indicating there are no new session logs to process
 
 **Log pre-processing:** JSONL session logs are pre-processed to extract user-visible content — user messages and
