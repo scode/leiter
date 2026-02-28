@@ -16,8 +16,8 @@ The SessionEnd hook (rather than Stop) is used for session logging because Stop 
 end — which would block the agent on every response to write a log. SessionEnd fires once when the session actually
 terminates and provides the transcript path directly, so no agent involvement is needed to save it.
 
-The `leiter soul instill` and `leiter distill` commands share a single set of soul-writing guidelines (built into the
-binary). This ensures consistent entry quality across both learning paths — inline preferences and transcript
+The `leiter soul instill` and `leiter soul distill` commands share a single set of soul-writing guidelines (built into
+the binary). This ensures consistent entry quality across both learning paths — inline preferences and transcript
 distillation — while keeping normal session context minimal. The guidelines only appear when the agent is actively
 writing to the soul.
 
@@ -34,7 +34,7 @@ writing to the soul.
 │  User says "remember X" ──► agent calls leiter soul instill  │
 │                           ──► agent edits soul.md            │
 │                                                              │
-│  User says "distill" ──► agent calls leiter distill          │
+│  User says "distill" ──► agent calls leiter soul distill          │
 │                           ──► reads new logs                 │
 │                           ──► agent edits soul.md            │
 │                           ──► agent updates frontmatter      │
@@ -80,7 +80,7 @@ setup_hard_epoch: 1
 (soul content here — see Soul Template)
 ```
 
-- `last_distilled`: timestamp used by `leiter distill` to determine which session logs are new
+- `last_distilled`: timestamp used by `leiter soul distill` to determine which session logs are new
 - `soul_version`: integer matching the version of the soul template used to create this file, used by
   `leiter soul-upgrade` to detect drift
 - `setup_soft_epoch`: integer tracking the soft setup epoch. When the binary's expected soft epoch doesn't match the
@@ -244,8 +244,8 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
    **Session transcripts:** Session transcripts are saved automatically by the SessionEnd hook. The agent does not need
    to do anything — no manual logging is required.
 
-   **Distillation command:** Must include the literal command `leiter distill`. Explain that this is user-triggered (the
-   user says "distill" or similar), outputs new session logs, and the agent should then update the soul with new
+   **Distillation command:** Must include the literal command `leiter soul distill`. Explain that this is user-triggered
+   (the user says "distill" or similar), outputs new session logs, and the agent should then update the soul with new
    learnings and update `last_distilled` in the frontmatter to the current UTC ISO 8601 timestamp.
 
    **Soul upgrade command:** Must include the literal command `leiter soul-upgrade`. Explain that this is user-triggered
@@ -286,7 +286,7 @@ and are ignored):
 **Errors:** If `~/.leiter/logs/` does not exist, the transcript file cannot be read, the write fails, or the atomic
 rename fails, print an error to stderr and exit with a non-zero code. Clean up the temporary file on any error.
 
-### `leiter distill`
+### `leiter soul distill`
 
 Outputs session logs that haven't been processed since the last distillation.
 
@@ -296,7 +296,7 @@ Outputs session logs that haven't been processed since the last distillation.
 2. Scan `~/.leiter/logs/` for files whose filename timestamps (the `YYYYMMDDTHHMMSSZ` prefix, ignoring the session ID
    suffix) are newer than or equal to `last_distilled`. The inclusive comparison (>=) ensures that a log written in the
    same second as the distillation timestamp is not lost — this matters because the distillation flow has the agent
-   write a session log immediately before running `leiter distill`, and the two timestamps could collide
+   write a session log immediately before running `leiter soul distill`, and the two timestamps could collide
 3. Sort matching files chronologically
 4. Output their contents, each preceded by a prominent separator: `=== BEGIN SESSION <filename> ===`
 
@@ -330,8 +330,8 @@ preference ("remember", "learn", "instill", "always", "never", or similar langua
 **Output (stdout):**
 
 1. The user's preference, quoted for clarity
-2. Soul-writing guidelines (shared with `leiter distill`) covering entry format, specificity, placement, contradiction
-   resolution, and examples
+2. Soul-writing guidelines (shared with `leiter soul distill`) covering entry format, specificity, placement,
+   contradiction resolution, and examples
 3. Instruction to read `~/.leiter/soul.md` and edit the appropriate section
 
 See the Architecture section for why guidelines are shared between `instill` and `distill`.
@@ -345,7 +345,7 @@ Checks for stale undistilled session logs and outputs a nudge if any exist. Call
 
 1. Read `last_distilled` timestamp from `~/.leiter/soul.md` frontmatter
 2. Scan `~/.leiter/logs/` for files whose filename timestamps are >= `last_distilled` (same inclusive comparison as
-   `leiter distill`)
+   `leiter soul distill`)
 3. If any such file has a timestamp older than 24 hours ago (`now - 24h`): output a nudge message (defined in source
    code)
 4. Otherwise: output nothing
@@ -476,7 +476,7 @@ Fires once when the session terminates. The `leiter hook session-end` command re
 ### Distillation
 
 1. User says "distill my session logs" (or similar natural language)
-2. Agent runs `leiter distill`
+2. Agent runs `leiter soul distill`
 3. Agent receives all session logs since last distillation
 4. Agent reads current `~/.leiter/soul.md`
 5. Agent edits the soul to incorporate new learnings

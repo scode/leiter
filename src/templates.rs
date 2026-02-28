@@ -81,7 +81,7 @@ pub const SOUL_TEMPLATE_CHANGELOG: &[(u32, &str)] = &[
 ];
 
 /// Guidelines for writing soul entries, shared by `leiter soul instill` and
-/// `leiter distill`. Only emitted when the agent is actively writing to
+/// `leiter soul distill`. Only emitted when the agent is actively writing to
 /// the soul — never in the session preamble.
 pub const SOUL_WRITING_GUIDELINES: &str = "\
 ## Soul-writing guidelines
@@ -132,7 +132,7 @@ pub fn context_preamble(state_dir: &Path) -> String {
          \n\
          Session transcripts are saved automatically when each session ends. No manual logging needed.\n\
          \n\
-         When the user asks to distill session logs, run `leiter distill`. This outputs new session logs. Read through them, update the soul with new learnings, then update `last_distilled` in the soul file's frontmatter to the current UTC ISO 8601 timestamp (e.g., 2026-02-23T17:00:00Z).\n\
+         When the user asks to distill session logs, run `leiter soul distill`. This outputs new session logs. Read through them, update the soul with new learnings, then update `last_distilled` in the soul file's frontmatter to the current UTC ISO 8601 timestamp (e.g., 2026-02-23T17:00:00Z).\n\
          \n\
          When the user asks to upgrade the leiter soul, run `leiter soul-upgrade`. If the soul template is outdated, this outputs migration instructions and the new template. Follow the instructions to restructure the soul while preserving all learned preferences.\n\
          \n\
@@ -293,7 +293,7 @@ mod tests {
         let preamble = context_preamble(Path::new("/test/state"));
         for literal in [
             "/test/state/soul.md",
-            "leiter distill",
+            "leiter soul distill",
             "leiter soul-upgrade",
             "leiter soul instill",
         ] {

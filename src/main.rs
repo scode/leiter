@@ -30,12 +30,6 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Output new session logs for distillation
-    Distill {
-        /// Report obsolete files without deleting them
-        #[arg(long)]
-        dry_run: bool,
-    },
     /// Claude Code hook commands
     Hook {
         #[command(subcommand)]
@@ -69,6 +63,12 @@ pub enum SoulCommand {
     Instill {
         /// The preference or fact to remember
         text: String,
+    },
+    /// Output new session logs for distillation
+    Distill {
+        /// Report obsolete files without deleting them
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -131,12 +131,12 @@ fn main() -> Result<()> {
                 )?;
             }
         },
-        Command::Distill { dry_run } => {
-            commands::distill::run(&state_dir, &mut std::io::stdout(), *dry_run)?;
-        }
         Command::Soul { command } => match command {
             SoulCommand::Instill { text } => {
                 commands::instill::run(&state_dir, &mut std::io::stdout(), text)?;
+            }
+            SoulCommand::Distill { dry_run } => {
+                commands::distill::run(&state_dir, &mut std::io::stdout(), *dry_run)?;
             }
         },
         Command::Setup { command } => match command {
