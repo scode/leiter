@@ -22,7 +22,7 @@ body = """
 {% for group, commits in commits | group_by(attribute="group") %}
     ### {{ group | upper_first }}
     {% for commit in commits %}
-        - {{ commit.message | split(pat="\n") | first | replace(from="[changelog include]", to="") | replace(from="[changelog skip]", to="") | upper_first | trim }}\
+        - {{ commit.message | split(pat="\n") | first | replace(from="changelog: include", to="") | replace(from="changelog: skip", to="") | upper_first | trim }}\
     {% endfor %}
 {% endfor %}\n
 """
@@ -60,12 +60,12 @@ filter_unconventional = true
 # Assigns commits to groups.
 # Optionally sets the commit's scope and can decide to exclude commits from further processing.
 commit_parsers = [
-  { message = "(?i)\\[changelog skip\\]", skip = true },
-  { body = "(?i)\\[changelog skip\\]", skip = true },
-  { footer = "(?i)\\[changelog skip\\]", skip = true },
-  { message = "(?i)\\[changelog include\\]", group = "Changed" },
-  { body = "(?i)\\[changelog include\\]", group = "Changed" },
-  { footer = "(?i)\\[changelog include\\]", group = "Changed" },
+  { message = "(?i)\\bchangelog\\s*:\\s*skip\\b", skip = true },
+  { body = "(?i)\\bchangelog\\s*:\\s*skip\\b", skip = true },
+  { footer = "(?i)\\bchangelog\\s*:\\s*skip\\b", skip = true },
+  { message = "(?i)\\bchangelog\\s*:\\s*include\\b", group = "Changed" },
+  { body = "(?i)\\bchangelog\\s*:\\s*include\\b", group = "Changed" },
+  { footer = "(?i)\\bchangelog\\s*:\\s*include\\b", group = "Changed" },
   { message = "^feat(\\([^\\)]+\\))?!?:", group = "Added" },
   { message = "^fix(\\([^\\)]+\\))?!?:", group = "Fixed" },
   { message = "^perf(\\([^\\)]+\\))?!?:", group = "Performance" },
