@@ -283,6 +283,22 @@ fn distill_deletes_obsolete_logs() {
 }
 
 #[test]
+fn agent_uninstall_outputs_hook_removal_instructions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    leiter(dir)
+        .arg("agent-uninstall")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("leiter context"))
+        .stdout(predicate::str::contains("leiter nudge"))
+        .stdout(predicate::str::contains("leiter session-end"))
+        .stdout(predicate::str::contains("~/.leiter/"))
+        .stdout(predicate::str::contains("leiter agent-setup"));
+}
+
+#[test]
 fn soul_upgrade_reports_up_to_date_after_setup() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();

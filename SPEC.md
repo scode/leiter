@@ -187,6 +187,23 @@ If any deterministic step fails, the output instructs the agent to relay the err
 This command is designed to be run inside a Claude Code session where the agent acts on the output. If run outside a
 session, the user sees the instructions and can paste them into a session or apply them manually.
 
+### `leiter agent-uninstall`
+
+Outputs natural language instructions for the agent to remove leiter hooks from `~/.claude/settings.json`. Makes no
+filesystem changes — the command only emits instructions.
+
+**Output (stdout):** Instructions telling the agent to:
+
+1. Read `~/.claude/settings.json`
+2. Find and remove hook entries whose commands contain `"leiter context"`, `"leiter nudge"`, or `"leiter session-end"`
+   (the same detection strings used by `agent-setup`)
+3. If a hook group becomes empty after removal, remove the entire group object from its parent array
+4. If a `SessionStart` or `SessionEnd` array becomes empty, remove it from the `hooks` object
+5. Preserve all non-leiter hooks
+6. Use the Edit tool to make changes
+7. If no leiter hooks are found, report that hooks are already removed
+8. After hook removal, tell the user how to fully clean up (`~/.leiter/` and the binary) and how to re-enable leiter
+
 ### `leiter context`
 
 Outputs the soul content and agent instructions. Called by the SessionStart hook.

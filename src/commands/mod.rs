@@ -1,4 +1,5 @@
 pub mod agent_setup;
+pub mod agent_uninstall;
 pub mod context;
 pub mod distill;
 pub mod instill;

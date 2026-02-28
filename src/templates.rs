@@ -163,6 +163,29 @@ version.
 from empty sections.
 ";
 
+/// Instructions output by `leiter agent-uninstall` telling the agent how to
+/// remove leiter hooks from `~/.claude/settings.json`.
+pub const AGENT_UNINSTALL_INSTRUCTIONS: &str = r#"Remove leiter hooks from Claude Code by editing `~/.claude/settings.json`.
+
+Read `~/.claude/settings.json`.
+
+Find and remove all hook entries whose `command` field contains `"leiter context"`, `"leiter nudge"`, or `"leiter session-end"`.
+
+If removing leiter hooks causes a hook group object's `hooks` array to become empty, remove the entire group object from its parent array (e.g., from the `SessionStart` or `SessionEnd` array).
+
+If a `SessionStart` or `SessionEnd` array becomes empty after removing all its groups, remove that key from the `hooks` object entirely.
+
+Preserve all non-leiter hooks exactly as they are.
+
+Use your Edit tool to make the changes to `~/.claude/settings.json`.
+
+If no leiter hooks are found, report that leiter hooks are already removed.
+
+After removing hooks, tell the user:
+- To completely remove leiter, delete `~/.leiter/` (this removes the soul and all session logs) and uninstall the binary.
+- To re-enable leiter later, paste the following into a Claude Code session: Run the shell command `leiter agent-setup` and follow the instructions it outputs on stdout.
+"#;
+
 /// Instructions output by `leiter agent-setup` telling the agent how to
 /// configure Claude Code hooks in `~/.claude/settings.json`.
 pub const AGENT_SETUP_INSTRUCTIONS: &str = r#"Configure Claude Code hooks for leiter by editing `~/.claude/settings.json`.
@@ -336,6 +359,29 @@ mod tests {
         assert!(SOUL_UPGRADE_INSTRUCTIONS.contains("Migration instructions"));
         assert!(SOUL_UPGRADE_INSTRUCTIONS.contains("soul_version"));
         assert!(SOUL_UPGRADE_INSTRUCTIONS.contains("~/.leiter/soul.md"));
+    }
+
+    #[test]
+    fn agent_uninstall_instructions_contain_hook_detection_strings() {
+        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("leiter context"));
+        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("leiter nudge"));
+        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("leiter session-end"));
+    }
+
+    #[test]
+    fn agent_uninstall_instructions_contain_cleanup_guidance() {
+        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("~/.leiter/"));
+        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("leiter agent-setup"));
+    }
+
+    #[test]
+    fn agent_uninstall_instructions_contain_spec_required_clauses() {
+        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("hook group"));
+        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("empty"));
+        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("SessionStart"));
+        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("SessionEnd"));
+        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("non-leiter hooks"));
+        assert!(AGENT_UNINSTALL_INSTRUCTIONS.contains("already removed"));
     }
 
     #[test]
