@@ -1,4 +1,4 @@
-//! Path construction for the `~/.leiter/` state directory.
+//! Path construction for the leiter state directory.
 //!
 //! All leiter state lives under a single directory. These functions build the
 //! canonical paths. Commands receive the state directory as a parameter so
@@ -12,7 +12,7 @@ use crate::errors::LeiterError;
 ///
 /// Checks `LEITER_HOME` first — when set, it points directly to the state
 /// directory (no `.leiter/` suffix appended). Falls back to
-/// `~/.leiter/`. This is the only function that consults runtime environment
+/// `$HOME/.leiter/`. This is the only function that consults runtime environment
 /// state — everything else is pure path construction.
 pub fn state_dir() -> Result<PathBuf, LeiterError> {
     if let Ok(dir) = std::env::var("LEITER_HOME") {

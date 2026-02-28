@@ -15,7 +15,7 @@ use crate::errors::LeiterError;
 use crate::frontmatter::parse_soul;
 use crate::paths;
 use crate::templates::{
-    SOUL_TEMPLATE, SOUL_TEMPLATE_CHANGELOG, SOUL_TEMPLATE_VERSION, SOUL_UPGRADE_INSTRUCTIONS,
+    SOUL_TEMPLATE, SOUL_TEMPLATE_CHANGELOG, SOUL_TEMPLATE_VERSION, soul_upgrade_instructions,
 };
 
 /// Run the soul-upgrade command.
@@ -63,7 +63,7 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
     }
     writeln!(out)?;
 
-    write!(out, "{SOUL_UPGRADE_INSTRUCTIONS}")?;
+    write!(out, "{}", soul_upgrade_instructions(state_dir))?;
 
     Ok(())
 }

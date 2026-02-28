@@ -15,7 +15,7 @@ use tracing::warn;
 
 use crate::frontmatter::parse_soul;
 use crate::paths;
-use crate::templates::{CONTEXT_PREAMBLE, SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
+use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH, context_preamble};
 
 /// Run the context command.
 ///
@@ -82,7 +82,7 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
         warn!("failed to parse soul frontmatter; skipping epoch checks");
     }
 
-    write!(out, "{CONTEXT_PREAMBLE}{soul_content}")?;
+    write!(out, "{}{soul_content}", context_preamble(state_dir))?;
 
     Ok(())
 }
@@ -121,7 +121,7 @@ mod tests {
     fn with_soul_output_starts_with_preamble() {
         let tmp = tempfile::tempdir().unwrap();
         let output = setup_and_context(tmp.path());
-        assert!(output.starts_with(CONTEXT_PREAMBLE));
+        assert!(output.starts_with(&context_preamble(tmp.path())));
     }
 
     #[test]
@@ -136,7 +136,8 @@ mod tests {
     fn preamble_contains_required_elements() {
         let tmp = tempfile::tempdir().unwrap();
         let output = setup_and_context(tmp.path());
-        assert!(output.contains("~/.leiter/soul.md"));
+        let soul_path = paths::soul_path(tmp.path()).display().to_string();
+        assert!(output.contains(&soul_path));
         assert!(output.contains("Read/Edit/Write"));
         assert!(output.contains("remember"));
         assert!(output.contains("session log"));
@@ -167,7 +168,7 @@ mod tests {
         let output = run_context(tmp.path());
         assert!(output.contains("ACTION REQUIRED"));
         assert!(output.contains("leiter agent-setup"));
-        assert!(!output.contains(CONTEXT_PREAMBLE));
+        assert!(!output.contains(&context_preamble(tmp.path())));
     }
 
     #[test]
@@ -177,7 +178,7 @@ mod tests {
         let output = run_context(tmp.path());
         assert!(output.contains("ACTION REQUIRED"));
         assert!(output.contains("binary is outdated"));
-        assert!(!output.contains(CONTEXT_PREAMBLE));
+        assert!(!output.contains(&context_preamble(tmp.path())));
     }
 
     #[test]
@@ -191,7 +192,7 @@ mod tests {
         let output = run_context(tmp.path());
         assert!(output.contains("setup is slightly behind"));
         assert!(output.contains("leiter agent-setup"));
-        assert!(output.contains(CONTEXT_PREAMBLE));
+        assert!(output.contains(&context_preamble(tmp.path())));
     }
 
     #[test]
@@ -201,7 +202,7 @@ mod tests {
         let output = run_context(tmp.path());
         assert!(output.contains("binary is slightly behind"));
         assert!(output.contains("upgrade leiter"));
-        assert!(output.contains(CONTEXT_PREAMBLE));
+        assert!(output.contains(&context_preamble(tmp.path())));
     }
 
     #[test]
@@ -210,6 +211,6 @@ mod tests {
         let output = setup_and_context(tmp.path());
         assert!(!output.contains("incompatible"));
         assert!(!output.contains("slightly behind"));
-        assert!(output.starts_with(CONTEXT_PREAMBLE));
+        assert!(output.starts_with(&context_preamble(tmp.path())));
     }
 }

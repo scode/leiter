@@ -11,13 +11,14 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use crate::paths;
 use crate::templates::SOUL_WRITING_GUIDELINES;
 
 /// Run the instill command.
 ///
 /// Outputs the user's preference (quoted), the shared soul-writing
-/// guidelines, and an instruction to edit `~/.leiter/soul.md`.
-pub fn run(_state_dir: &Path, out: &mut impl Write, text: &str) -> Result<()> {
+/// guidelines, and an instruction to edit the soul file.
+pub fn run(state_dir: &Path, out: &mut impl Write, text: &str) -> Result<()> {
     writeln!(out, "The user wants you to remember:\n")?;
     for line in text.lines() {
         writeln!(out, "> {line}")?;
@@ -26,7 +27,8 @@ pub fn run(_state_dir: &Path, out: &mut impl Write, text: &str) -> Result<()> {
     write!(out, "{SOUL_WRITING_GUIDELINES}")?;
     writeln!(
         out,
-        "Now read `~/.leiter/soul.md` and edit the appropriate section following the guidelines above."
+        "Now read `{}` and edit the appropriate section following the guidelines above.",
+        paths::soul_path(state_dir).display()
     )?;
 
     Ok(())
@@ -38,7 +40,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn run_instill(text: &str) -> String {
-        let dir = PathBuf::from("/unused");
+        let dir = PathBuf::from("/test/state");
         let mut out = Vec::new();
         run(&dir, &mut out, text).unwrap();
         String::from_utf8(out).unwrap()
@@ -59,7 +61,7 @@ mod tests {
     #[test]
     fn output_contains_edit_instruction() {
         let output = run_instill("test preference");
-        assert!(output.contains("~/.leiter/soul.md"));
+        assert!(output.contains("/test/state/soul.md"));
         assert!(output.contains("edit the appropriate section"));
     }
 

@@ -93,7 +93,7 @@ fn main() -> Result<()> {
             commands::agent_setup::run(&state_dir, &mut std::io::stdout())?;
         }
         Command::AgentUninstall => {
-            commands::agent_uninstall::run(&mut std::io::stdout())?;
+            commands::agent_uninstall::run(&state_dir, &mut std::io::stdout())?;
         }
         Command::Context => {
             commands::context::run(&state_dir, &mut std::io::stdout())?;
