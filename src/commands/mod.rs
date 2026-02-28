@@ -6,3 +6,6 @@ pub mod instill;
 pub mod nudge;
 pub mod session_end;
 pub mod soul_upgrade;
+
+#[cfg(test)]
+pub mod test_support;

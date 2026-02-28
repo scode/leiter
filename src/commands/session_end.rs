@@ -60,16 +60,10 @@ pub fn run(state_dir: &Path, input: &mut impl Read, out: &mut impl Write) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent_setup;
+    use crate::commands::test_support::{bytes_to_string, setup_state_dir};
     use crate::log_filename::parse_log_filename;
     use std::fs;
     use std::io::Cursor;
-
-    fn setup_state_dir() -> tempfile::TempDir {
-        let tmp = tempfile::tempdir().unwrap();
-        agent_setup::run(tmp.path(), &mut Vec::new()).unwrap();
-        tmp
-    }
 
     fn run_session_end(state_dir: &Path, session_id: &str, transcript_path: &str) -> String {
         let json = serde_json::json!({
@@ -79,7 +73,7 @@ mod tests {
         let mut input = Cursor::new(json.to_string().into_bytes());
         let mut out = Vec::new();
         run(state_dir, &mut input, &mut out).unwrap();
-        String::from_utf8(out).unwrap()
+        bytes_to_string(out)
     }
 
     #[test]

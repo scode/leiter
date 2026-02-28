@@ -71,19 +71,13 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent_setup;
+    use crate::commands::test_support::{bytes_to_string, setup_state_dir};
     use crate::frontmatter::serialize_soul;
-
-    fn setup_state_dir() -> tempfile::TempDir {
-        let tmp = tempfile::tempdir().unwrap();
-        agent_setup::run(tmp.path(), &mut Vec::new()).unwrap();
-        tmp
-    }
 
     fn run_upgrade(state_dir: &Path) -> String {
         let mut out = Vec::new();
         run(state_dir, &mut out).unwrap();
-        String::from_utf8(out).unwrap()
+        bytes_to_string(out)
     }
 
     fn set_soul_version(state_dir: &Path, version: u32) {
