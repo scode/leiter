@@ -22,7 +22,7 @@ body = """
 {% for group, commits in commits | group_by(attribute="group") %}
     ### {{ group | upper_first }}
     {% for commit in commits %}
-        - {{ commit.message | split(pat="\n") | first | upper_first | trim }}\
+        - {{ commit.message | split(pat="\n") | first | replace(from="[changelog include]", to="") | replace(from="[changelog skip]", to="") | upper_first | trim }}\
     {% endfor %}
 {% endfor %}\n
 """
@@ -55,25 +55,25 @@ trim = true
 # See https://www.conventionalcommits.org
 conventional_commits = true
 # Exclude commits that do not match the conventional commits specification.
-filter_unconventional = false
+filter_unconventional = true
 # An array of regex based parsers for extracting data from the commit message.
 # Assigns commits to groups.
 # Optionally sets the commit's scope and can decide to exclude commits from further processing.
 commit_parsers = [
-  { message = "^[a|A]dd", group = "Added" },
-  { message = "^[s|S]upport", group = "Added" },
-  { message = "^[r|R]emove", group = "Removed" },
-  { message = "^.*: add", group = "Added" },
-  { message = "^.*: support", group = "Added" },
-  { message = "^.*: remove", group = "Removed" },
-  { message = "^.*: delete", group = "Removed" },
-  { message = "^test", group = "Fixed" },
-  { message = "^fix", group = "Fixed" },
-  { message = "^.*: fix", group = "Fixed" },
-  { message = "^.*", group = "Changed" },
+  { message = "(?i)\\[changelog skip\\]", skip = true },
+  { body = "(?i)\\[changelog skip\\]", skip = true },
+  { footer = "(?i)\\[changelog skip\\]", skip = true },
+  { message = "(?i)\\[changelog include\\]", group = "Changed" },
+  { body = "(?i)\\[changelog include\\]", group = "Changed" },
+  { footer = "(?i)\\[changelog include\\]", group = "Changed" },
+  { message = "^feat(\\([^\\)]+\\))?!?:", group = "Added" },
+  { message = "^fix(\\([^\\)]+\\))?!?:", group = "Fixed" },
+  { message = "^perf(\\([^\\)]+\\))?!?:", group = "Performance" },
+  { message = "^revert(\\([^\\)]+\\))?!?:", group = "Reverted" },
+  { message = "^(docs|doc|refactor|style|test|chore|ci)(\\([^\\)]+\\))?!?:", skip = true },
 ]
 # Prevent commits that are breaking from being excluded by commit parsers.
-filter_commits = false
+filter_commits = true
 # Order releases topologically instead of chronologically.
 topo_order = false
 # Order of commits in each group/release within the changelog.
