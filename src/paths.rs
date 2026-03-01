@@ -16,7 +16,8 @@ use crate::errors::LeiterError;
 /// state — everything else is pure path construction.
 pub fn state_dir() -> Result<PathBuf, LeiterError> {
     if let Ok(dir) = std::env::var("LEITER_HOME") {
-        return Ok(PathBuf::from(dir));
+        // Absolutize so permission_path always sees an absolute path.
+        return std::path::absolute(&dir).map_err(|e| LeiterError::StateDir(dir, e));
     }
     Ok(dirs::home_dir()
         .ok_or(LeiterError::HomeNotFound)?
@@ -38,6 +39,28 @@ pub fn default_claude_home() -> Result<PathBuf, LeiterError> {
     Ok(dirs::home_dir()
         .ok_or(LeiterError::HomeNotFound)?
         .join(".claude"))
+}
+
+/// Format a path for use in Claude Code `permissions.allow` entries.
+///
+/// Claude Code uses gitignore-style path matching in permission rules:
+/// `~/path` for home-relative, `//path` for absolute filesystem paths,
+/// and `/path` for project-relative. Paths under `$HOME` become `~/...`;
+/// all others become `//...`.
+pub fn permission_path(path: &Path) -> String {
+    permission_path_with_home(path, dirs::home_dir().as_deref())
+}
+
+fn permission_path_with_home(path: &Path, home: Option<&Path>) -> String {
+    if let Some(home) = home
+        && let Ok(relative) = path.strip_prefix(home)
+    {
+        return format!("~/{}", relative.display());
+    }
+    // Absolute paths: `/ + /opt/...` = `//opt/...` (gitignore absolute).
+    // state_dir() guarantees absolute paths, so this branch always gets one.
+    debug_assert!(path.is_absolute(), "permission_path expects absolute input");
+    format!("/{}", path.display())
 }
 
 /// Path to a specific skill directory (`<claude_home>/skills/<name>/`).
@@ -87,5 +110,34 @@ mod tests {
     fn claude_paths_are_under_claude_home() {
         let ch = fake_claude_home();
         assert!(skill_dir(ch, "test").starts_with(ch));
+    }
+
+    #[test]
+    fn permission_path_under_home_uses_tilde() {
+        let home = Path::new("/Users/alice");
+        let path = Path::new("/Users/alice/.leiter/soul.md");
+        assert_eq!(
+            permission_path_with_home(path, Some(home)),
+            "~/.leiter/soul.md"
+        );
+    }
+
+    #[test]
+    fn permission_path_outside_home_uses_double_slash() {
+        let home = Path::new("/Users/alice");
+        let path = Path::new("/opt/leiter/soul.md");
+        assert_eq!(
+            permission_path_with_home(path, Some(home)),
+            "//opt/leiter/soul.md"
+        );
+    }
+
+    #[test]
+    fn permission_path_no_home_uses_double_slash() {
+        let path = Path::new("/opt/leiter/soul.md");
+        assert_eq!(
+            permission_path_with_home(path, None),
+            "//opt/leiter/soul.md"
+        );
     }
 }
