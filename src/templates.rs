@@ -337,7 +337,7 @@ description: Configure Claude Code hooks and permissions for leiter (first-time 
 user_invocable: true
 ---
 
-Run `leiter claude agent-setup-instructions` and follow the output to configure hooks in `~/.claude/settings.json`.
+Run the exact command `leiter claude agent-setup-instructions` (the `leiter` binary is already installed in PATH — do NOT use `cargo run` or any other way to invoke it) and follow the output to configure hooks in `~/.claude/settings.json`.
 
 <!-- SCODE_LEITER_INSTALLED -->
 ";
@@ -348,6 +348,8 @@ pub const SKILL_DISTILL: &str = "\
 description: Distill session logs into the leiter soul
 user_invocable: true
 ---
+
+All `leiter` commands below refer to the installed binary in PATH. Do NOT use `cargo run` or any other way to invoke it.
 
 Spawn a **sub-agent** (via the Agent tool) to handle distillation. The sub-agent should: run `leiter soul distill`, read through the output, and update the soul with new learnings — but NOT update `last_distilled` (the main agent handles that).
 
@@ -365,7 +367,7 @@ description: \"Record a preference in the leiter soul. Trigger keywords: remembe
 user_invocable: true
 ---
 
-Run `leiter soul instill \"<the preference or fact to remember>\"` and follow the instructions it outputs to update the soul file.
+Run the exact command `leiter soul instill \"<the preference or fact to remember>\"` (the `leiter` binary is already installed in PATH — do NOT use `cargo run` or any other way to invoke it) and follow the instructions it outputs to update the soul file.
 
 <!-- SCODE_LEITER_INSTALLED -->
 ";
@@ -377,7 +379,7 @@ description: Remove leiter hooks and permissions from Claude Code
 user_invocable: true
 ---
 
-Run `leiter claude agent-teardown-instructions` and follow the output to remove leiter hooks from `~/.claude/settings.json`.
+Run the exact command `leiter claude agent-teardown-instructions` (the `leiter` binary is already installed in PATH — do NOT use `cargo run` or any other way to invoke it) and follow the output to remove leiter hooks from `~/.claude/settings.json`.
 
 <!-- SCODE_LEITER_INSTALLED -->
 ";
