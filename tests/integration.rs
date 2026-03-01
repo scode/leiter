@@ -66,7 +66,7 @@ fn claude_install_creates_skill_files() {
         "leiter-setup",
         "leiter-distill",
         "leiter-instill",
-        "leiter-uninstall",
+        "leiter-teardown",
     ] {
         let skill_md = claude_tmp.path().join("skills").join(name).join("SKILL.md");
         assert!(skill_md.is_file(), "missing skill file: {name}");
@@ -91,7 +91,7 @@ fn claude_uninstall_removes_plugin_files() {
         "leiter-setup",
         "leiter-distill",
         "leiter-instill",
-        "leiter-uninstall",
+        "leiter-teardown",
     ] {
         assert!(!claude_tmp.path().join("skills").join(name).exists());
     }
