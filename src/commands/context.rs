@@ -80,6 +80,11 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
         }
     } else {
         warn!("failed to parse soul frontmatter; skipping epoch checks");
+        writeln!(
+            out,
+            "ACTION REQUIRED: Before responding to the user's first message, you MUST tell them exactly: \"WARNING: The leiter soul ({}) has invalid YAML front matter. leiter will not function correctly.\" Do not skip or rephrase this warning.\n",
+            soul_path.display(),
+        )?;
     }
 
     write!(out, "{}{soul_content}", context_preamble(state_dir))?;
@@ -206,6 +211,20 @@ mod tests {
         assert!(output.contains("binary is slightly behind"));
         assert!(output.contains("upgrade leiter"));
         assert!(output.contains(&context_preamble(tmp.path())));
+    }
+
+    #[test]
+    fn malformed_frontmatter_warns_but_still_injects_soul() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        fs::create_dir_all(dir).unwrap();
+        let soul_path = paths::soul_path(dir);
+        fs::write(&soul_path, "not valid frontmatter\n").unwrap();
+        let output = run_context(dir);
+        assert!(output.contains("ACTION REQUIRED"));
+        assert!(output.contains("invalid YAML front matter"));
+        assert!(output.contains(&soul_path.display().to_string()));
+        assert!(output.contains("not valid frontmatter"));
     }
 
     #[test]
