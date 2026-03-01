@@ -8,3 +8,9 @@ Type must reflect user-visible behavior, not implementation activity. If a chang
 (add `!` when breaking). Do not classify those as `refactor`.
 
 Use `refactor`, `style`, `test`, `chore`, `ci`, `docs`, and `doc` only when behavior is not user-visible.
+
+The description after the type prefix must state the user-visible effect, not the implementation mechanism. For example,
+prefer `fix: avoid agent running a wrong leiter binary` over
+`fix: clarify that skills must invoke the installed leiter
+binary` — the former says what changes for the user, the
+latter describes an internal detail.
