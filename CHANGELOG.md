@@ -5,46 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-03-01
+
+### Added
+
+- Going forward, changelogs will be limited to user visible changes (#54)
+
+### Changed
+
+- Add --version (#62)
+- No longer accidentally skip content during distilling (#63)
+- Overhaul installation and invocation (#64)
+- Permissions configuration on setup/teardown (#67)
+- Decrease change of distillatio logs being treated as instructions (#68)
+- Add opt-in auto-distilling at session start (#69)
+- Excessive permissions prompts (#70)
+- Improve teardown completion message (#71)
+- Avoid agent running a leiter binary other than what is in PATH (#72)
+- Additional protection from agent modifying soul front matter (#74)
+
+### Fixed
+
+- Use changelog trailers for cliff overrides (#60)
+- Remove legacy .md parsing (#55)
+- Keep nudge fail-open with diagnostics (#59)
+
 ## [0.3.0] - 2026-02-28
 
 ### Added
 
-- Add `leiter agent-uninstall` command (#40)
-- Add CLI restructuring plan (#42)
-
-### Changed
-
-- Clarify release confirmation step (#37)
+- Delete obsolete logs during distill (#38)
 - Use prominent session separators in distill output (#39)
+- Add `leiter agent-uninstall` command (#40)
 - Honor LEITER_HOME in all runtime output (#41)
-- Move `context` → `hook context` (#43)
-- Move `nudge` → `hook nudge` (#44)
-- Move `session-end` → `hook session-end` (#45)
-- Move `agent-setup` → `setup install` (#46)
-- Move `agent-uninstall` → `setup uninstall` (#47)
-- Move `instill` → `soul instill` (#48)
 - Move distill under soul command (#49)
 - Move soul upgrade under soul group (#50)
-- Cleanup after CLI refactor (#51)
 - Rename setup command to claude (#52)
-
-### Removed
-
-- Delete obsolete logs during distill (#38)
 
 ## [0.2.0] - 2026-02-27
 
 ### Added
 
-- Add setup epoch compatibility checks (#34)
-
-### Changed
-
-- Set up agent driven release process (#30)
 - Drastically decrease token use through pre-processing (#31)
-- Require Conventional Commits style for PR titles (#32)
 - Honor LEITER_HOME sensibly (#33)
-- Release 0.2.0 (#36)
+- Add setup epoch compatibility checks (#34)
 
 ### Fixed
 
@@ -52,57 +56,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [0.1.1] - 2026-02-27
 
-### Added
-
-- Add basic CI. (#17)
-- Add LEITER_HOME to spec. (#20)
-
-### Changed
-
-- Initial commit
-- Initial spec.
-- Initial spec. (#1)
-- Implementation plan.
-- Implementation plan. (#2)
-- Step 1.
-- Step 1. (#3)
-- Step 2
-- Step 2 (#4)
-- Step 3.
-- Step 3. (#5)
-- Step 4
-- Step 4 (#6)
-- Step 5
-- Step 5 (#7)
-- Step 6
-- Step 6 (#8)
-- Step 7
-- Step 7 (#9)
-- Step 8
-- Step 8 (#10)
-- Step 9
-- Step 9 (#11)
-- Step 10
-- Step 10 (#12)
-- Step 11
-- Step 11 (#13)
-- Step 12
-- Step 12 (#14)
-- Step 13
-- Step 13 (#15)
-- Agent instruction: spec compliance (#16)
-- Enable dprint. (#18)
-- Agent instructions: rust (#19)
-- Preliminary README (#21)
-- README is now actually serviceable :) (#22)
-- Run leiter outside of sandbox. (#23)
-- Stop -> SessionEnd (#24)
-- Leiter nudge (#25)
-- Handle outdated leiter hooks (#26)
-- Improve soul template, instilling, soul upgrade. (#27)
-- Set up homebrew/changelog/release (#28)
-- Release 0.1.1 (#29)
-
+[0.4.0]: https://github.com/scode/leiter/compare/v0.3.0..v0.4.0
 [0.3.0]: https://github.com/scode/leiter/compare/v0.2.0..v0.3.0
 [0.2.0]: https://github.com/scode/leiter/compare/v0.1.1..v0.2.0
 [0.1.1]: https://github.com/scode/leiter/tree/v0.1.1
