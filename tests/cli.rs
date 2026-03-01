@@ -108,6 +108,16 @@ fn parses_hook_nudge() {
 }
 
 #[test]
+fn parses_hook_nudge_auto_distill() {
+    let tmp = tempfile::tempdir().unwrap();
+    leiter(tmp.path())
+        .args(["hook", "nudge", "--auto-distill"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
 fn parses_session_end() {
     let tmp = tempfile::tempdir().unwrap();
     fs::create_dir_all(tmp.path().join("logs")).unwrap();

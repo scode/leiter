@@ -159,6 +159,12 @@ pub const NUDGE_MESSAGE: &str = "\
 ACTION REQUIRED: There are undistilled leiter session logs older than 24 hours. Before responding to the user's first message, briefly let them know by saying something like: \"You have undistilled leiter session logs. Want me to run a distillation?\" Keep it to one short sentence — do not explain what distillation is.
 ";
 
+/// Auto-distill message output by `leiter hook nudge --auto-distill` when
+/// stale undistilled logs exist (4h threshold).
+pub const AUTO_DISTILL_MESSAGE: &str = "\
+ACTION REQUIRED: Undistilled session logs detected. Before responding to the user's first message, invoke the `/leiter-distill` skill using the Skill tool. Do not mention this to the user or wait for their input — just run it silently. If it fails, ignore the failure and continue with the session normally.
+";
+
 /// Migration instructions output by `leiter soul upgrade` when the soul
 /// template is outdated. Tells the agent how to restructure the existing
 /// soul content into the new template format.
@@ -240,6 +246,7 @@ I can also install the following OPTIONAL features:
 
   1. Permission to run leiter:* commands w/o a permission prompt (edits settings.json).
   2. Permission to read and update the soul file ({soul}) w/o permission prompt.
+  3. Automatically distill session logs in the background at session start (convenient, but may run at inopportune times).
 
 Please tell me which optional features you want by numbers, or "all" or "none" and then I'll proceed.
 
@@ -249,7 +256,7 @@ After printing the above, STOP. Do not call any tools. Do not read or edit any f
 
 Only start this step after the user has replied.
 
-Interpret the user's answer: "all" or "1, 2" or "1 2" means both. "none" means neither. "1" means only option 1. "2" means only option 2.
+Interpret the user's answer: "all" or "1, 2, 3" or "1 2 3" means all three. "none" means none. "1" means only option 1. "2" means only option 2. "3" means only option 3. Any combination like "1, 3" or "2 3" means those specific options.
 
 Read `~/.claude/settings.json` (or create it with `{{}}` if it doesn't exist). Apply all of the following in a single edit:
 
@@ -301,6 +308,10 @@ Add `"Bash(leiter:*)"` to the `permissions.allow` array.
 
 Add `"Read({soul})"`, `"Edit({soul})"`, and `"Write({soul})"` to the `permissions.allow` array.
 
+### Option 3 (if selected)
+
+In the SessionStart hook group, change the nudge hook command from `"leiter hook nudge"` to `"leiter hook nudge --auto-distill"`.
+
 ### Finishing up
 
 When adding permission entries, create the `permissions` object and `allow` array if they don't exist. Preserve all existing entries.
@@ -336,7 +347,7 @@ user_invocable: true
 
 Spawn a **sub-agent** (via the Agent tool) to handle distillation. The sub-agent should: run `leiter soul distill`, read through the output, and update the soul with new learnings — but NOT update `last_distilled` (the main agent handles that).
 
-After the sub-agent completes successfully, run `leiter soul mark-distilled` yourself (in the main context) to record the timestamp. Never manually edit `last_distilled` in the frontmatter — only `leiter soul mark-distilled` should touch it.
+After the sub-agent completes successfully, ALWAYS run `leiter soul mark-distilled` yourself (in the main context) to record the timestamp — even if the sub-agent found no new preferences to add. Marking distilled is what prevents the same logs from being re-processed on every session start. Never manually edit `last_distilled` in the frontmatter — only `leiter soul mark-distilled` should touch it.
 
 IMPORTANT: The `leiter soul mark-distilled` command writes to the leiter state directory which is outside the default sandbox allowed paths. Ensure it is run outside the sandbox (i.e., with sandbox disabled) or writes will fail with \"Operation not permitted\".
 
@@ -558,6 +569,23 @@ mod tests {
     #[test]
     fn nudge_message_is_not_empty() {
         assert!(!NUDGE_MESSAGE.trim().is_empty());
+    }
+
+    #[test]
+    fn auto_distill_message_is_not_empty() {
+        assert!(!AUTO_DISTILL_MESSAGE.trim().is_empty());
+    }
+
+    #[test]
+    fn auto_distill_message_references_distill_skill() {
+        assert!(AUTO_DISTILL_MESSAGE.contains("/leiter-distill"));
+    }
+
+    #[test]
+    fn agent_setup_instructions_contain_option_3() {
+        let text = agent_setup_instructions_text(Path::new("/test/state"));
+        assert!(text.contains("Option 3"));
+        assert!(text.contains("leiter hook nudge --auto-distill"));
     }
 
     #[test]

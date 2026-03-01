@@ -427,3 +427,37 @@ fn soul_upgrade_reports_up_to_date_after_claude_install() {
         .success()
         .stdout(predicate::str::contains("up to date"));
 }
+
+#[test]
+fn auto_distill_with_stale_log_outputs_message() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    install(dir, claude_tmp.path());
+
+    let stale_filename = "20260101T000000Z-stale-sess.jsonl";
+    let logs_dir = dir.join("logs");
+    fs::write(logs_dir.join(stale_filename), "stale log content\n").unwrap();
+
+    leiter(dir)
+        .args(["hook", "nudge", "--auto-distill"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("/leiter-distill"));
+}
+
+#[test]
+fn auto_distill_with_no_stale_logs_outputs_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    install(dir, claude_tmp.path());
+
+    leiter(dir)
+        .args(["hook", "nudge", "--auto-distill"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}

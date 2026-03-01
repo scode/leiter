@@ -1,8 +1,10 @@
-//! `leiter hook nudge` — remind the agent to suggest distillation when stale logs exist.
+//! `leiter hook nudge` — trigger distillation when stale logs exist.
 //!
-//! Checks for undistilled session logs older than 24 hours. If any exist,
-//! outputs a short nudge message. Otherwise outputs nothing (zero context
-//! pollution). Silently succeeds when leiter is not initialized.
+//! Checks for undistilled session logs older than a threshold. In normal mode
+//! (24h threshold), outputs a nudge asking the user. In `--auto-distill` mode
+//! (4h threshold), outputs an instruction to silently run distillation.
+//! Otherwise outputs nothing (zero context pollution). Silently succeeds when
+//! leiter is not initialized.
 
 use std::fs;
 use std::io::ErrorKind;
@@ -16,9 +18,9 @@ use tracing::warn;
 use crate::frontmatter::parse_soul;
 use crate::log_filename::collect_log_entries;
 use crate::paths;
-use crate::templates::NUDGE_MESSAGE;
+use crate::templates::{AUTO_DISTILL_MESSAGE, NUDGE_MESSAGE};
 
-pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
+pub fn run(state_dir: &Path, out: &mut impl Write, auto_distill: bool) -> Result<()> {
     let soul_path = paths::soul_path(state_dir);
     let logs_dir = paths::logs_dir(state_dir);
 
@@ -52,11 +54,16 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
         }
     };
 
-    let cutoff = Utc::now() - chrono::Duration::hours(24);
+    let (threshold, message) = if auto_distill {
+        (chrono::Duration::hours(4), AUTO_DISTILL_MESSAGE)
+    } else {
+        (chrono::Duration::hours(24), NUDGE_MESSAGE)
+    };
+    let cutoff = Utc::now() - threshold;
 
     for entry in entries {
         if entry.timestamp >= fm.last_distilled && entry.timestamp < cutoff {
-            write!(out, "{NUDGE_MESSAGE}")?;
+            write!(out, "{message}")?;
             return Ok(());
         }
     }
@@ -73,8 +80,12 @@ mod tests {
     use chrono::Utc;
 
     fn run_nudge(state_dir: &Path) -> String {
+        run_nudge_with(state_dir, false)
+    }
+
+    fn run_nudge_with(state_dir: &Path, auto_distill: bool) -> String {
         let mut out = Vec::new();
-        run(state_dir, &mut out).unwrap();
+        run(state_dir, &mut out, auto_distill).unwrap();
         bytes_to_string(out)
     }
 
@@ -187,6 +198,33 @@ mod tests {
         fs::write(paths::soul_path(tmp.path()), "not frontmatter").unwrap();
 
         let output = run_nudge(tmp.path());
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn auto_distill_5h_old_log_triggers_message() {
+        let tmp = setup_state_dir();
+        let ts = Utc::now() - chrono::Duration::hours(5);
+        write_log(tmp.path(), ts, "auto-sess");
+        let output = run_nudge_with(tmp.path(), true);
+        assert!(output.contains("/leiter-distill"));
+    }
+
+    #[test]
+    fn auto_distill_3h_old_log_outputs_nothing() {
+        let tmp = setup_state_dir();
+        let ts = Utc::now() - chrono::Duration::hours(3);
+        write_log(tmp.path(), ts, "recent-sess");
+        let output = run_nudge_with(tmp.path(), true);
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn auto_distill_boundary_at_4h_outputs_nothing() {
+        let tmp = setup_state_dir();
+        let ts = Utc::now() - chrono::Duration::hours(4) + chrono::Duration::seconds(2);
+        write_log(tmp.path(), ts, "boundary-sess");
+        let output = run_nudge_with(tmp.path(), true);
         assert!(output.is_empty());
     }
 }
