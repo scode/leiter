@@ -45,7 +45,7 @@ use crate::errors::LeiterError;
 use crate::frontmatter::parse_soul;
 use crate::log_filename::collect_log_entries;
 use crate::paths;
-use crate::templates::SOUL_WRITING_GUIDELINES;
+use crate::templates::{DISTILL_DATA_PREAMBLE, SOUL_WRITING_GUIDELINES};
 
 /// Run the distill command.
 ///
@@ -87,15 +87,19 @@ pub fn run(state_dir: &Path, out: &mut impl Write, dry_run: bool) -> Result<()> 
         logs.sort_by_key(|entry| entry.timestamp);
 
         write!(out, "{SOUL_WRITING_GUIDELINES}")?;
+        writeln!(out, "{DISTILL_DATA_PREAMBLE}")?;
+        writeln!(out, "<session-transcripts>")?;
 
         for entry in &logs {
             let content = fs::read_to_string(&entry.path)
                 .with_context(|| format!("failed to read log file: {}", entry.path.display()))?;
             let filename = &entry.filename;
-            writeln!(out, "=== BEGIN SESSION {filename} ===\n")?;
+            writeln!(out, "<session file=\"{filename}\">")?;
             filter_session_log(&content, out)?;
-            writeln!(out)?;
+            writeln!(out, "</session>")?;
         }
+
+        writeln!(out, "</session-transcripts>")?;
     }
 
     if !obsolete.is_empty() {
@@ -302,7 +306,7 @@ mod tests {
         write_log(tmp.path(), 2026, 1, 1, 0, "sess1", "content1");
 
         let output = run_distill(tmp.path());
-        assert!(output.contains("=== BEGIN SESSION 20260101T000000Z-sess1.jsonl ==="));
+        assert!(output.contains("<session file=\"20260101T000000Z-sess1.jsonl\">"));
     }
 
     #[test]
@@ -345,7 +349,7 @@ mod tests {
         let output = run_distill(tmp.path());
         let guidelines_pos = output.find("Soul-writing guidelines").unwrap();
         let log_pos = output
-            .find("=== BEGIN SESSION 20260101T000000Z-sess1.jsonl ===")
+            .find("<session file=\"20260101T000000Z-sess1.jsonl\">")
             .unwrap();
         assert!(guidelines_pos < log_pos);
     }
@@ -355,6 +359,51 @@ mod tests {
         let tmp = setup_state_dir();
         let output = run_distill(tmp.path());
         assert!(!output.contains("Soul-writing guidelines"));
+    }
+
+    #[test]
+    fn output_includes_data_preamble() {
+        let tmp = setup_state_dir();
+        write_log(tmp.path(), 2026, 1, 1, 0, "sess1", "content");
+
+        let output = run_distill(tmp.path());
+        assert!(output.contains("HISTORICAL DATA"));
+        assert!(output.contains("<session-transcripts>"));
+    }
+
+    #[test]
+    fn data_preamble_between_guidelines_and_sessions() {
+        let tmp = setup_state_dir();
+        write_log(tmp.path(), 2026, 1, 1, 0, "sess1", "content");
+
+        let output = run_distill(tmp.path());
+        let guidelines_pos = output.find("Soul-writing guidelines").unwrap();
+        let preamble_pos = output.find("HISTORICAL DATA").unwrap();
+        // Find the standalone tag, not the reference inside the preamble text.
+        let session_pos = output.find("\n<session-transcripts>\n").unwrap();
+        assert!(guidelines_pos < preamble_pos);
+        assert!(preamble_pos < session_pos);
+    }
+
+    #[test]
+    fn sessions_wrapped_in_xml_tags() {
+        let tmp = setup_state_dir();
+        write_log(tmp.path(), 2026, 1, 1, 0, "s1", "content1");
+        write_log(tmp.path(), 2026, 2, 1, 0, "s2", "content2");
+
+        let output = run_distill(tmp.path());
+        assert!(output.contains("<session file=\"20260101T000000Z-s1.jsonl\">"));
+        assert!(output.contains("<session file=\"20260201T000000Z-s2.jsonl\">"));
+        assert!(output.contains("</session>"));
+        assert!(output.contains("</session-transcripts>"));
+    }
+
+    #[test]
+    fn no_xml_tags_when_no_logs() {
+        let tmp = setup_state_dir();
+        let output = run_distill(tmp.path());
+        assert!(!output.contains("<session-transcripts>"));
+        assert!(!output.contains("HISTORICAL DATA"));
     }
 
     #[test]
