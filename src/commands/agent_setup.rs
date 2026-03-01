@@ -46,11 +46,15 @@ pub fn run(state_dir: &Path, claude_home: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Output the agent-setup instructions (hook configuration).
+/// Output the agent-setup instructions (hooks and permissions).
 ///
 /// Used by `leiter claude agent-setup-instructions`.
-pub fn agent_setup_instructions(out: &mut impl Write) -> Result<()> {
-    write!(out, "{}", crate::templates::AGENT_SETUP_INSTRUCTIONS)?;
+pub fn agent_setup_instructions(state_dir: &Path, out: &mut impl Write) -> Result<()> {
+    write!(
+        out,
+        "{}",
+        crate::templates::agent_setup_instructions_text(state_dir)
+    )?;
     Ok(())
 }
 
@@ -325,8 +329,9 @@ mod tests {
 
     #[test]
     fn agent_setup_instructions_outputs_hook_commands() {
+        let tmp = tempfile::tempdir().unwrap();
         let mut out = Vec::new();
-        agent_setup_instructions(&mut out).unwrap();
+        agent_setup_instructions(tmp.path(), &mut out).unwrap();
         let output = String::from_utf8(out).unwrap();
         assert!(output.contains("leiter hook context"));
         assert!(output.contains("leiter hook session-end"));

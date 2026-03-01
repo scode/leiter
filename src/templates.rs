@@ -181,6 +181,7 @@ from empty sections.
 /// the agent how to remove leiter hooks from `~/.claude/settings.json`.
 pub fn agent_uninstall_instructions(state_dir: &Path) -> String {
     let dir = state_dir.display();
+    let soul = paths::soul_path(state_dir).display().to_string();
     format!(
         r#"Remove leiter hooks from Claude Code by editing `~/.claude/settings.json`.
 
@@ -198,59 +199,107 @@ Use your Edit tool to make the changes to `~/.claude/settings.json`.
 
 If no leiter hooks are found, report that leiter hooks are already removed.
 
-After removing hooks, tell the user:
-- To completely remove leiter, delete `{dir}/` (this removes the soul and all session logs) and uninstall the binary.
+After removing hooks, check `permissions.allow` in `~/.claude/settings.json` for any entries starting with `Bash(leiter` or referencing `{soul}` (e.g., `Read({soul})`, `Edit({soul})`, `Write({soul})`). Remove them. If `permissions.allow` becomes empty, remove it. If the `permissions` object becomes empty, remove it. Preserve all non-leiter permission entries.
+
+After removing hooks and permissions, tell the user:
+- To completely remove leiter, run `leiter claude uninstall` from a terminal, then delete `{dir}/` (this removes the soul and all session logs) and uninstall the binary.
 - To re-enable leiter later, run `leiter claude install` from a terminal, then run `/leiter-setup` in a Claude Code session.
 "#
     )
 }
 
-/// Instructions output by `leiter claude agent-setup-instructions` telling the
-/// agent how to configure Claude Code hooks in `~/.claude/settings.json`.
-pub const AGENT_SETUP_INSTRUCTIONS: &str = r#"Configure Claude Code hooks for leiter by editing `~/.claude/settings.json`.
+/// Agent-setup instructions including hooks and optional permissions.
+///
+/// The permissions section references the soul file path, which depends on
+/// the state directory, so this must be a function rather than a const.
+pub fn agent_setup_instructions_text(state_dir: &Path) -> String {
+    let soul = paths::soul_path(state_dir).display().to_string();
+    format!(
+        r#"This is a two-step process. Complete step 1 fully before starting step 2.
 
-Read `~/.claude/settings.json` (or create it with `{}` if it doesn't exist).
+## Step 1: Show the menu and wait
+
+Print this EXACTLY as shown (copy it character for character, do not rephrase or reformat):
+
+I'm about to install the following REQUIRED features:
+
+  - hooks on session start (for context), and session end (for saving sessions for training later)
+
+I can also install the following OPTIONAL features:
+
+  1. Permission to run leiter:* commands w/o a permission prompt (edits settings.json).
+  2. Permission to read and update the soul file ({soul}) w/o permission prompt.
+
+Please tell me which optional features you want by numbers, or "all" or "none" and then I'll proceed.
+
+After printing the above, STOP. Do not call any tools. Do not read or edit any files. Wait for the user to reply.
+
+## Step 2: Apply everything
+
+Only start this step after the user has replied.
+
+Interpret the user's answer: "all" or "1, 2" or "1 2" means both. "none" means neither. "1" means only option 1. "2" means only option 2.
+
+Read `~/.claude/settings.json` (or create it with `{{}}` if it doesn't exist). Apply all of the following in a single edit:
+
+### Hooks (always installed)
 
 Check whether leiter hooks are already present by looking for hook commands containing `"leiter hook context"`, `"leiter hook nudge"`, or `"leiter hook session-end"` anywhere in the existing hooks.
 
-The desired leiter hooks are shown below. There are three cases:
+There are three cases:
 
 1. **No leiter hooks found:** Add these hook groups to the `hooks` object. If `SessionStart` or `SessionEnd` arrays already exist, append the leiter entries to those arrays (preserving all existing hooks). If they don't exist, create them.
 
 2. **Some leiter hooks found but the set of leiter command strings doesn't match what is shown below** (e.g., a command is missing, extra, or different — this means leiter was upgraded): Replace all existing leiter hook entries with the ones below, preserving all non-leiter hooks. Check both `SessionStart` and `SessionEnd` — if either group is missing its leiter entries, create them.
 
-3. **Leiter hooks found and the command strings already match:** Skip and report that hooks are already configured.
+3. **Leiter hooks found and the command strings already match:** Report that hooks are already configured but still apply any selected optional items below.
 
 SessionStart hook group:
 ```json
-{
+{{
   "hooks": [
-    {
+    {{
       "type": "command",
       "command": "leiter hook context"
-    },
-    {
+    }},
+    {{
       "type": "command",
       "command": "leiter hook nudge"
-    }
+    }}
   ]
-}
+}}
 ```
 
 SessionEnd hook group:
 ```json
-{
+{{
   "hooks": [
-    {
+    {{
       "type": "command",
       "command": "leiter hook session-end"
-    }
+    }}
   ]
-}
+}}
 ```
 
-Use your Edit tool to make the changes to `~/.claude/settings.json`.
-"#;
+### Option 1 (if selected)
+
+Add `"Bash(leiter:*)"` to the `permissions.allow` array.
+
+### Option 2 (if selected)
+
+Add `"Read({soul})"`, `"Edit({soul})"`, and `"Write({soul})"` to the `permissions.allow` array.
+
+### Finishing up
+
+When adding permission entries, create the `permissions` object and `allow` array if they don't exist. Preserve all existing entries.
+
+Use your Edit tool to make all changes to `~/.claude/settings.json` in a single edit.
+
+When done, tell the user to run `/clear` or start a new session for leiter to take effect.
+"#
+    )
+}
 
 /// Sentinel marker embedded in each skill SKILL.md that `leiter claude uninstall` checks.
 pub const PLUGIN_SENTINEL: &str = "SCODE_LEITER_INSTALLED";
@@ -258,7 +307,7 @@ pub const PLUGIN_SENTINEL: &str = "SCODE_LEITER_INSTALLED";
 /// SKILL.md for `/leiter-setup` — configures Claude Code hooks.
 pub const SKILL_SETUP: &str = "\
 ---
-description: Configure Claude Code hooks for leiter (first-time setup or after upgrade)
+description: Configure Claude Code hooks and permissions for leiter (first-time setup or after upgrade)
 user_invocable: true
 ---
 
@@ -298,7 +347,7 @@ Run `leiter soul instill \"<the preference or fact to remember>\"` and follow th
 /// SKILL.md for `/leiter-teardown` — removes Claude Code hooks for leiter.
 pub const SKILL_TEARDOWN: &str = "\
 ---
-description: Remove leiter hooks from Claude Code
+description: Remove leiter hooks and permissions from Claude Code
 user_invocable: true
 ---
 
@@ -424,17 +473,33 @@ mod tests {
 
     #[test]
     fn agent_setup_instructions_contain_hook_commands() {
-        assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter hook context"));
-        assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter hook nudge"));
-        assert!(AGENT_SETUP_INSTRUCTIONS.contains("leiter hook session-end"));
+        let text = agent_setup_instructions_text(Path::new("/test/state"));
+        assert!(text.contains("leiter hook context"));
+        assert!(text.contains("leiter hook nudge"));
+        assert!(text.contains("leiter hook session-end"));
+    }
+
+    #[test]
+    fn agent_setup_instructions_contain_permissions_prompt() {
+        let text = agent_setup_instructions_text(Path::new("/test/state"));
+        assert!(text.contains("permissions"));
+        assert!(text.contains(r#"Bash(leiter:*)"#));
+    }
+
+    #[test]
+    fn agent_setup_instructions_contain_soul_file_permissions() {
+        let text = agent_setup_instructions_text(Path::new("/test/state"));
+        assert!(text.contains("Edit(/test/state/soul.md)"));
+        assert!(text.contains("Write(/test/state/soul.md)"));
     }
 
     #[test]
     fn agent_setup_instructions_contain_hook_json_structure() {
-        assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""type": "command""#));
-        assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter hook context""#));
-        assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter hook nudge""#));
-        assert!(AGENT_SETUP_INSTRUCTIONS.contains(r#""command": "leiter hook session-end""#));
+        let text = agent_setup_instructions_text(Path::new("/test/state"));
+        assert!(text.contains(r#""type": "command""#));
+        assert!(text.contains(r#""command": "leiter hook context""#));
+        assert!(text.contains(r#""command": "leiter hook nudge""#));
+        assert!(text.contains(r#""command": "leiter hook session-end""#));
     }
 
     #[test]
@@ -451,6 +516,14 @@ mod tests {
         assert!(instructions.contains("leiter hook context"));
         assert!(instructions.contains("leiter hook nudge"));
         assert!(instructions.contains("leiter hook session-end"));
+    }
+
+    #[test]
+    fn agent_uninstall_instructions_contain_permissions_removal() {
+        let instructions = agent_uninstall_instructions(Path::new("/test/state"));
+        assert!(instructions.contains("permissions"));
+        assert!(instructions.contains("Bash(leiter"));
+        assert!(instructions.contains("/test/state/soul.md"));
     }
 
     #[test]
