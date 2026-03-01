@@ -295,8 +295,8 @@ Run `leiter soul instill \"<the preference or fact to remember>\"` and follow th
 <!-- SCODE_LEITER_INSTALLED -->
 ";
 
-/// SKILL.md for `/leiter-uninstall` — removes Claude Code hooks for leiter.
-pub const SKILL_UNINSTALL: &str = "\
+/// SKILL.md for `/leiter-teardown` — removes Claude Code hooks for leiter.
+pub const SKILL_TEARDOWN: &str = "\
 ---
 description: Remove leiter hooks from Claude Code
 user_invocable: true
@@ -312,7 +312,7 @@ pub const SKILL_CONTENTS: &[(&str, &str)] = &[
     ("leiter-setup", SKILL_SETUP),
     ("leiter-distill", SKILL_DISTILL),
     ("leiter-instill", SKILL_INSTILL),
-    ("leiter-uninstall", SKILL_UNINSTALL),
+    ("leiter-teardown", SKILL_TEARDOWN),
 ];
 
 #[cfg(test)]
@@ -527,7 +527,7 @@ mod tests {
     }
 
     #[test]
-    fn uninstall_skill_references_teardown_command() {
-        assert!(SKILL_UNINSTALL.contains("leiter claude agent-teardown-instructions"));
+    fn teardown_skill_references_teardown_command() {
+        assert!(SKILL_TEARDOWN.contains("leiter claude agent-teardown-instructions"));
     }
 }

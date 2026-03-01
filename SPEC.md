@@ -54,7 +54,7 @@ writing to the soul.
 ├── leiter-setup/SKILL.md        # Each contains <!-- SCODE_LEITER_INSTALLED -->
 ├── leiter-distill/SKILL.md
 ├── leiter-instill/SKILL.md
-└── leiter-uninstall/SKILL.md
+└── leiter-teardown/SKILL.md
 ```
 
 ## State Directory
@@ -82,7 +82,7 @@ The Claude Code home directory is where leiter installs its plugin files (skill 
 - **`<claude_home>/skills/leiter-distill/SKILL.md`** — skill for distilling session logs into the soul.
 - **`<claude_home>/skills/leiter-instill/SKILL.md`** — skill for recording preferences. Description includes trigger
   keywords (remember, learn, always, never) so Claude can auto-match.
-- **`<claude_home>/skills/leiter-uninstall/SKILL.md`** — skill that calls `leiter claude agent-teardown-instructions` to
+- **`<claude_home>/skills/leiter-teardown/SKILL.md`** — skill that calls `leiter claude agent-teardown-instructions` to
   remove hooks.
 
 Each skill file contains the sentinel string `SCODE_LEITER_INSTALLED` as an HTML comment. `leiter claude uninstall`
@@ -245,7 +245,7 @@ the exact hook JSON.
 ### `leiter claude agent-teardown-instructions`
 
 Outputs natural language instructions for the agent to remove leiter hooks from `~/.claude/settings.json`. Called by the
-`/leiter-uninstall` skill.
+`/leiter-teardown` skill.
 
 **Output (stdout):** Instructions telling the agent to find and remove hook entries whose commands contain
 `"leiter hook context"`, `"leiter hook nudge"`, or `"leiter hook session-end"`, clean up empty arrays, preserve
