@@ -10,16 +10,21 @@ fn leiter(state_dir: &Path) -> Command {
     cmd
 }
 
+fn claude_home_flag(claude_home: &Path) -> String {
+    format!("--claude-home={}", claude_home.display())
+}
+
 #[test]
 fn parses_claude_install() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
     leiter(dir)
-        .args(["claude", "install"])
+        .args(["claude", &claude_home_flag(claude_tmp.path()), "install"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Configure Claude Code hooks"));
+        .stderr(predicate::str::contains("installed successfully"));
 
     assert!(dir.join("soul.md").is_file());
     assert!(dir.join("logs").is_dir());
@@ -28,8 +33,35 @@ fn parses_claude_install() {
 #[test]
 fn parses_claude_uninstall() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+
     leiter(tmp.path())
-        .args(["claude", "uninstall"])
+        .args(["claude", &claude_home_flag(claude_tmp.path()), "install"])
+        .assert()
+        .success();
+
+    leiter(tmp.path())
+        .args(["claude", &claude_home_flag(claude_tmp.path()), "uninstall"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("removed"));
+}
+
+#[test]
+fn parses_claude_agent_setup_instructions() {
+    let tmp = tempfile::tempdir().unwrap();
+    leiter(tmp.path())
+        .args(["claude", "agent-setup-instructions"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Configure Claude Code hooks"));
+}
+
+#[test]
+fn parses_claude_agent_teardown_instructions() {
+    let tmp = tempfile::tempdir().unwrap();
+    leiter(tmp.path())
+        .args(["claude", "agent-teardown-instructions"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Remove leiter hooks"));

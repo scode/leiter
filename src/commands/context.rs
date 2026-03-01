@@ -101,7 +101,8 @@ mod tests {
     }
 
     fn setup_and_context(state_dir: &Path) -> String {
-        agent_setup::run(state_dir, &mut Vec::new()).unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        agent_setup::run(state_dir, claude_tmp.path()).unwrap();
         run_context(state_dir)
     }
 
@@ -141,15 +142,17 @@ mod tests {
         assert!(output.contains("Read/Edit/Write"));
         assert!(output.contains("remember"));
         assert!(output.contains("session log"));
-        assert!(output.contains("leiter soul distill"));
+        assert!(output.contains("/leiter-distill"));
+        assert!(output.contains("/leiter-instill"));
         assert!(output.contains("leiter soul upgrade"));
     }
 
     #[test]
     fn soul_content_reproduced_verbatim() {
         let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        agent_setup::run(dir, &mut Vec::new()).unwrap();
+        agent_setup::run(dir, claude_tmp.path()).unwrap();
 
         let soul_content = fs::read_to_string(paths::soul_path(dir)).unwrap();
         let output = run_context(dir);

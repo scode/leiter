@@ -1,9 +1,8 @@
 //! End-to-end integration tests that exercise the full CLI binary.
 //!
 //! Each test sets `LEITER_HOME` to a temp directory so state is isolated
-//! from the user's real `~/.leiter/`. Since `LEITER_HOME` points directly
-//! to the state directory, files live at `$LEITER_HOME/soul.md`,
-//! `$LEITER_HOME/logs/`, etc.
+//! from the user's real `~/.leiter/`. Tests that touch `~/.claude/` pass
+//! `--claude-home` pointing to a temp directory.
 
 use assert_cmd::Command;
 use assert_cmd::cargo::cargo_bin_cmd;
@@ -17,6 +16,10 @@ fn leiter(state_dir: &Path) -> Command {
     cmd
 }
 
+fn claude_home_flag(claude_home: &Path) -> String {
+    format!("--claude-home={}", claude_home.display())
+}
+
 fn set_last_distilled(dir: &Path, timestamp: &str) {
     let soul_path = dir.join("soul.md");
     let original = fs::read_to_string(&soul_path).unwrap();
@@ -28,12 +31,20 @@ fn set_last_distilled(dir: &Path, timestamp: &str) {
     fs::write(&soul_path, updated).unwrap();
 }
 
+fn install(state_dir: &Path, claude_home: &Path) {
+    leiter(state_dir)
+        .args(["claude", &claude_home_flag(claude_home), "install"])
+        .assert()
+        .success();
+}
+
 #[test]
 fn claude_install_then_context_injects_soul() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
-    leiter(dir).args(["claude", "install"]).assert().success();
+    install(dir, claude_tmp.path());
 
     leiter(dir)
         .args(["hook", "context"])
@@ -41,15 +52,74 @@ fn claude_install_then_context_injects_soul() {
         .success()
         .stdout(predicate::str::contains("Leiter is a self-training system"))
         .stdout(predicate::str::contains("# Communication Style"))
-        .stdout(predicate::str::contains("leiter soul instill"));
+        .stdout(predicate::str::contains("/leiter-instill"));
+}
+
+#[test]
+fn claude_install_creates_skill_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+
+    install(tmp.path(), claude_tmp.path());
+
+    for name in &[
+        "leiter-setup",
+        "leiter-distill",
+        "leiter-instill",
+        "leiter-uninstall",
+    ] {
+        let skill_md = claude_tmp.path().join("skills").join(name).join("SKILL.md");
+        assert!(skill_md.is_file(), "missing skill file: {name}");
+    }
+}
+
+#[test]
+fn claude_uninstall_removes_plugin_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    install(dir, claude_tmp.path());
+
+    leiter(dir)
+        .args(["claude", &claude_home_flag(claude_tmp.path()), "uninstall"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("removed"));
+
+    for name in &[
+        "leiter-setup",
+        "leiter-distill",
+        "leiter-instill",
+        "leiter-uninstall",
+    ] {
+        assert!(!claude_tmp.path().join("skills").join(name).exists());
+    }
+
+    // State dir is untouched.
+    assert!(dir.join("soul.md").is_file());
+    assert!(dir.join("logs").is_dir());
+}
+
+#[test]
+fn claude_uninstall_without_install_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+
+    leiter(tmp.path())
+        .args(["claude", &claude_home_flag(claude_tmp.path()), "uninstall"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("nothing to uninstall"));
 }
 
 #[test]
 fn session_end_saves_transcript() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
-    leiter(dir).args(["claude", "install"]).assert().success();
+    install(dir, claude_tmp.path());
 
     let transcript = tmp.path().join("transcript.jsonl");
     fs::write(&transcript, "{\"role\":\"user\",\"message\":\"hello\"}\n").unwrap();
@@ -77,9 +147,10 @@ fn session_end_saves_transcript() {
 #[test]
 fn claude_install_then_session_end_then_distill() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
-    leiter(dir).args(["claude", "install"]).assert().success();
+    install(dir, claude_tmp.path());
 
     let transcript = tmp.path().join("transcript.jsonl");
     fs::write(&transcript, "Integration test transcript.\n").unwrap();
@@ -108,9 +179,10 @@ fn claude_install_then_session_end_then_distill() {
 #[test]
 fn distill_with_epoch_last_distilled_includes_all_logs() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
-    leiter(dir).args(["claude", "install"]).assert().success();
+    install(dir, claude_tmp.path());
 
     let transcript1 = tmp.path().join("t1.jsonl");
     fs::write(&transcript1, "First log.\n").unwrap();
@@ -147,16 +219,17 @@ fn distill_with_epoch_last_distilled_includes_all_logs() {
 #[test]
 fn claude_install_twice_does_not_overwrite_soul() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
-    leiter(dir).args(["claude", "install"]).assert().success();
+    install(dir, claude_tmp.path());
 
     let soul_path = dir.join("soul.md");
     let original = fs::read_to_string(&soul_path).unwrap();
     let modified = format!("{original}\n# Custom Section\n");
     fs::write(&soul_path, &modified).unwrap();
 
-    leiter(dir).args(["claude", "install"]).assert().success();
+    install(dir, claude_tmp.path());
 
     let after = fs::read_to_string(&soul_path).unwrap();
     assert_eq!(after, modified);
@@ -165,9 +238,10 @@ fn claude_install_twice_does_not_overwrite_soul() {
 #[test]
 fn stdout_stderr_separation() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
-    leiter(dir).args(["claude", "install"]).assert().success();
+    install(dir, claude_tmp.path());
 
     let assert = leiter(dir)
         .args(["-v", "hook", "context"])
@@ -186,9 +260,10 @@ fn stdout_stderr_separation() {
 #[test]
 fn nudge_outputs_nothing_when_no_stale_logs() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
-    leiter(dir).args(["claude", "install"]).assert().success();
+    install(dir, claude_tmp.path());
 
     leiter(dir)
         .args(["hook", "nudge"])
@@ -200,9 +275,10 @@ fn nudge_outputs_nothing_when_no_stale_logs() {
 #[test]
 fn nudge_outputs_message_when_stale_logs_exist() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
-    leiter(dir).args(["claude", "install"]).assert().success();
+    install(dir, claude_tmp.path());
 
     let stale_filename = "20260101T000000Z-stale-sess.jsonl";
     let logs_dir = dir.join("logs");
@@ -218,9 +294,10 @@ fn nudge_outputs_message_when_stale_logs_exist() {
 #[test]
 fn soul_instill_outputs_guidelines_and_preference() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
-    leiter(dir).args(["claude", "install"]).assert().success();
+    install(dir, claude_tmp.path());
 
     leiter(dir)
         .args(["soul", "instill", "always use snake_case"])
@@ -233,16 +310,16 @@ fn soul_instill_outputs_guidelines_and_preference() {
 #[test]
 fn distill_dry_run_reports_obsolete_without_deleting() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
-    leiter(dir).args(["claude", "install"]).assert().success();
+    install(dir, claude_tmp.path());
     set_last_distilled(dir, "2026-01-01T00:00:00Z");
 
     let logs_dir = dir.join("logs");
     let obsolete_name = "20250101T000000Z-old-sess.jsonl";
     fs::write(logs_dir.join(obsolete_name), "obsolete content\n").unwrap();
 
-    // Create a new log via session-end (timestamp is now, after last_distilled)
     let transcript = dir.join("transcript.jsonl");
     fs::write(&transcript, "Fresh content.\n").unwrap();
     let json = serde_json::json!({
@@ -255,7 +332,6 @@ fn distill_dry_run_reports_obsolete_without_deleting() {
         .assert()
         .success();
 
-    // Dry-run should report the obsolete file
     leiter(dir)
         .args(["soul", "distill", "--dry-run"])
         .assert()
@@ -263,16 +339,16 @@ fn distill_dry_run_reports_obsolete_without_deleting() {
         .stdout(predicate::str::contains("would be deleted"))
         .stdout(predicate::str::contains(obsolete_name));
 
-    // File should still exist
     assert!(logs_dir.join(obsolete_name).exists());
 }
 
 #[test]
 fn distill_deletes_obsolete_logs() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
-    leiter(dir).args(["claude", "install"]).assert().success();
+    install(dir, claude_tmp.path());
     set_last_distilled(dir, "2026-01-01T00:00:00Z");
 
     let logs_dir = dir.join("logs");
@@ -281,32 +357,46 @@ fn distill_deletes_obsolete_logs() {
 
     leiter(dir).args(["soul", "distill"]).assert().success();
 
-    // Obsolete file should be deleted
     assert!(!logs_dir.join(obsolete_name).exists());
 }
 
 #[test]
-fn claude_uninstall_outputs_hook_removal_instructions() {
+fn agent_setup_instructions_contain_hook_commands() {
     let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path();
 
-    leiter(dir)
-        .args(["claude", "uninstall"])
+    leiter(tmp.path())
+        .args(["claude", "agent-setup-instructions"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("leiter hook context"))
+        .stdout(predicate::str::contains("leiter hook nudge"))
+        .stdout(predicate::str::contains("leiter hook session-end"));
+}
+
+#[test]
+fn agent_teardown_instructions_contain_hook_commands() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    leiter(tmp.path())
+        .args(["claude", "agent-teardown-instructions"])
         .assert()
         .success()
         .stdout(predicate::str::contains("leiter hook context"))
         .stdout(predicate::str::contains("leiter hook nudge"))
         .stdout(predicate::str::contains("leiter hook session-end"))
-        .stdout(predicate::str::contains(format!("{}/", dir.display())))
-        .stdout(predicate::str::contains("leiter claude install"));
+        .stdout(predicate::str::contains(format!(
+            "{}/",
+            tmp.path().display()
+        )));
 }
 
 #[test]
 fn mark_distilled_updates_timestamp() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
-    leiter(dir).args(["claude", "install"]).assert().success();
+    install(dir, claude_tmp.path());
 
     leiter(dir)
         .args(["soul", "mark-distilled"])
@@ -324,9 +414,10 @@ fn mark_distilled_updates_timestamp() {
 #[test]
 fn soul_upgrade_reports_up_to_date_after_claude_install() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
-    leiter(dir).args(["claude", "install"]).assert().success();
+    install(dir, claude_tmp.path());
 
     leiter(dir)
         .args(["soul", "upgrade"])

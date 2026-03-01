@@ -118,8 +118,9 @@ only when they are contradicted.
 
 /// Preamble injected before the soul content by `leiter hook context`.
 ///
-/// Covers all the topics the spec requires: identity, soul file location,
-/// when to instill preferences, automatic transcript saving, distillation, and soul upgrade.
+/// Covers the topics the spec requires: identity, soul file location,
+/// skill references for instill/distill, automatic transcript saving,
+/// soul upgrade command, and sandbox warning.
 pub fn context_preamble(state_dir: &Path) -> String {
     let soul = paths::soul_path(state_dir).display().to_string();
     let dir = state_dir.display();
@@ -128,11 +129,11 @@ pub fn context_preamble(state_dir: &Path) -> String {
          \n\
          Your soul file is at `{soul}`. Use your Read/Edit/Write tools to modify it directly.\n\
          \n\
-         When the user says \"remember\", \"learn\", \"instill\", \"always\", \"never\", or similar preference-setting language, run `leiter soul instill \"<what the user wants remembered>\"` and follow the instructions it outputs.\n\
+         When the user says \"remember\", \"learn\", \"instill\", \"always\", \"never\", or similar preference-setting language, invoke the `/leiter-instill` skill.\n\
          \n\
          Session transcripts are saved automatically when each session ends. No manual logging needed.\n\
          \n\
-         When the user asks to distill session logs, spawn a **sub-agent** (via the Agent tool) to handle it. The sub-agent should: run `leiter soul distill`, read through the output, and update the soul with new learnings. After the sub-agent completes successfully, run `leiter soul mark-distilled` yourself (in the main context) to record the timestamp. Never manually edit `last_distilled` in the frontmatter — only `leiter soul mark-distilled` should touch it.\n\
+         When the user asks to distill session logs, invoke the `/leiter-distill` skill.\n\
          \n\
          When the user asks to upgrade the leiter soul, run `leiter soul upgrade`. If the soul template is outdated, this outputs migration instructions and the new template. Follow the instructions to restructure the soul while preserving all learned preferences.\n\
          \n\
@@ -176,8 +177,8 @@ from empty sections.
     )
 }
 
-/// Instructions output by `leiter claude uninstall` telling the agent how to
-/// remove leiter hooks from `~/.claude/settings.json`.
+/// Instructions output by `leiter claude agent-teardown-instructions` telling
+/// the agent how to remove leiter hooks from `~/.claude/settings.json`.
 pub fn agent_uninstall_instructions(state_dir: &Path) -> String {
     let dir = state_dir.display();
     format!(
@@ -199,13 +200,13 @@ If no leiter hooks are found, report that leiter hooks are already removed.
 
 After removing hooks, tell the user:
 - To completely remove leiter, delete `{dir}/` (this removes the soul and all session logs) and uninstall the binary.
-- To re-enable leiter later, paste the following into a Claude Code session: Run the shell command `leiter claude install` and follow the instructions it outputs on stdout.
+- To re-enable leiter later, run `leiter claude install` from a terminal, then run `/leiter-setup` in a Claude Code session.
 "#
     )
 }
 
-/// Instructions output by `leiter claude install` telling the agent how to
-/// configure Claude Code hooks in `~/.claude/settings.json`.
+/// Instructions output by `leiter claude agent-setup-instructions` telling the
+/// agent how to configure Claude Code hooks in `~/.claude/settings.json`.
 pub const AGENT_SETUP_INSTRUCTIONS: &str = r#"Configure Claude Code hooks for leiter by editing `~/.claude/settings.json`.
 
 Read `~/.claude/settings.json` (or create it with `{}` if it doesn't exist).
@@ -251,6 +252,69 @@ SessionEnd hook group:
 Use your Edit tool to make the changes to `~/.claude/settings.json`.
 "#;
 
+/// Sentinel marker embedded in each skill SKILL.md that `leiter claude uninstall` checks.
+pub const PLUGIN_SENTINEL: &str = "SCODE_LEITER_INSTALLED";
+
+/// SKILL.md for `/leiter-setup` — configures Claude Code hooks.
+pub const SKILL_SETUP: &str = "\
+---
+description: Configure Claude Code hooks for leiter (first-time setup or after upgrade)
+user_invocable: true
+---
+
+Run `leiter claude agent-setup-instructions` and follow the output to configure hooks in `~/.claude/settings.json`.
+
+<!-- SCODE_LEITER_INSTALLED -->
+";
+
+/// SKILL.md for `/leiter-distill` — distills session logs into the soul.
+pub const SKILL_DISTILL: &str = "\
+---
+description: Distill session logs into the leiter soul
+user_invocable: true
+---
+
+Spawn a **sub-agent** (via the Agent tool) to handle distillation. The sub-agent should: run `leiter soul distill`, read through the output, and update the soul with new learnings — but NOT update `last_distilled` (the main agent handles that).
+
+After the sub-agent completes successfully, run `leiter soul mark-distilled` yourself (in the main context) to record the timestamp. Never manually edit `last_distilled` in the frontmatter — only `leiter soul mark-distilled` should touch it.
+
+IMPORTANT: The `leiter soul mark-distilled` command writes to the leiter state directory which is outside the default sandbox allowed paths. Ensure it is run outside the sandbox (i.e., with sandbox disabled) or writes will fail with \"Operation not permitted\".
+
+<!-- SCODE_LEITER_INSTALLED -->
+";
+
+/// SKILL.md for `/leiter-instill` — records a preference in the soul.
+pub const SKILL_INSTILL: &str = "\
+---
+description: \"Record a preference in the leiter soul. Trigger keywords: remember, learn, instill, always, never\"
+user_invocable: true
+---
+
+Run `leiter soul instill \"<the preference or fact to remember>\"` and follow the instructions it outputs to update the soul file.
+
+<!-- SCODE_LEITER_INSTALLED -->
+";
+
+/// SKILL.md for `/leiter-uninstall` — removes Claude Code hooks for leiter.
+pub const SKILL_UNINSTALL: &str = "\
+---
+description: Remove leiter hooks from Claude Code
+user_invocable: true
+---
+
+Run `leiter claude agent-teardown-instructions` and follow the output to remove leiter hooks from `~/.claude/settings.json`.
+
+<!-- SCODE_LEITER_INSTALLED -->
+";
+
+/// Mapping from skill name to its SKILL.md content.
+pub const SKILL_CONTENTS: &[(&str, &str)] = &[
+    ("leiter-setup", SKILL_SETUP),
+    ("leiter-distill", SKILL_DISTILL),
+    ("leiter-instill", SKILL_INSTILL),
+    ("leiter-uninstall", SKILL_UNINSTALL),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,10 +357,9 @@ mod tests {
         let preamble = context_preamble(Path::new("/test/state"));
         for literal in [
             "/test/state/soul.md",
-            "leiter soul distill",
             "leiter soul upgrade",
-            "leiter soul instill",
-            "leiter soul mark-distilled",
+            "/leiter-instill",
+            "/leiter-distill",
         ] {
             assert!(
                 preamble.contains(literal),
@@ -411,5 +474,60 @@ mod tests {
     #[test]
     fn nudge_message_is_not_empty() {
         assert!(!NUDGE_MESSAGE.trim().is_empty());
+    }
+
+    #[test]
+    fn all_skills_contain_sentinel() {
+        for (name, content) in SKILL_CONTENTS {
+            assert!(
+                content.contains(PLUGIN_SENTINEL),
+                "skill {name} missing sentinel"
+            );
+        }
+    }
+
+    #[test]
+    fn all_skills_have_frontmatter() {
+        for (name, content) in SKILL_CONTENTS {
+            assert!(
+                content.starts_with("---\n"),
+                "skill {name} missing frontmatter opening"
+            );
+            assert!(
+                content.contains("\n---\n"),
+                "skill {name} missing frontmatter closing"
+            );
+        }
+    }
+
+    #[test]
+    fn all_skills_are_user_invocable() {
+        for (name, content) in SKILL_CONTENTS {
+            assert!(
+                content.contains("user_invocable: true"),
+                "skill {name} not marked user_invocable"
+            );
+        }
+    }
+
+    #[test]
+    fn setup_skill_references_agent_setup_instructions() {
+        assert!(SKILL_SETUP.contains("leiter claude agent-setup-instructions"));
+    }
+
+    #[test]
+    fn distill_skill_references_required_commands() {
+        assert!(SKILL_DISTILL.contains("leiter soul distill"));
+        assert!(SKILL_DISTILL.contains("leiter soul mark-distilled"));
+    }
+
+    #[test]
+    fn instill_skill_references_command() {
+        assert!(SKILL_INSTILL.contains("leiter soul instill"));
+    }
+
+    #[test]
+    fn uninstall_skill_references_teardown_command() {
+        assert!(SKILL_UNINSTALL.contains("leiter claude agent-teardown-instructions"));
     }
 }

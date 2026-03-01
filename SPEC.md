@@ -31,10 +31,10 @@ writing to the soul.
 │                                                              │
 │  ... normal session ...                                      │
 │                                                              │
-│  User says "remember X" ──► agent calls leiter soul instill  │
+│  User says "remember X" ──► /leiter-instill skill            │
 │                           ──► agent edits soul.md            │
 │                                                              │
-│  User says "distill" ──► agent spawns sub-agent              │
+│  User says "distill" ──► /leiter-distill skill               │
 │                           ──► sub-agent: leiter soul distill │
 │                           ──► sub-agent edits soul.md        │
 │                        ──► agent: leiter soul mark-distilled │
@@ -49,6 +49,12 @@ writing to the soul.
     ├── 20260223T173000Z-abc123.jsonl
     ├── 20260223T190000Z-def456.jsonl
     └── ...
+
+~/.claude/skills/
+├── leiter-setup/SKILL.md        # Each contains <!-- SCODE_LEITER_INSTALLED -->
+├── leiter-distill/SKILL.md
+├── leiter-instill/SKILL.md
+└── leiter-uninstall/SKILL.md
 ```
 
 ## State Directory
@@ -61,6 +67,29 @@ allows relocating leiter state for testing or multi-profile setups.
 the resolved state directory path. The string `~/.leiter` must never appear in code that produces output; use the state
 directory path obtained from `LEITER_HOME` (or the `$HOME/.leiter` fallback) instead. This ensures that when
 `LEITER_HOME` is set, the agent and user always see the correct paths.
+
+### Claude Code Home Directory
+
+The Claude Code home directory is where leiter installs its plugin files (skill files). The default is `~/.claude/`. The
+`leiter claude` subcommand accepts a `--claude-home <path>` flag to override the directory, primarily for testing.
+
+### Plugin Files
+
+`leiter claude install` writes skill files into the Claude Code home directory:
+
+- **`<claude_home>/skills/leiter-setup/SKILL.md`** — skill that calls `leiter claude agent-setup-instructions` to
+  configure hooks.
+- **`<claude_home>/skills/leiter-distill/SKILL.md`** — skill for distilling session logs into the soul.
+- **`<claude_home>/skills/leiter-instill/SKILL.md`** — skill for recording preferences. Description includes trigger
+  keywords (remember, learn, always, never) so Claude can auto-match.
+- **`<claude_home>/skills/leiter-uninstall/SKILL.md`** — skill that calls `leiter claude agent-teardown-instructions` to
+  remove hooks.
+
+Each skill file contains the sentinel string `SCODE_LEITER_INSTALLED` as an HTML comment. `leiter claude uninstall`
+checks for this sentinel to verify that leiter was installed before removing files.
+
+All skill files are `const &str` templates built into the binary. They are written to disk by `leiter claude install`
+and overwritten on re-run (idempotent).
 
 ### `~/.leiter/soul.md`
 
@@ -166,8 +195,8 @@ The `leiter` binary is assumed to be installed in `$PATH`.
 
 ### `leiter claude install`
 
-First-time setup. Performs deterministic initialization and then outputs natural language instructions for the agent to
-configure Claude Code hooks.
+First-time setup. Performs deterministic initialization of the state directory and writes plugin files (skills and
+sentinel) to the Claude Code home directory.
 
 **Deterministic steps:**
 
@@ -178,47 +207,49 @@ configure Claude Code hooks.
    current epoch values in the frontmatter. If `soul.md` already exists, update only the `setup_soft_epoch` and
    `setup_hard_epoch` fields to the binary's current values (preserving all other frontmatter and body content). If the
    existing frontmatter cannot be parsed, skip the epoch update silently
+4. Verify the Claude Code home directory exists (error if not — Claude Code not installed)
+5. Write all four skill files to their respective directories under `<claude_home>/skills/`. Overwrites existing files
+   on re-run (idempotent)
 
-**Output (stdout):** Natural language instructions telling the agent to configure Claude Code hooks in
-`~/.claude/settings.json`. The output includes:
+**Output (stdout):** A success message listing the available skills and telling the user to run `/leiter-setup` to
+configure hooks.
 
-1. The exact JSON hook entries to add (the `SessionStart` and `SessionEnd` hook objects shown in the Hook Configuration
-   section below)
-2. Instructions for the agent to:
-   - Read `~/.claude/settings.json` (or create it with `{}` if it doesn't exist)
-   - Check whether leiter hooks are already present by looking for hook commands containing `"leiter hook context"`,
-     `"leiter hook nudge"`, or `"leiter hook session-end"`
-   - If no leiter hooks are found, append the leiter hook groups to the existing `SessionStart` and `SessionEnd` arrays
-     (creating those arrays if they don't exist), preserving all existing hooks
-   - If leiter hooks are found but don't match the expected set (e.g., after a leiter upgrade changed the hook
-     commands), replace the leiter hook entries with the current ones, preserving all non-leiter hooks. Create any
-     missing hook groups (e.g., if `SessionEnd` has no leiter entry but `SessionStart` does). The match is based on the
-     set of leiter command strings present, not on JSON formatting
-   - If leiter hooks are found and already match the expected commands exactly, skip and report that hooks are already
-     configured
-   - Use the agent's Edit tool to make the changes
-
-If any deterministic step fails, the output instructs the agent to relay the error to the user.
-
-This command is designed to be run inside a Claude Code session where the agent acts on the output. If run outside a
-session, the user sees the instructions and can paste them into a session or apply them manually.
+If any step fails, the output instructs the agent to relay the error to the user.
 
 ### `leiter claude uninstall`
 
-Outputs natural language instructions for the agent to remove leiter hooks from `~/.claude/settings.json`. Makes no
-filesystem changes — the command only emits instructions.
+Removes leiter plugin files from the Claude Code home directory. Does NOT touch `~/.leiter/` (soul and logs) or
+`~/.claude/settings.json` (hooks are removed via the `agent-teardown-instructions` subcommand or manually).
 
-**Output (stdout):** Instructions telling the agent to:
+**Behavior:**
 
-1. Read `~/.claude/settings.json`
-2. Find and remove hook entries whose commands contain `"leiter hook context"`, `"leiter hook nudge"`, or
-   `"leiter hook session-end"` (the same detection strings used by `leiter claude install`)
-3. If a hook group becomes empty after removal, remove the entire group object from its parent array
-4. If a `SessionStart` or `SessionEnd` array becomes empty, remove it from the `hooks` object
-5. Preserve all non-leiter hooks
-6. Use the Edit tool to make changes
-7. If no leiter hooks are found, report that hooks are already removed
-8. After hook removal, tell the user how to fully clean up (`~/.leiter/` and the binary) and how to re-enable leiter
+1. Scan skill directories under `<claude_home>/skills/` for a `SKILL.md` containing `SCODE_LEITER_INSTALLED`
+2. If no skill file contains the sentinel: error
+3. Remove all four `<claude_home>/skills/leiter-*/` directories (best-effort, skip missing)
+
+**Output (stdout):** A success message with guidance on how to remove hooks, fully clean up (`~/.leiter/`), and
+re-enable later.
+
+**Errors:** If the sentinel is missing or unreadable, exit with a non-zero code.
+
+### `leiter claude agent-setup-instructions`
+
+Outputs natural language instructions for the agent to configure Claude Code hooks in `~/.claude/settings.json`. This is
+the same hook configuration content that `leiter claude install` used to output directly. It is called by the
+`/leiter-setup` skill.
+
+**Output (stdout):** Instructions including the exact JSON hook entries for `SessionStart` and `SessionEnd`, plus
+three-case logic for handling fresh install, upgrade, and already-configured states. See Hook Configuration below for
+the exact hook JSON.
+
+### `leiter claude agent-teardown-instructions`
+
+Outputs natural language instructions for the agent to remove leiter hooks from `~/.claude/settings.json`. Called by the
+`/leiter-uninstall` skill.
+
+**Output (stdout):** Instructions telling the agent to find and remove hook entries whose commands contain
+`"leiter hook context"`, `"leiter hook nudge"`, or `"leiter hook session-end"`, clean up empty arrays, preserve
+non-leiter hooks, and provide cleanup/re-enable guidance to the user.
 
 ### `leiter hook context`
 
@@ -248,17 +279,12 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
    Must tell the agent to use its Read/Edit/Write tools to modify this file directly.
 
    **When to instill preferences:** When the user says "remember", "learn", "instill", "always", "never", or similar
-   preference-setting language. The agent should run `leiter soul instill "<what the user wants remembered>"` and follow
-   the instructions it outputs.
+   preference-setting language. The agent should invoke the `/leiter-instill` skill.
 
    **Session transcripts:** Session transcripts are saved automatically by the SessionEnd hook. The agent does not need
    to do anything — no manual logging is required.
 
-   **Distillation command:** Must include the literal commands `leiter soul distill` and `leiter soul mark-distilled`.
-   Explain that distillation is user-triggered (the user says "distill" or similar). The agent should delegate the
-   actual distillation work to a sub-agent (which runs `leiter soul distill`, reads the output, and updates the soul),
-   then run `leiter soul mark-distilled` itself after the sub-agent succeeds. The agent must never manually edit
-   `last_distilled` in the frontmatter.
+   **Distillation:** When the user asks to distill session logs, the agent should invoke the `/leiter-distill` skill.
 
    **Soul upgrade command:** Must include the literal command `leiter soul upgrade`. Explain that this is user-triggered
    (the user says "upgrade the leiter soul" or similar) and outputs migration instructions if the soul template is
@@ -411,7 +437,8 @@ when the soul template is modified in future code changes. The agent performs th
 
 ## Hook Configuration
 
-The following hooks are configured in `~/.claude/settings.json` by the agent during `leiter claude install`:
+The following hooks are configured in `~/.claude/settings.json` by the agent when the user runs `/leiter-setup` (which
+calls `leiter claude agent-setup-instructions`):
 
 ### SessionStart Hook
 
@@ -467,10 +494,10 @@ Fires once when the session terminates. The `leiter hook session-end` command re
 ### First-Time Setup
 
 1. User installs `leiter` binary
-2. In a Claude Code session, user says "set up leiter"
-3. Agent runs `leiter claude install`
-4. The command creates `~/.leiter/` structure and outputs instructions
-5. Agent reads the instructions and edits `~/.claude/settings.json` to add hooks
+2. User runs `leiter claude install` from their terminal
+3. The command creates `~/.leiter/` structure and writes skill files to `~/.claude/skills/`
+4. User starts a Claude Code session and runs `/leiter-setup`
+5. The skill calls `leiter claude agent-setup-instructions`, agent configures hooks in `~/.claude/settings.json`
 6. User reviews and approves the settings change
 7. On next session start, leiter is active
 
@@ -484,10 +511,10 @@ Fires once when the session terminates. The `leiter hook session-end` command re
 ### User Asks the Agent to Learn Something
 
 1. User says "learn to always use snake_case for Rust functions"
-2. Agent runs `leiter soul instill "always use snake_case for Rust functions"`
-3. Agent receives writing guidelines and the quoted preference
-4. Agent reads `~/.leiter/soul.md`
-5. Agent edits the appropriate section following the guidelines
+2. Agent invokes the `/leiter-instill` skill (auto-matched via trigger keywords)
+3. Skill runs `leiter soul instill "always use snake_case for Rust functions"`
+4. Agent receives writing guidelines and the quoted preference
+5. Agent reads `~/.leiter/soul.md`, edits the appropriate section following the guidelines
 6. Preference is active in all future sessions
 
 ### Soul Upgrade
@@ -503,9 +530,10 @@ Fires once when the session terminates. The `leiter hook session-end` command re
 ### Distillation
 
 1. User says "distill my session logs" (or similar natural language)
-2. Agent spawns a sub-agent to handle distillation (keeps session log output out of the main context)
-3. Sub-agent runs `leiter soul distill`, reads the output, and updates the soul with new learnings
-4. After the sub-agent completes successfully, the main agent runs `leiter soul mark-distilled`
+2. Agent invokes the `/leiter-distill` skill
+3. Skill spawns a sub-agent to handle distillation (keeps session log output out of the main context)
+4. Sub-agent runs `leiter soul distill`, reads the output, and updates the soul with new learnings
+5. After the sub-agent completes successfully, the main agent runs `leiter soul mark-distilled`
 
 ## Non-Goals (For Now)
 

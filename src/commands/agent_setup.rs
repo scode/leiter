@@ -1,41 +1,56 @@
-//! `leiter claude install` — first-time initialization and hook configuration instructions.
+//! `leiter claude install` — first-time initialization and plugin file installation.
 //!
-//! Creates the leiter state directory structure and initial soul file, then
-//! prints instructions for the agent to wire up Claude Code hooks. If any
-//! filesystem step fails, outputs a message for the agent to relay the error
-//! to the user instead of exiting non-zero.
+//! Creates the leiter state directory structure and initial soul file, writes
+//! skill files to `~/.claude/skills/`, then prints a success message listing
+//! available skills.
 
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, TimeZone, Utc};
 use tracing::info;
 
 use crate::frontmatter::{SoulFrontmatter, parse_soul, serialize_soul};
 use crate::paths;
 use crate::templates::{
-    AGENT_SETUP_INSTRUCTIONS, SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH, SOUL_TEMPLATE,
-    SOUL_TEMPLATE_VERSION,
+    SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH, SKILL_CONTENTS, SOUL_TEMPLATE, SOUL_TEMPLATE_VERSION,
 };
 
 /// Run the `leiter claude install` command.
 ///
-/// Creates directories and the initial soul file under `state_dir`, then
-/// writes setup instructions to `out`. If the filesystem steps fail, writes
-/// an error relay message to `out` instead of returning an error — this way
-/// the agent always gets actionable output.
-pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
-    if let Err(e) = init_filesystem(state_dir) {
-        write!(
-            out,
-            "leiter claude install failed during initialization:\n\n  {e:#}\n\nPlease relay this error to the user.\n"
-        )?;
-        return Ok(());
+/// Creates directories and the initial soul file under `state_dir`, writes
+/// skill files under `claude_home`, then outputs a success message listing
+/// available skills.
+pub fn run(state_dir: &Path, claude_home: &Path) -> Result<()> {
+    init_filesystem(state_dir)?;
+
+    if !claude_home.is_dir() {
+        bail!(
+            "`{}` does not exist. Is Claude Code installed?",
+            claude_home.display()
+        );
     }
 
-    write!(out, "{AGENT_SETUP_INSTRUCTIONS}")?;
+    write_plugin_files(claude_home)?;
+
+    info!("Leiter installed successfully");
+    info!("Available skills:");
+    info!("  /leiter-setup     — configure Claude Code hooks");
+    info!("  /leiter-distill   — distill session logs into the soul");
+    info!("  /leiter-instill   — record a preference in the soul");
+    info!("  /leiter-uninstall — remove leiter hooks");
+    info!("Start a new Claude Code session and run /leiter-setup to configure hooks");
+
+    Ok(())
+}
+
+/// Output the agent-setup instructions (hook configuration).
+///
+/// Used by `leiter claude agent-setup-instructions`.
+pub fn agent_setup_instructions(out: &mut impl Write) -> Result<()> {
+    write!(out, "{}", crate::templates::AGENT_SETUP_INSTRUCTIONS)?;
     Ok(())
 }
 
@@ -63,6 +78,20 @@ fn init_filesystem(state_dir: &Path) -> Result<()> {
     } else {
         info!("soul file already exists, updating epochs");
         update_epochs(&soul_path)?;
+    }
+
+    Ok(())
+}
+
+/// Write skill files to the Claude Code home directory.
+fn write_plugin_files(claude_home: &Path) -> Result<()> {
+    for (name, content) in SKILL_CONTENTS {
+        let skill_dir = paths::skill_dir(claude_home, name);
+        fs::create_dir_all(&skill_dir)
+            .with_context(|| format!("failed to create {}", skill_dir.display()))?;
+        fs::write(skill_dir.join("SKILL.md"), content)
+            .with_context(|| format!("failed to write {}/SKILL.md", skill_dir.display()))?;
+        info!("wrote skill {name}");
     }
 
     Ok(())
@@ -107,26 +136,30 @@ fn epoch() -> DateTime<Utc> {
 mod tests {
     use super::*;
     use crate::frontmatter::{parse_soul, serialize_soul};
+    use crate::templates::SKILL_CONTENTS;
 
     /// Return everything after the closing `---\n` frontmatter delimiter.
-    /// This is the raw file suffix — byte-for-byte what follows the frontmatter.
     fn raw_body(content: &str) -> &str {
         let after_opening = content.strip_prefix("---\n").unwrap();
         let (_, body) = after_opening.split_once("\n---\n").unwrap();
         body
     }
 
-    fn run_setup(state_dir: &Path) -> String {
-        let mut out = Vec::new();
-        run(state_dir, &mut out).unwrap();
-        String::from_utf8(out).unwrap()
+    fn run_setup(state_dir: &Path, claude_home: &Path) {
+        run(state_dir, claude_home).unwrap();
+    }
+
+    fn run_setup_with_claude_home(state_dir: &Path) -> tempfile::TempDir {
+        let claude_tmp = tempfile::tempdir().unwrap();
+        run_setup(state_dir, claude_tmp.path());
+        claude_tmp
     }
 
     #[test]
     fn fresh_setup_creates_directories_and_soul() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        run_setup(dir);
+        let _claude_tmp = run_setup_with_claude_home(dir);
 
         assert!(dir.is_dir());
         assert!(paths::logs_dir(dir).is_dir());
@@ -134,10 +167,22 @@ mod tests {
     }
 
     #[test]
+    fn fresh_setup_writes_skill_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        run_setup(tmp.path(), claude_tmp.path());
+
+        for (name, _) in SKILL_CONTENTS {
+            let skill_md = paths::skill_dir(claude_tmp.path(), name).join("SKILL.md");
+            assert!(skill_md.is_file(), "missing skill file: {name}");
+        }
+    }
+
+    #[test]
     fn soul_has_expected_frontmatter() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        run_setup(dir);
+        let _claude_tmp = run_setup_with_claude_home(dir);
 
         let content = fs::read_to_string(paths::soul_path(dir)).unwrap();
         let (fm, _) = parse_soul(&content).unwrap();
@@ -149,7 +194,7 @@ mod tests {
     fn soul_body_matches_template() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        run_setup(dir);
+        let _claude_tmp = run_setup_with_claude_home(dir);
 
         let content = fs::read_to_string(paths::soul_path(dir)).unwrap();
         let (_, body) = parse_soul(&content).unwrap();
@@ -159,13 +204,14 @@ mod tests {
     #[test]
     fn running_twice_does_not_overwrite_soul() {
         let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        run_setup(dir);
+        run_setup(dir, claude_tmp.path());
 
         let soul = paths::soul_path(dir);
         fs::write(&soul, "modified").unwrap();
 
-        run_setup(dir);
+        run_setup(dir, claude_tmp.path());
 
         let content = fs::read_to_string(&soul).unwrap();
         assert_eq!(content, "modified");
@@ -174,20 +220,20 @@ mod tests {
     #[test]
     fn rerun_updates_stale_epochs() {
         let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        run_setup(dir);
+        run_setup(dir, claude_tmp.path());
 
         let soul = paths::soul_path(dir);
         let content = fs::read_to_string(&soul).unwrap();
         let (mut fm, body) = parse_soul(&content).unwrap();
 
-        // Simulate an older soul with outdated epochs.
         fm.setup_soft_epoch = 0;
         fm.setup_hard_epoch = 0;
         fs::write(&soul, serialize_soul(&fm, body)).unwrap();
         let before_body = raw_body(&fs::read_to_string(&soul).unwrap()).to_owned();
 
-        run_setup(dir);
+        run_setup(dir, claude_tmp.path());
 
         let updated = fs::read_to_string(&soul).unwrap();
         let (updated_fm, _) = parse_soul(&updated).unwrap();
@@ -195,15 +241,15 @@ mod tests {
         assert_eq!(updated_fm.setup_hard_epoch, SETUP_HARD_EPOCH);
         assert_eq!(updated_fm.last_distilled, fm.last_distilled);
         assert_eq!(updated_fm.soul_version, fm.soul_version);
-        // Raw bytes after frontmatter are identical.
         assert_eq!(raw_body(&updated), before_body);
     }
 
     #[test]
     fn rerun_preserves_modified_body() {
         let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        run_setup(dir);
+        run_setup(dir, claude_tmp.path());
 
         let soul = paths::soul_path(dir);
         let content = fs::read_to_string(&soul).unwrap();
@@ -212,55 +258,77 @@ mod tests {
         let custom_body = "# My customized soul\n\nLearned preferences here.\n";
         fs::write(&soul, serialize_soul(&fm, custom_body)).unwrap();
 
-        run_setup(dir);
+        run_setup(dir, claude_tmp.path());
 
         let updated = fs::read_to_string(&soul).unwrap();
         let (updated_fm, _) = parse_soul(&updated).unwrap();
         assert_eq!(updated_fm.setup_soft_epoch, SETUP_SOFT_EPOCH);
-        // Raw bytes after frontmatter are identical.
         assert_eq!(raw_body(&updated), custom_body);
     }
 
     #[test]
     fn rerun_with_unparseable_frontmatter_does_not_error() {
         let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        run_setup(dir);
+        run_setup(dir, claude_tmp.path());
 
         let soul = paths::soul_path(dir);
         fs::write(&soul, "---\ngarbage: true\n---\nbody\n").unwrap();
 
-        // Should not panic or return error.
-        let output = run_setup(dir);
-        assert!(output.contains("leiter hook context"));
+        run_setup(dir, claude_tmp.path());
     }
 
     #[test]
     fn running_twice_still_creates_missing_directories() {
         let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        run_setup(dir);
+        run_setup(dir, claude_tmp.path());
 
         fs::remove_dir(paths::logs_dir(dir)).unwrap();
 
-        run_setup(dir);
+        run_setup(dir, claude_tmp.path());
 
         assert!(paths::logs_dir(dir).is_dir());
     }
 
     #[test]
-    fn output_contains_setup_instructions() {
-        let tmp = tempfile::tempdir().unwrap();
-        let output = run_setup(tmp.path());
-        assert!(output.contains("leiter hook context"));
-        assert!(output.contains("leiter hook session-end"));
+    fn init_failure_returns_error() {
+        let bad_dir = Path::new("/dev/null/impossible");
+        let claude_tmp = tempfile::tempdir().unwrap();
+        let err = run(bad_dir, claude_tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("failed to create"));
     }
 
     #[test]
-    fn init_failure_outputs_error_relay_message() {
-        let bad_dir = Path::new("/dev/null/impossible");
-        let output = run_setup(bad_dir);
-        assert!(output.contains("failed during initialization"));
-        assert!(output.contains("relay this error"));
+    fn claude_home_missing_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = run(tmp.path(), Path::new("/nonexistent/claude")).unwrap_err();
+        assert!(err.to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn rerun_overwrites_skill_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        run_setup(tmp.path(), claude_tmp.path());
+
+        let skill_md = paths::skill_dir(claude_tmp.path(), "leiter-setup").join("SKILL.md");
+        fs::write(&skill_md, "old content").unwrap();
+
+        run_setup(tmp.path(), claude_tmp.path());
+
+        let content = fs::read_to_string(skill_md).unwrap();
+        assert_ne!(content, "old content");
+    }
+
+    #[test]
+    fn agent_setup_instructions_outputs_hook_commands() {
+        let mut out = Vec::new();
+        agent_setup_instructions(&mut out).unwrap();
+        let output = String::from_utf8(out).unwrap();
+        assert!(output.contains("leiter hook context"));
+        assert!(output.contains("leiter hook session-end"));
     }
 }
