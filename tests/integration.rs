@@ -134,7 +134,8 @@ fn session_end_saves_transcript() {
         .write_stdin(json.to_string())
         .assert()
         .success()
-        .stdout(predicate::str::contains("Transcript saved"));
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("Transcript saved"));
 
     let logs_dir = dir.join("logs");
     let entries: Vec<_> = fs::read_dir(&logs_dir).unwrap().collect();
@@ -165,7 +166,8 @@ fn claude_install_then_session_end_then_distill() {
         .write_stdin(json.to_string())
         .assert()
         .success()
-        .stdout(predicate::str::contains("Transcript saved"));
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("Transcript saved"));
 
     leiter(dir)
         .args(["soul", "distill"])

@@ -9,6 +9,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::Deserialize;
+use tracing::info;
 
 use crate::log_filename::generate_log_filename;
 use crate::paths;
@@ -19,7 +20,7 @@ struct SessionEndInput {
     transcript_path: String,
 }
 
-pub fn run(state_dir: &Path, input: &mut impl Read, out: &mut impl Write) -> Result<()> {
+pub fn run(state_dir: &Path, input: &mut impl Read) -> Result<()> {
     let logs_dir = paths::logs_dir(state_dir);
 
     if !logs_dir.is_dir() {
@@ -52,7 +53,7 @@ pub fn run(state_dir: &Path, input: &mut impl Read, out: &mut impl Write) -> Res
     tmp.persist(&final_path)
         .with_context(|| format!("failed to rename temp file to {}", final_path.display()))?;
 
-    writeln!(out, "Transcript saved: {}", final_path.display())?;
+    info!("Transcript saved: {}", final_path.display());
 
     Ok(())
 }
@@ -60,20 +61,18 @@ pub fn run(state_dir: &Path, input: &mut impl Read, out: &mut impl Write) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_support::{bytes_to_string, setup_state_dir};
+    use crate::commands::test_support::setup_state_dir;
     use crate::log_filename::parse_log_filename;
     use std::fs;
     use std::io::Cursor;
 
-    fn run_session_end(state_dir: &Path, session_id: &str, transcript_path: &str) -> String {
+    fn run_session_end(state_dir: &Path, session_id: &str, transcript_path: &str) {
         let json = serde_json::json!({
             "session_id": session_id,
             "transcript_path": transcript_path,
         });
         let mut input = Cursor::new(json.to_string().into_bytes());
-        let mut out = Vec::new();
-        run(state_dir, &mut input, &mut out).unwrap();
-        bytes_to_string(out)
+        run(state_dir, &mut input).unwrap();
     }
 
     #[test]
@@ -116,21 +115,6 @@ mod tests {
     }
 
     #[test]
-    fn confirmation_includes_file_path() {
-        let tmp = setup_state_dir();
-        let transcript_file = tempfile::NamedTempFile::new().unwrap();
-        fs::write(transcript_file.path(), b"data").unwrap();
-
-        let output = run_session_end(
-            tmp.path(),
-            "sess1",
-            transcript_file.path().to_str().unwrap(),
-        );
-        assert!(output.contains("Transcript saved:"));
-        assert!(output.contains("sess1.jsonl"));
-    }
-
-    #[test]
     fn missing_logs_dir_errors() {
         let tmp = tempfile::tempdir().unwrap();
         let transcript_file = tempfile::NamedTempFile::new().unwrap();
@@ -141,8 +125,7 @@ mod tests {
             "transcript_path": transcript_file.path().to_str().unwrap(),
         });
         let mut input = Cursor::new(json.to_string().into_bytes());
-        let mut out = Vec::new();
-        let result = run(tmp.path(), &mut input, &mut out);
+        let result = run(tmp.path(), &mut input);
         assert!(result.is_err());
         assert!(
             result
@@ -160,8 +143,7 @@ mod tests {
             "transcript_path": "/nonexistent/transcript.jsonl",
         });
         let mut input = Cursor::new(json.to_string().into_bytes());
-        let mut out = Vec::new();
-        let result = run(tmp.path(), &mut input, &mut out);
+        let result = run(tmp.path(), &mut input);
         assert!(result.is_err());
         assert!(
             result
@@ -175,8 +157,7 @@ mod tests {
     fn invalid_json_errors() {
         let tmp = setup_state_dir();
         let mut input = Cursor::new(b"not json at all".to_vec());
-        let mut out = Vec::new();
-        let result = run(tmp.path(), &mut input, &mut out);
+        let result = run(tmp.path(), &mut input);
         assert!(result.is_err());
     }
 
@@ -192,8 +173,7 @@ mod tests {
             "extra_field": "ignored",
         });
         let mut input = Cursor::new(json.to_string().into_bytes());
-        let mut out = Vec::new();
-        let result = run(tmp.path(), &mut input, &mut out);
+        let result = run(tmp.path(), &mut input);
         assert!(result.is_ok());
     }
 

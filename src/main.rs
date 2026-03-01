@@ -134,11 +134,7 @@ fn main() -> Result<()> {
                 commands::nudge::run(&state_dir, &mut std::io::stdout())?;
             }
             HookCommand::SessionEnd => {
-                commands::session_end::run(
-                    &state_dir,
-                    &mut std::io::stdin(),
-                    &mut std::io::stdout(),
-                )?;
+                commands::session_end::run(&state_dir, &mut std::io::stdin())?;
             }
         },
         Command::Soul { command } => match command {

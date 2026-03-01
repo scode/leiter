@@ -319,7 +319,8 @@ and are ignored):
 4. Generate the final filename using the current UTC timestamp: `~/.leiter/logs/<YYYYMMDDTHHMMSSZ>-<session_id>.jsonl`
 5. Atomically rename the temporary file to the final path
 
-**Output (stdout):** Confirmation message with the path of the created file.
+**Output:** None. A confirmation message with the saved file path is logged to stderr (via `tracing`). The SessionEnd
+hook fires after the session terminates, so no agent is present to read stdout.
 
 **Errors:** If `~/.leiter/logs/` does not exist, the transcript file cannot be read, the write fails, or the atomic
 rename fails, print an error to stderr and exit with a non-zero code. Clean up the temporary file on any error.
