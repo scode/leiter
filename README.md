@@ -31,6 +31,7 @@ Session context injection and session logging happen automatically via hooks. Th
 - **Learning preferences:** Tell the agent "remember to always use snake_case" (or similar). It invokes the
   `/leiter-instill` skill to update the soul.
 - **Distillation:** Periodically say "distill" to have the agent invoke `/leiter-distill`, which processes accumulated
-  session logs and updates the soul. If undistilled logs are older than 24 hours, the agent will nudge you at session
-  start.
+  session logs and updates the soul. By default, if undistilled logs are older than 24 hours the agent will nudge you at
+  session start. During `/leiter-setup` you can opt into automatic background distillation instead (4-hour threshold,
+  runs silently).
 - **Soul upgrade:** After updating the leiter binary, say "upgrade the leiter soul" to migrate to the latest template.

@@ -396,13 +396,18 @@ See the Architecture section for why guidelines are shared between `instill` and
 Checks for stale undistilled session logs and outputs a nudge if any exist. Called by the SessionStart hook (after
 `leiter hook context`) to remind the agent to suggest distillation.
 
+**Flags:**
+
+- `--auto-distill`: Use a 4-hour threshold instead of 24 hours, and output an instruction for the agent to silently run
+  distillation in a background sub-agent (instead of asking the user). This is opt-in via `/leiter-setup` option 3.
+
 **Behavior:**
 
 1. Read `last_distilled` timestamp from `~/.leiter/soul.md` frontmatter
 2. Scan `~/.leiter/logs/` for files whose filename timestamps are >= `last_distilled` (same inclusive comparison as
    `leiter soul distill`)
-3. If any such file has a timestamp older than 24 hours ago (`now - 24h`): output a nudge message (defined in source
-   code)
+3. If any such file has a timestamp older than the threshold (`now - 24h`, or `now - 4h` with `--auto-distill`): output
+   a message (defined in source code)
 4. Otherwise: output nothing
 
 If the soul file does not exist or the logs directory does not exist, silently output nothing and exit successfully. If
@@ -411,7 +416,10 @@ nothing and exit successfully (fail-open). The nudge must not break the session.
 
 **Output (stdout):**
 
-- If stale undistilled logs exist: a short nudge message reminding the agent to suggest distillation
+- Without `--auto-distill`: if stale undistilled logs exist (24h), a short nudge message reminding the agent to suggest
+  distillation
+- With `--auto-distill`: if stale undistilled logs exist (4h), an instruction for the agent to silently invoke
+  distillation in a background sub-agent without mentioning it to the user
 - Otherwise: nothing (zero context pollution)
 
 ### `leiter soul upgrade`
@@ -468,7 +476,9 @@ calls `leiter claude agent-setup-instructions`):
 
 Fires on every session start (new, resume, clear, compact). The stdout output is added as context for the agent. The
 `leiter hook context` hook injects the soul and agent instructions; the `leiter hook nudge` hook outputs a distillation
-reminder only when stale undistilled logs exist (otherwise it outputs nothing, adding zero context).
+reminder only when stale undistilled logs exist (otherwise it outputs nothing, adding zero context). If the user opts
+into auto-distillation during `/leiter-setup` (option 3), the nudge command is configured as
+`leiter hook nudge --auto-distill`, which uses a 4-hour threshold and instructs the agent to silently run distillation.
 
 ### SessionEnd Hook
 
@@ -494,14 +504,17 @@ Fires once when the session terminates. The `leiter hook session-end` command re
 
 ## Permissions
 
-After configuring hooks, `agent-setup-instructions` offers two optional permission rules (each prompted separately):
+After configuring hooks, `agent-setup-instructions` offers three optional features:
 
 1. **Bash commands:** `"Bash(leiter:*)"` — allows all leiter CLI commands without confirmation dialogs.
 2. **Soul file access:** `"Read(<soul_path>)"`, `"Edit(<soul_path>)"`, and `"Write(<soul_path>)"` — allows reading,
    editing, and writing the soul file without confirmation dialogs. The soul path is resolved from the state directory
    (e.g., `~/.leiter/soul.md`).
+3. **Auto-distillation:** Changes the nudge hook command from `leiter hook nudge` to `leiter hook nudge --auto-distill`,
+   so the agent silently runs distillation in the background at session start when stale logs exist (4h threshold)
+   instead of asking the user.
 
-Each rule is offered as a yes/no question. The user can accept one, both, or neither.
+The user can accept any combination, all, or none.
 
 `agent-teardown-instructions` removes any entries in `permissions.allow` starting with `Bash(leiter` or referencing the
 soul file path. Empty `permissions.allow` arrays and empty `permissions` objects are cleaned up.
@@ -516,13 +529,15 @@ soul file path. Empty `permissions.allow` arrays and empty `permissions` objects
 4. User starts a Claude Code session and runs `/leiter-setup`
 5. The skill calls `leiter claude agent-setup-instructions`, agent configures hooks in `~/.claude/settings.json`
 6. User reviews and approves the settings change
-7. Agent asks whether to add `Bash(leiter:*)` permission rule; user accepts or declines
+7. Agent presents optional features (Bash permissions, soul file access, auto-distillation); user accepts any
+   combination or none
 8. On next session start, leiter is active
 
 ### Normal Session (After Setup)
 
 1. Session starts → SessionStart hook fires → `leiter hook context` outputs soul + instructions, `leiter hook nudge`
-   outputs a distillation reminder if stale logs exist → agent has leiter hook context
+   outputs a distillation reminder if stale logs exist (or instructs silent distillation when `--auto-distill` is
+   enabled) → agent has leiter hook context
 2. Normal session proceeds
 3. Session ends → SessionEnd hook fires → `leiter hook session-end` copies transcript to `~/.leiter/logs/`
 
@@ -551,11 +566,12 @@ soul file path. Empty `permissions.allow` arrays and empty `permissions` objects
 2. Agent invokes the `/leiter-distill` skill
 3. Skill spawns a sub-agent to handle distillation (keeps session log output out of the main context)
 4. Sub-agent runs `leiter soul distill`, reads the output, and updates the soul with new learnings
-5. After the sub-agent completes successfully, the main agent runs `leiter soul mark-distilled`
+5. After the sub-agent completes successfully, the main agent always runs `leiter soul mark-distilled` — even if the
+   sub-agent found no new preferences to add. This prevents the same logs from being re-processed on every session start
 
 ## Non-Goals (For Now)
 
 - Multiple user profiles or project-specific souls
-- Automatic distillation (always user-triggered)
+- Automatic distillation by default (opt-in via setup)
 - Soul backup
 - API key management or direct Claude API calls from the CLI

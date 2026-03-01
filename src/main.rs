@@ -87,7 +87,11 @@ pub enum HookCommand {
     /// Output soul content and agent instructions
     Context,
     /// Nudge about stale undistilled logs
-    Nudge,
+    Nudge {
+        /// Silently trigger background distillation instead of asking the user
+        #[arg(long)]
+        auto_distill: bool,
+    },
     /// Handle the Claude Code SessionEnd hook
     SessionEnd,
 }
@@ -130,8 +134,8 @@ fn main() -> Result<()> {
             HookCommand::Context => {
                 commands::context::run(&state_dir, &mut std::io::stdout())?;
             }
-            HookCommand::Nudge => {
-                commands::nudge::run(&state_dir, &mut std::io::stdout())?;
+            HookCommand::Nudge { auto_distill } => {
+                commands::nudge::run(&state_dir, &mut std::io::stdout(), *auto_distill)?;
             }
             HookCommand::SessionEnd => {
                 commands::session_end::run(&state_dir, &mut std::io::stdin())?;
