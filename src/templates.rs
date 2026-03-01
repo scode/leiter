@@ -198,7 +198,7 @@ from empty sections.
 /// the agent how to remove leiter hooks from `~/.claude/settings.json`.
 pub fn agent_uninstall_instructions(state_dir: &Path) -> String {
     let dir = state_dir.display();
-    let soul = paths::soul_path(state_dir).display().to_string();
+    let soul = paths::permission_path(&paths::soul_path(state_dir));
     format!(
         r#"Remove leiter hooks from Claude Code by editing `~/.claude/settings.json`.
 
@@ -230,7 +230,7 @@ After removing hooks and permissions, tell the user:
 /// The permissions section references the soul file path, which depends on
 /// the state directory, so this must be a function rather than a const.
 pub fn agent_setup_instructions_text(state_dir: &Path) -> String {
-    let soul = paths::soul_path(state_dir).display().to_string();
+    let soul = paths::permission_path(&paths::soul_path(state_dir));
     format!(
         r#"This is a two-step process. Complete step 1 fully before starting step 2.
 
@@ -511,8 +511,8 @@ mod tests {
     #[test]
     fn agent_setup_instructions_contain_soul_file_permissions() {
         let text = agent_setup_instructions_text(Path::new("/test/state"));
-        assert!(text.contains("Edit(/test/state/soul.md)"));
-        assert!(text.contains("Write(/test/state/soul.md)"));
+        assert!(text.contains("Edit(//test/state/soul.md)"));
+        assert!(text.contains("Write(//test/state/soul.md)"));
     }
 
     #[test]
@@ -545,7 +545,7 @@ mod tests {
         let instructions = agent_uninstall_instructions(Path::new("/test/state"));
         assert!(instructions.contains("permissions"));
         assert!(instructions.contains("Bash(leiter"));
-        assert!(instructions.contains("/test/state/soul.md"));
+        assert!(instructions.contains("//test/state/soul.md"));
     }
 
     #[test]

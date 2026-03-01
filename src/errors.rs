@@ -16,6 +16,9 @@ pub enum LeiterError {
     #[error("invalid log filename: {0}")]
     LogFilenameParse(String),
 
+    #[error("cannot resolve state directory `{0}`: {1}")]
+    StateDir(String, std::io::Error),
+
     #[error("cannot determine home directory")]
     HomeNotFound,
 }

@@ -508,8 +508,10 @@ After configuring hooks, `agent-setup-instructions` offers three optional featur
 
 1. **Bash commands:** `"Bash(leiter:*)"` — allows all leiter CLI commands without confirmation dialogs.
 2. **Soul file access:** `"Read(<soul_path>)"`, `"Edit(<soul_path>)"`, and `"Write(<soul_path>)"` — allows reading,
-   editing, and writing the soul file without confirmation dialogs. The soul path is resolved from the state directory
-   (e.g., `~/.leiter/soul.md`).
+   editing, and writing the soul file without confirmation dialogs. Claude Code's `permissions.allow` uses
+   gitignore-style path matching: `/path` is project-relative, `//path` is absolute, and `~/path` is home-relative. A
+   bare absolute path like `/Users/alice/.leiter/soul.md` would be interpreted as project-relative and never match. The
+   soul path must be formatted as `~/.leiter/soul.md` (when under `$HOME`) or `//path/to/soul.md` (otherwise).
 3. **Auto-distillation:** Changes the nudge hook command from `leiter hook nudge` to `leiter hook nudge --auto-distill`,
    so the agent silently runs distillation in the background at session start when stale logs exist (4h threshold)
    instead of asking the user.
