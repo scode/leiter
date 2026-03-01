@@ -99,6 +99,9 @@ pub const SOUL_WRITING_GUIDELINES: &str = "\
 
 Follow these rules when adding or updating entries in the soul file.
 
+**Frontmatter:** Never modify the YAML front matter (the block between `---` \
+delimiters at the top of the file). Only edit the markdown body below it.
+
 **Format:** Use concise bullets, one preference per bullet. Be specific and \
 actionable — avoid vague statements.
 
