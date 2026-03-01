@@ -218,9 +218,13 @@ If no leiter hooks are found, report that leiter hooks are already removed.
 
 After removing hooks, check `permissions.allow` in `~/.claude/settings.json` for any entries starting with `Bash(leiter` or referencing `{soul}` (e.g., `Read({soul})`, `Edit({soul})`, `Write({soul})`). Remove them. If `permissions.allow` becomes empty, remove it. If the `permissions` object becomes empty, remove it. Preserve all non-leiter permission entries.
 
-After removing hooks and permissions, tell the user:
-- To completely remove leiter, run `leiter claude uninstall` from a terminal, then delete `{dir}/` (this removes the soul and all session logs) and uninstall the binary.
-- To re-enable leiter later, run `leiter claude install` from a terminal, then run `/leiter-setup` in a Claude Code session.
+After removing hooks and permissions, tell the user EXACTLY the following (no rephrasing):
+
+leiter is now disabled. You are free to run /leiter-setup again at any time to re-enable.
+
+To completely remove leiter, run 'leiter claude uninstall' from a terminal, then delete {dir}/ and uninstall the binary.
+
+To re-enable later, run 'leiter claude install' then /leiter-setup in a Claude Code session.
 "#
     )
 }
