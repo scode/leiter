@@ -240,7 +240,7 @@ the same hook configuration content that `leiter claude install` used to output 
 
 **Output (stdout):** Instructions including the exact JSON hook entries for `SessionStart` and `SessionEnd`, plus
 three-case logic for handling fresh install, upgrade, and already-configured states. See Hook Configuration below for
-the exact hook JSON.
+the exact hook JSON. After hooks are configured, includes an optional permissions prompt (see Permissions below).
 
 ### `leiter claude agent-teardown-instructions`
 
@@ -249,7 +249,8 @@ Outputs natural language instructions for the agent to remove leiter hooks from 
 
 **Output (stdout):** Instructions telling the agent to find and remove hook entries whose commands contain
 `"leiter hook context"`, `"leiter hook nudge"`, or `"leiter hook session-end"`, clean up empty arrays, preserve
-non-leiter hooks, and provide cleanup/re-enable guidance to the user.
+non-leiter hooks, remove leiter permission entries (see Permissions below), and provide cleanup/re-enable guidance to
+the user.
 
 ### `leiter hook context`
 
@@ -490,6 +491,20 @@ reminder only when stale undistilled logs exist (otherwise it outputs nothing, a
 Fires once when the session terminates. The `leiter hook session-end` command reads the SessionEnd hook JSON from stdin
 (which includes `session_id` and `transcript_path`) and copies the transcript to `~/.leiter/logs/`.
 
+## Permissions
+
+After configuring hooks, `agent-setup-instructions` offers two optional permission rules (each prompted separately):
+
+1. **Bash commands:** `"Bash(leiter:*)"` — allows all leiter CLI commands without confirmation dialogs.
+2. **Soul file access:** `"Read(<soul_path>)"`, `"Edit(<soul_path>)"`, and `"Write(<soul_path>)"` — allows reading,
+   editing, and writing the soul file without confirmation dialogs. The soul path is resolved from the state directory
+   (e.g., `~/.leiter/soul.md`).
+
+Each rule is offered as a yes/no question. The user can accept one, both, or neither.
+
+`agent-teardown-instructions` removes any entries in `permissions.allow` starting with `Bash(leiter` or referencing the
+soul file path. Empty `permissions.allow` arrays and empty `permissions` objects are cleaned up.
+
 ## Flows
 
 ### First-Time Setup
@@ -500,7 +515,8 @@ Fires once when the session terminates. The `leiter hook session-end` command re
 4. User starts a Claude Code session and runs `/leiter-setup`
 5. The skill calls `leiter claude agent-setup-instructions`, agent configures hooks in `~/.claude/settings.json`
 6. User reviews and approves the settings change
-7. On next session start, leiter is active
+7. Agent asks whether to add `Bash(leiter:*)` permission rule; user accepts or declines
+8. On next session start, leiter is active
 
 ### Normal Session (After Setup)
 

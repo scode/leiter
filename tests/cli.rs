@@ -54,7 +54,7 @@ fn parses_claude_agent_setup_instructions() {
         .args(["claude", "agent-setup-instructions"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Configure Claude Code hooks"));
+        .stdout(predicate::str::contains("leiter hook context"));
 }
 
 #[test]

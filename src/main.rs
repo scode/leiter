@@ -167,7 +167,10 @@ fn main() -> Result<()> {
                     commands::agent_uninstall::run(&state_dir, &claude_home)?;
                 }
                 ClaudeCommand::AgentSetupInstructions => {
-                    commands::agent_setup::agent_setup_instructions(&mut std::io::stdout())?;
+                    commands::agent_setup::agent_setup_instructions(
+                        &state_dir,
+                        &mut std::io::stdout(),
+                    )?;
                 }
                 ClaudeCommand::AgentTeardownInstructions => {
                     commands::agent_uninstall::agent_teardown_instructions(
