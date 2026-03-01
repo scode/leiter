@@ -266,8 +266,9 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
      `leiter claude install`; if higher, suggest upgrading the binary
    - If `setup_soft_epoch` does not exactly match the binary's expected value: output a nudge message (different for
      older vs. newer soul) but continue to inject the soul normally
-4. If frontmatter parsing fails, skip epoch checks and proceed (fail-open — a corrupt frontmatter should not block the
-   session entirely)
+4. If frontmatter parsing fails, skip epoch checks but output a warning instructing the agent to tell the user that the
+   soul has invalid YAML front matter (including the soul path). The soul is still injected (fail-open — a corrupt
+   frontmatter should not block the session entirely)
 
 **Output (stdout):**
 
