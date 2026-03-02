@@ -146,6 +146,14 @@ mod tests {
     }
 
     #[test]
+    fn missing_epoch_fields_default_to_one() {
+        let doc = "---\nlast_distilled: 1970-01-01T00:00:00Z\nsoul_version: 2\n---\nbody\n";
+        let (fm, _) = parse_soul(doc).unwrap();
+        assert_eq!(fm.setup_soft_epoch, 1);
+        assert_eq!(fm.setup_hard_epoch, 1);
+    }
+
+    #[test]
     fn body_with_horizontal_rules() {
         let doc = "---\nlast_distilled: 1970-01-01T00:00:00Z\nsoul_version: 1\n---\nBefore rule\n\n---\n\nAfter rule\n";
         let (fm, body) = parse_soul(doc).unwrap();

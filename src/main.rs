@@ -3,6 +3,7 @@ mod errors;
 mod frontmatter;
 mod log_filename;
 mod paths;
+mod soul_validation;
 mod templates;
 
 use anyhow::Result;

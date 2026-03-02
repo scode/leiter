@@ -1,9 +1,14 @@
+use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use tracing::info;
 
 pub struct RemoteHost {
     ssh_dest: String,
     target_triple: String,
+    control_path: PathBuf,
+    // Held for RAII cleanup — the directory is removed on drop, which must
+    // happen after the control socket file inside it is closed.
+    _control_dir: tempfile::TempDir,
 }
 
 impl RemoteHost {
@@ -24,11 +29,49 @@ impl RemoteHost {
             }
         };
 
-        info!(ssh_dest, target_triple, "remote host configured");
+        // Multiplex all SSH connections over a single persistent TCP connection.
+        // Without this, the many rapid SSH invocations across steps exhaust the
+        // server's MaxSessions/MaxStartups limits, causing "Connection closed" drops.
+        // Also eliminates per-command TCP+SSH handshake overhead.
+        let control_dir =
+            tempfile::tempdir().expect("failed to create tempdir for SSH control socket");
+        let control_path = control_dir.path().join("ctrl");
+
+        let status = Command::new("ssh")
+            .args([
+                "-o",
+                "ControlMaster=yes",
+                "-o",
+                &format!("ControlPath={}", control_path.display()),
+                "-o",
+                "ControlPersist=yes",
+                "-o",
+                "ConnectTimeout=10",
+                "-N",
+                "-f",
+                &ssh_dest,
+            ])
+            .status()
+            .expect("failed to start SSH control master");
+        assert!(status.success(), "SSH control master failed to start");
+
+        info!(
+            ssh_dest,
+            target_triple, "remote host configured (SSH multiplexing enabled)"
+        );
         Some(Self {
             ssh_dest,
             target_triple,
+            control_path,
+            _control_dir: control_dir,
         })
+    }
+
+    fn ssh_control_args(&self) -> [String; 2] {
+        [
+            "-o".to_string(),
+            format!("ControlPath={}", self.control_path.display()),
+        ]
     }
 
     /// Run a command on the remote host via SSH.
@@ -36,12 +79,26 @@ impl RemoteHost {
     /// Prepends ~/.local/bin to PATH since `ssh host "cmd"` runs a
     /// non-login non-interactive shell that won't source .profile or
     /// the useful parts of .bashrc (most distros guard on interactive).
+    ///
+    /// Retries once on SSH transport errors (exit code 255).
     pub fn run(&self, cmd: &str) -> Output {
         let wrapped = format!("export PATH=\"$HOME/.local/bin:$PATH\" && {cmd}");
-        Command::new("ssh")
-            .args(["-o", "ConnectTimeout=10", &self.ssh_dest, &wrapped])
-            .output()
-            .unwrap_or_else(|e| panic!("ssh failed to execute: {e}"))
+        for attempt in 0..2 {
+            let output = Command::new("ssh")
+                .args(self.ssh_control_args())
+                .args(["-o", "ConnectTimeout=10", &self.ssh_dest, &wrapped])
+                .output()
+                .unwrap_or_else(|e| panic!("ssh failed to execute: {e}"));
+
+            if output.status.code() == Some(255) && attempt == 0 {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                info!(stderr = %stderr, "SSH transport error, retrying in 2s");
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                continue;
+            }
+            return output;
+        }
+        unreachable!()
     }
 
     /// Run a command on the remote host, assert success, return stdout.
@@ -60,6 +117,7 @@ impl RemoteHost {
     pub fn scp_to(&self, local: &str, remote: &str) {
         let dest = format!("{}:{remote}", self.ssh_dest);
         let status = Command::new("scp")
+            .args(self.ssh_control_args())
             .args(["-o", "ConnectTimeout=10", local, &dest])
             .status()
             .unwrap_or_else(|e| panic!("scp failed to execute: {e}"));
@@ -78,12 +136,23 @@ impl RemoteHost {
     }
 
     /// Run a `claude -p` prompt on the remote host with a timeout.
+    ///
+    /// Always logs full stdout and stderr for debuggability.
     pub fn claude_prompt(&self, prompt: &str, max_turns: u32) -> Output {
         let escaped = prompt.replace('\'', "'\\''");
         let cmd = format!(
             "timeout 180 claude -p --max-turns {max_turns} --dangerously-skip-permissions '{escaped}'"
         );
-        self.run(&cmd)
+        let output = self.run(&cmd);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        info!(
+            status = %output.status,
+            stdout = %stdout,
+            stderr = %stderr,
+            "claude prompt: {prompt}"
+        );
+        output
     }
 
     /// Run a `claude -p` prompt, assert it succeeds, return stdout.
@@ -120,6 +189,7 @@ impl RemoteHost {
             .expect("failed to read stdin");
 
         let status = Command::new("ssh")
+            .args(self.ssh_control_args())
             .args([
                 "-t",
                 "-o",
@@ -245,6 +315,20 @@ print()
             self.run_ok("ls -la ~/.claude/skills/ 2>&1 || echo 'skills dir missing'");
         info!(skills = %skills_listing, "post-install skills directory");
         info!("setup complete");
+    }
+}
+
+impl Drop for RemoteHost {
+    fn drop(&mut self) {
+        let _ = Command::new("ssh")
+            .args([
+                "-o",
+                &format!("ControlPath={}", self.control_path.display()),
+                "-O",
+                "exit",
+                &self.ssh_dest,
+            ])
+            .output();
     }
 }
 

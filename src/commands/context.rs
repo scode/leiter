@@ -2,92 +2,41 @@
 //!
 //! Called by the SessionStart hook on every session start. Checks setup epoch
 //! compatibility, then outputs the preamble (explaining how to interact with
-//! leiter) followed by the full soul file. Hard epoch mismatches block the
-//! session; soft mismatches produce a nudge.
+//! leiter) followed by the full soul file. Hard epoch mismatches and corrupt
+//! frontmatter block the session; soft mismatches produce a nudge.
 
-use std::cmp::Ordering;
-use std::fs;
 use std::io::Write;
 use std::path::Path;
 
 use anyhow::Result;
-use tracing::warn;
 
-use crate::frontmatter::parse_soul;
-use crate::paths;
-use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH, context_preamble};
+use crate::soul_validation::{SoulStatus, validate_soul};
+use crate::templates::context_preamble;
 
 /// Run the context command.
 ///
-/// If the soul file exists, checks setup epochs for compatibility, then
-/// outputs the preamble and soul content. Hard epoch mismatches block the
-/// session (no soul injected). Soft epoch mismatches produce a nudge but
-/// still inject the soul.
+/// Validates the soul file, then outputs the preamble and soul content.
+/// Hard epoch mismatches and corrupt frontmatter block the session (no soul
+/// injected). Soft epoch mismatches produce a nudge but still inject the soul.
 ///
-/// If the soul doesn't exist, outputs a message suggesting `leiter claude install`.
-/// Either way, exits successfully — the SessionStart hook should never fail
-/// the session.
+/// Always exits successfully — the SessionStart hook should never fail the
+/// session.
 pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
-    let soul_path = paths::soul_path(state_dir);
-
-    if !soul_path.exists() {
-        writeln!(
-            out,
-            "Leiter is not initialized. Run `leiter claude install` to set up."
-        )?;
-        return Ok(());
-    }
-
-    let soul_content = fs::read_to_string(&soul_path)?;
-
-    if let Ok((fm, _)) = parse_soul(&soul_content) {
-        match fm.setup_hard_epoch.cmp(&SETUP_HARD_EPOCH) {
-            Ordering::Less => {
-                writeln!(
-                    out,
-                    "ACTION REQUIRED: Leiter setup is incompatible (setup_hard_epoch: soul={}, binary={}). The binary was upgraded but setup was not re-run. Before responding to the user's first message, tell them: \"Leiter setup needs to be re-run — please run `leiter claude install` in your terminal and follow the instructions, then start a new session.\" Do not attempt to use leiter commands in this session.",
-                    fm.setup_hard_epoch, SETUP_HARD_EPOCH,
-                )?;
-                return Ok(());
-            }
-            Ordering::Greater => {
-                writeln!(
-                    out,
-                    "ACTION REQUIRED: Leiter setup is incompatible (setup_hard_epoch: soul={}, binary={}). The soul was created by a newer leiter binary than the one currently installed. Before responding to the user's first message, tell them: \"Your leiter binary is outdated — please upgrade it, then start a new session.\" Do not attempt to use leiter commands in this session.",
-                    fm.setup_hard_epoch, SETUP_HARD_EPOCH,
-                )?;
-                return Ok(());
-            }
-            Ordering::Equal => {}
+    match validate_soul(state_dir) {
+        SoulStatus::Incompatible(reason) => {
+            writeln!(out, "{}", reason.agent_message())?;
         }
-
-        match fm.setup_soft_epoch.cmp(&SETUP_SOFT_EPOCH) {
-            Ordering::Less => {
-                writeln!(
-                    out,
-                    "Before responding to the user's first message, briefly mention that leiter setup is slightly behind the binary (setup_soft_epoch: soul={}, binary={}). Suggest they run `leiter claude install` when convenient. Keep it to one short sentence.\n",
-                    fm.setup_soft_epoch, SETUP_SOFT_EPOCH,
-                )?;
+        SoulStatus::Compatible {
+            raw_content,
+            soft_nudge,
+            ..
+        } => {
+            if let Some(nudge) = &soft_nudge {
+                writeln!(out, "{nudge}\n")?;
             }
-            Ordering::Greater => {
-                writeln!(
-                    out,
-                    "Before responding to the user's first message, briefly mention that the leiter binary is slightly behind the setup (setup_soft_epoch: soul={}, binary={}). Suggest they upgrade leiter when convenient. Keep it to one short sentence.\n",
-                    fm.setup_soft_epoch, SETUP_SOFT_EPOCH,
-                )?;
-            }
-            Ordering::Equal => {}
+            write!(out, "{}{raw_content}", context_preamble(state_dir))?;
         }
-    } else {
-        warn!("failed to parse soul frontmatter; skipping epoch checks");
-        writeln!(
-            out,
-            "ACTION REQUIRED: Before responding to the user's first message, you MUST tell them exactly: \"WARNING: The leiter soul ({}) has invalid YAML front matter. leiter will not function correctly.\" Do not skip or rephrase this warning.\n",
-            soul_path.display(),
-        )?;
     }
-
-    write!(out, "{}{soul_content}", context_preamble(state_dir))?;
 
     Ok(())
 }
@@ -97,7 +46,10 @@ mod tests {
     use super::*;
     use crate::commands::agent_setup;
     use crate::frontmatter::{SoulFrontmatter, serialize_soul};
+    use crate::paths;
+    use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
     use chrono::{TimeZone, Utc};
+    use std::fs;
 
     fn run_context(state_dir: &Path) -> String {
         let mut out = Vec::new();
@@ -185,7 +137,7 @@ mod tests {
         write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
         let output = run_context(tmp.path());
         assert!(output.contains("ACTION REQUIRED"));
-        assert!(output.contains("binary is outdated"));
+        assert!(output.contains("binary is older than your soul file"));
         assert!(!output.contains(&context_preamble(tmp.path())));
     }
 
@@ -214,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_frontmatter_warns_but_still_injects_soul() {
+    fn malformed_frontmatter_blocks_soul_injection() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         fs::create_dir_all(dir).unwrap();
@@ -222,9 +174,9 @@ mod tests {
         fs::write(&soul_path, "not valid frontmatter\n").unwrap();
         let output = run_context(dir);
         assert!(output.contains("ACTION REQUIRED"));
-        assert!(output.contains("invalid YAML front matter"));
+        assert!(output.contains("invalid YAML"));
         assert!(output.contains(&soul_path.display().to_string()));
-        assert!(output.contains("not valid frontmatter"));
+        assert!(!output.contains(&context_preamble(dir)));
     }
 
     #[test]

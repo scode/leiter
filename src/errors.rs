@@ -7,9 +7,6 @@ use thiserror::Error;
 /// distinguishing "soul not found" from "bad frontmatter").
 #[derive(Debug, Error)]
 pub enum LeiterError {
-    #[error("soul file not found")]
-    SoulNotFound,
-
     #[error("failed to parse frontmatter: {0}")]
     FrontmatterParse(String),
 
@@ -26,12 +23,6 @@ pub enum LeiterError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn soul_not_found_display() {
-        let err = LeiterError::SoulNotFound;
-        assert_eq!(err.to_string(), "soul file not found");
-    }
 
     #[test]
     fn frontmatter_parse_display() {

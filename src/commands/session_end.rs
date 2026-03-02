@@ -62,7 +62,10 @@ pub fn run(state_dir: &Path, input: &mut impl Read) -> Result<()> {
 mod tests {
     use super::*;
     use crate::commands::test_support::setup_state_dir;
+    use crate::frontmatter::{SoulFrontmatter, serialize_soul};
     use crate::log_filename::parse_log_filename;
+    use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
+    use chrono::TimeZone;
     use std::fs;
     use std::io::Cursor;
 
@@ -159,6 +162,56 @@ mod tests {
         let mut input = Cursor::new(b"not json at all".to_vec());
         let result = run(tmp.path(), &mut input);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn succeeds_with_mismatched_hard_epoch() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
+        let fm = SoulFrontmatter {
+            last_distilled: Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap(),
+            soul_version: 2,
+            setup_soft_epoch: SETUP_SOFT_EPOCH,
+            setup_hard_epoch: SETUP_HARD_EPOCH + 1,
+        };
+        fs::write(paths::soul_path(tmp.path()), serialize_soul(&fm, "body\n")).unwrap();
+
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        fs::write(transcript.path(), b"data").unwrap();
+
+        run_session_end(tmp.path(), "sess1", transcript.path().to_str().unwrap());
+
+        let entries: Vec<_> = fs::read_dir(paths::logs_dir(tmp.path())).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn succeeds_with_corrupt_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
+        fs::write(paths::soul_path(tmp.path()), "garbage yaml").unwrap();
+
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        fs::write(transcript.path(), b"data").unwrap();
+
+        run_session_end(tmp.path(), "sess1", transcript.path().to_str().unwrap());
+
+        let entries: Vec<_> = fs::read_dir(paths::logs_dir(tmp.path())).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn succeeds_without_soul_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
+
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        fs::write(transcript.path(), b"data").unwrap();
+
+        run_session_end(tmp.path(), "sess1", transcript.path().to_str().unwrap());
+
+        let entries: Vec<_> = fs::read_dir(paths::logs_dir(tmp.path())).unwrap().collect();
+        assert_eq!(entries.len(), 1);
     }
 
     #[test]
