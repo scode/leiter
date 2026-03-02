@@ -31,6 +31,21 @@ fn set_last_distilled(dir: &Path, timestamp: &str) {
     fs::write(&soul_path, updated).unwrap();
 }
 
+fn tamper_soul_epoch(state_dir: &Path, field: &str, value: u32) {
+    let soul_path = state_dir.join("soul.md");
+    let original = fs::read_to_string(&soul_path).unwrap();
+    let pattern = format!("{field}: 1");
+    let replacement = format!("{field}: {value}");
+    let updated = original.replacen(&pattern, &replacement, 1);
+    assert_ne!(updated, original, "{field} replacement must match");
+    fs::write(&soul_path, updated).unwrap();
+}
+
+fn corrupt_soul(state_dir: &Path) {
+    let soul_path = state_dir.join("soul.md");
+    fs::write(&soul_path, "not valid frontmatter\n").unwrap();
+}
+
 fn install(state_dir: &Path, claude_home: &Path) {
     leiter(state_dir)
         .args(["claude", &claude_home_flag(claude_home), "install"])
@@ -110,7 +125,7 @@ fn claude_uninstall_without_install_fails() {
         .args(["claude", &claude_home_flag(claude_tmp.path()), "uninstall"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("nothing to uninstall"));
+        .stderr(predicate::str::contains("not initialized"));
 }
 
 #[test]
@@ -365,6 +380,9 @@ fn distill_deletes_obsolete_logs() {
 #[test]
 fn agent_setup_instructions_contain_hook_commands() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+
+    install(tmp.path(), claude_tmp.path());
 
     leiter(tmp.path())
         .args(["claude", "agent-setup-instructions"])
@@ -378,6 +396,9 @@ fn agent_setup_instructions_contain_hook_commands() {
 #[test]
 fn agent_teardown_instructions_contain_hook_commands() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+
+    install(tmp.path(), claude_tmp.path());
 
     leiter(tmp.path())
         .args(["claude", "agent-teardown-instructions"])
@@ -460,4 +481,100 @@ fn auto_distill_with_no_stale_logs_outputs_nothing() {
         .assert()
         .success()
         .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn context_hard_epoch_mismatch_blocks_soul() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    install(dir, claude_tmp.path());
+    tamper_soul_epoch(dir, "setup_hard_epoch", 2);
+
+    leiter(dir)
+        .args(["hook", "context"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ACTION REQUIRED"))
+        .stdout(predicate::str::contains("Leiter is a self-training system").not());
+}
+
+#[test]
+fn context_soft_epoch_mismatch_nudges_and_injects() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    install(dir, claude_tmp.path());
+    tamper_soul_epoch(dir, "setup_soft_epoch", 2);
+
+    leiter(dir)
+        .args(["hook", "context"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("binary is slightly behind"))
+        .stdout(predicate::str::contains("Leiter is a self-training system"));
+}
+
+#[test]
+fn context_corrupt_frontmatter_blocks_soul() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    install(dir, claude_tmp.path());
+    corrupt_soul(dir);
+
+    leiter(dir)
+        .args(["hook", "context"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ACTION REQUIRED"))
+        .stdout(predicate::str::contains("invalid YAML"))
+        .stdout(predicate::str::contains("Leiter is a self-training system").not());
+}
+
+#[test]
+fn session_end_succeeds_despite_hard_epoch_mismatch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    install(dir, claude_tmp.path());
+    tamper_soul_epoch(dir, "setup_hard_epoch", 2);
+
+    let transcript = tmp.path().join("transcript.jsonl");
+    fs::write(&transcript, "{\"role\":\"user\",\"message\":\"hello\"}\n").unwrap();
+
+    let json = serde_json::json!({
+        "session_id": "epoch-mismatch-sess",
+        "transcript_path": transcript.to_str().unwrap(),
+    });
+
+    leiter(dir)
+        .args(["hook", "session-end"])
+        .write_stdin(json.to_string())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Transcript saved"));
+
+    let entries: Vec<_> = fs::read_dir(dir.join("logs")).unwrap().collect();
+    assert_eq!(entries.len(), 1);
+}
+
+#[test]
+fn distill_hard_epoch_mismatch_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    install(dir, claude_tmp.path());
+    tamper_soul_epoch(dir, "setup_hard_epoch", 2);
+
+    leiter(dir)
+        .args(["soul", "distill"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("incompatible"));
 }

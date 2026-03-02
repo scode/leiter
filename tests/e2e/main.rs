@@ -35,6 +35,8 @@ fn e2e_suite() {
     step_5_instill_preference(&host);
     step_6_distill(&host);
     step_7_soul_upgrade(&host);
+    step_8_hard_epoch_mismatch_blocks_session(&host);
+    step_9_session_end_exempt_from_epoch_checks(&host);
 }
 
 /// Fully deterministic. Verifies that `leiter claude install` left the right
@@ -95,13 +97,11 @@ fn step_2_agent_driven_setup(host: &RemoteHost) {
     info!("Step 2: Agent-driven setup (/leiter-setup)");
 
     let output = host.claude_prompt(
-        "Run /leiter-setup. When asked about optional features, accept all of them: bash permissions, soul file access, and auto-distillation.",
+        "Run /leiter-setup. Accept ALL optional features. Do not ask me which features I want — just choose all of them and proceed to completion. Do not stop until settings.json has been updated with hooks and permissions.",
         20,
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    info!(stdout = %truncate(&stdout, 500), stderr = %truncate(&stderr, 500), "claude /leiter-setup output");
 
     assert!(
         output.status.success(),
@@ -109,21 +109,26 @@ fn step_2_agent_driven_setup(host: &RemoteHost) {
     );
 
     let settings = host.read_file("~/.claude/settings.json");
+    info!(settings = %settings, "settings.json after /leiter-setup");
+
+    let soul = host.read_file("~/.leiter/soul.md");
+    info!(soul = %soul, "soul.md after /leiter-setup");
+
     assert!(
         settings.contains("leiter hook context"),
-        "settings.json missing 'leiter hook context'\n---\n{settings}"
+        "settings.json missing 'leiter hook context'\nclaude stdout: {stdout}\nsettings.json: {settings}"
     );
     assert!(
         settings.contains("leiter hook nudge"),
-        "settings.json missing 'leiter hook nudge'\n---\n{settings}"
+        "settings.json missing 'leiter hook nudge'\nclaude stdout: {stdout}\nsettings.json: {settings}"
     );
     assert!(
         settings.contains("leiter hook session-end"),
-        "settings.json missing 'leiter hook session-end'\n---\n{settings}"
+        "settings.json missing 'leiter hook session-end'\nclaude stdout: {stdout}\nsettings.json: {settings}"
     );
     assert!(
         settings.contains("leiter"),
-        "settings.json should reference leiter in permissions"
+        "settings.json should reference leiter in permissions\nclaude stdout: {stdout}\nsettings.json: {settings}"
     );
 
     info!("Step 2 passed");
@@ -137,8 +142,6 @@ fn step_3_soul_injection(host: &RemoteHost) {
     info!("Step 3: Soul injection");
 
     let stdout = host.claude_prompt_ok("What is leiter and what does it do? One sentence.", 5);
-
-    info!(response = %truncate(&stdout, 300), "claude response");
 
     let lower = stdout.to_lowercase();
     assert!(
@@ -261,6 +264,76 @@ fn step_7_soul_upgrade(host: &RemoteHost) {
     info!("Step 7 passed");
 }
 
+/// Agent-driven. Bumps `setup_hard_epoch` to 99 so the binary sees a hard
+/// mismatch. Asks Claude about session startup warnings — since the context
+/// hook injects an "ACTION REQUIRED" error instead of the soul, Claude should
+/// relay the upgrade/install warning. We ask specifically about hook warnings
+/// rather than about leiter, because Claude already knows about leiter from
+/// earlier steps and would answer from memory.
+fn step_8_hard_epoch_mismatch_blocks_session(host: &RemoteHost) {
+    info!("Step 8: Hard epoch mismatch blocks Claude session");
+
+    host.run_ok("cp ~/.leiter/soul.md ~/.leiter/soul.md.bak");
+
+    host.run_ok("sed 's/setup_hard_epoch: 1/setup_hard_epoch: 99/' ~/.leiter/soul.md > ~/.leiter/soul.md.tmp && mv ~/.leiter/soul.md.tmp ~/.leiter/soul.md");
+
+    let soul_check = host.read_file("~/.leiter/soul.md");
+    assert!(
+        soul_check.contains("setup_hard_epoch: 99"),
+        "setup_hard_epoch should be 99 after sed"
+    );
+
+    let stdout = host.claude_prompt_ok(
+        "Are there any warnings or errors from session startup hooks? If so, tell me what they say.",
+        3,
+    );
+
+    let lower = stdout.to_lowercase();
+    assert!(
+        lower.contains("upgrade")
+            || lower.contains("older")
+            || lower.contains("incompatible")
+            || lower.contains("install")
+            || lower.contains("action required")
+            || lower.contains("epoch"),
+        "Agent should relay epoch error to user. Got: {stdout}"
+    );
+
+    host.run_ok("mv ~/.leiter/soul.md.bak ~/.leiter/soul.md");
+
+    info!("Step 8 passed");
+}
+
+/// Deterministic + timing. Bumps `setup_hard_epoch` to 99, sends a trivial
+/// prompt, waits for the SessionEnd hook, and verifies a new log file was
+/// saved — proving session-end is exempt from epoch checks.
+fn step_9_session_end_exempt_from_epoch_checks(host: &RemoteHost) {
+    info!("Step 9: Session-end exempt from epoch checks");
+
+    host.run_ok("cp ~/.leiter/soul.md ~/.leiter/soul.md.bak");
+
+    host.run_ok("sed 's/setup_hard_epoch: 1/setup_hard_epoch: 99/' ~/.leiter/soul.md > ~/.leiter/soul.md.tmp && mv ~/.leiter/soul.md.tmp ~/.leiter/soul.md");
+
+    let before = count_log_files(host);
+    info!(before, "log file count before prompt");
+
+    host.claude_prompt_ok("Say hello.", 3);
+
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    let after = count_log_files(host);
+    info!(after, "log file count after prompt");
+
+    assert!(
+        after > before,
+        "SessionEnd hook should save transcript despite epoch mismatch (before={before}, after={after})"
+    );
+
+    host.run_ok("mv ~/.leiter/soul.md.bak ~/.leiter/soul.md");
+
+    info!("Step 9 passed");
+}
+
 fn count_log_files(host: &RemoteHost) -> usize {
     let output = host.run("ls -1 ~/.leiter/logs/ 2>/dev/null");
     if !output.status.success() {
@@ -277,13 +350,4 @@ fn extract_last_distilled(soul: &str) -> String {
         }
     }
     panic!("last_distilled not found in soul:\n{soul}");
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        let end = s.floor_char_boundary(max);
-        format!("{}...", &s[..end])
-    }
 }

@@ -12,8 +12,9 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, TimeZone, Utc};
 use tracing::info;
 
-use crate::frontmatter::{SoulFrontmatter, parse_soul, serialize_soul};
+use crate::frontmatter::{SoulFrontmatter, serialize_soul};
 use crate::paths;
+use crate::soul_validation::{SoulStatus, validate_soul};
 use crate::templates::{
     SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH, SKILL_CONTENTS, SOUL_TEMPLATE, SOUL_TEMPLATE_VERSION,
 };
@@ -50,6 +51,10 @@ pub fn run(state_dir: &Path, claude_home: &Path) -> Result<()> {
 ///
 /// Used by `leiter claude agent-setup-instructions`.
 pub fn agent_setup_instructions(state_dir: &Path, out: &mut impl Write) -> Result<()> {
+    match validate_soul(state_dir) {
+        SoulStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
+        SoulStatus::Compatible { .. } => {}
+    }
     write!(
         out,
         "{}",
@@ -80,8 +85,7 @@ fn init_filesystem(state_dir: &Path) -> Result<()> {
             .with_context(|| format!("failed to write {}", soul_path.display()))?;
         info!("created {}", soul_path.display());
     } else {
-        info!("soul file already exists, updating epochs");
-        update_epochs(&soul_path)?;
+        verify_epochs(state_dir)?;
     }
 
     Ok(())
@@ -101,35 +105,34 @@ fn write_plugin_files(claude_home: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Update setup epoch fields in an existing soul file's frontmatter.
+/// Verify that epochs in the existing soul match the binary's epochs.
 ///
-/// Preserves all other frontmatter fields and the body. If the frontmatter
-/// can't be parsed, silently skips — a corrupt soul shouldn't block setup.
-fn update_epochs(soul_path: &Path) -> Result<()> {
-    let content = fs::read_to_string(soul_path)
-        .with_context(|| format!("failed to read {}", soul_path.display()))?;
-
-    let (mut fm, body) = match parse_soul(&content) {
-        Ok(parsed) => parsed,
-        Err(e) => {
-            info!("skipping epoch update, frontmatter unparseable: {e}");
-            return Ok(());
+/// Since no binary has been released with epochs other than 1, any soul with
+/// different epochs must have been created by a future binary. Overwriting
+/// would be a destructive downgrade, so we refuse.
+fn verify_epochs(state_dir: &Path) -> Result<()> {
+    match validate_soul(state_dir) {
+        SoulStatus::Compatible {
+            soft_nudge: None, ..
+        } => {
+            info!("epochs already current");
+            Ok(())
         }
-    };
-
-    if fm.setup_soft_epoch == SETUP_SOFT_EPOCH && fm.setup_hard_epoch == SETUP_HARD_EPOCH {
-        info!("epochs already current");
-        return Ok(());
+        SoulStatus::Compatible {
+            soft_nudge: Some(_),
+            ..
+        } => {
+            bail!(
+                "soul was created by a different version of leiter \
+                 (soft epoch mismatch). Run `leiter claude install` \
+                 from the version that created this soul, or delete \
+                 the soul to start fresh."
+            );
+        }
+        SoulStatus::Incompatible(reason) => {
+            bail!("{}", reason.user_message());
+        }
     }
-
-    fm.setup_soft_epoch = SETUP_SOFT_EPOCH;
-    fm.setup_hard_epoch = SETUP_HARD_EPOCH;
-    let updated = serialize_soul(&fm, body);
-    fs::write(soul_path, &updated)
-        .with_context(|| format!("failed to write {}", soul_path.display()))?;
-    info!("updated epochs to soft={SETUP_SOFT_EPOCH}, hard={SETUP_HARD_EPOCH}");
-
-    Ok(())
 }
 
 fn epoch() -> DateTime<Utc> {
@@ -141,13 +144,6 @@ mod tests {
     use super::*;
     use crate::frontmatter::{parse_soul, serialize_soul};
     use crate::templates::SKILL_CONTENTS;
-
-    /// Return everything after the closing `---\n` frontmatter delimiter.
-    fn raw_body(content: &str) -> &str {
-        let after_opening = content.strip_prefix("---\n").unwrap();
-        let (_, body) = after_opening.split_once("\n---\n").unwrap();
-        body
-    }
 
     fn run_setup(state_dir: &Path, claude_home: &Path) {
         run(state_dir, claude_home).unwrap();
@@ -206,23 +202,23 @@ mod tests {
     }
 
     #[test]
-    fn running_twice_does_not_overwrite_soul() {
+    fn rerun_with_matching_epochs_succeeds() {
         let tmp = tempfile::tempdir().unwrap();
         let claude_tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         run_setup(dir, claude_tmp.path());
 
         let soul = paths::soul_path(dir);
-        fs::write(&soul, "modified").unwrap();
+        let before = fs::read_to_string(&soul).unwrap();
 
         run_setup(dir, claude_tmp.path());
 
-        let content = fs::read_to_string(&soul).unwrap();
-        assert_eq!(content, "modified");
+        let after = fs::read_to_string(&soul).unwrap();
+        assert_eq!(before, after);
     }
 
     #[test]
-    fn rerun_updates_stale_epochs() {
+    fn rerun_with_mismatched_hard_epoch_fails() {
         let tmp = tempfile::tempdir().unwrap();
         let claude_tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
@@ -231,25 +227,15 @@ mod tests {
         let soul = paths::soul_path(dir);
         let content = fs::read_to_string(&soul).unwrap();
         let (mut fm, body) = parse_soul(&content).unwrap();
-
-        fm.setup_soft_epoch = 0;
-        fm.setup_hard_epoch = 0;
+        fm.setup_hard_epoch = SETUP_HARD_EPOCH + 1;
         fs::write(&soul, serialize_soul(&fm, body)).unwrap();
-        let before_body = raw_body(&fs::read_to_string(&soul).unwrap()).to_owned();
 
-        run_setup(dir, claude_tmp.path());
-
-        let updated = fs::read_to_string(&soul).unwrap();
-        let (updated_fm, _) = parse_soul(&updated).unwrap();
-        assert_eq!(updated_fm.setup_soft_epoch, SETUP_SOFT_EPOCH);
-        assert_eq!(updated_fm.setup_hard_epoch, SETUP_HARD_EPOCH);
-        assert_eq!(updated_fm.last_distilled, fm.last_distilled);
-        assert_eq!(updated_fm.soul_version, fm.soul_version);
-        assert_eq!(raw_body(&updated), before_body);
+        let err = run(dir, claude_tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("binary is outdated"));
     }
 
     #[test]
-    fn rerun_preserves_modified_body() {
+    fn rerun_with_mismatched_soft_epoch_fails() {
         let tmp = tempfile::tempdir().unwrap();
         let claude_tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
@@ -257,21 +243,33 @@ mod tests {
 
         let soul = paths::soul_path(dir);
         let content = fs::read_to_string(&soul).unwrap();
-        let (mut fm, _) = parse_soul(&content).unwrap();
-        fm.setup_soft_epoch = 0;
-        let custom_body = "# My customized soul\n\nLearned preferences here.\n";
-        fs::write(&soul, serialize_soul(&fm, custom_body)).unwrap();
+        let (mut fm, body) = parse_soul(&content).unwrap();
+        fm.setup_soft_epoch = SETUP_SOFT_EPOCH + 1;
+        fs::write(&soul, serialize_soul(&fm, body)).unwrap();
 
-        run_setup(dir, claude_tmp.path());
-
-        let updated = fs::read_to_string(&soul).unwrap();
-        let (updated_fm, _) = parse_soul(&updated).unwrap();
-        assert_eq!(updated_fm.setup_soft_epoch, SETUP_SOFT_EPOCH);
-        assert_eq!(raw_body(&updated), custom_body);
+        let err = run(dir, claude_tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("different version"));
     }
 
     #[test]
-    fn rerun_with_unparseable_frontmatter_does_not_error() {
+    fn rerun_with_older_hard_epoch_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        run_setup(dir, claude_tmp.path());
+
+        let soul = paths::soul_path(dir);
+        let content = fs::read_to_string(&soul).unwrap();
+        let (mut fm, body) = parse_soul(&content).unwrap();
+        fm.setup_hard_epoch = 0;
+        fs::write(&soul, serialize_soul(&fm, body)).unwrap();
+
+        let err = run(dir, claude_tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("setup is incompatible"));
+    }
+
+    #[test]
+    fn rerun_with_unparseable_frontmatter_fails() {
         let tmp = tempfile::tempdir().unwrap();
         let claude_tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
@@ -280,7 +278,8 @@ mod tests {
         let soul = paths::soul_path(dir);
         fs::write(&soul, "---\ngarbage: true\n---\nbody\n").unwrap();
 
-        run_setup(dir, claude_tmp.path());
+        let err = run(dir, claude_tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("invalid YAML front matter"));
     }
 
     #[test]
@@ -330,10 +329,83 @@ mod tests {
     #[test]
     fn agent_setup_instructions_outputs_hook_commands() {
         let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        run_setup(tmp.path(), claude_tmp.path());
+
         let mut out = Vec::new();
         agent_setup_instructions(tmp.path(), &mut out).unwrap();
         let output = String::from_utf8(out).unwrap();
         assert!(output.contains("leiter hook context"));
         assert!(output.contains("leiter hook session-end"));
+    }
+
+    #[test]
+    fn agent_setup_instructions_missing_soul_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut out = Vec::new();
+        let result = agent_setup_instructions(tmp.path(), &mut out);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn agent_setup_instructions_new_soul_epoch_mismatch_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fm = SoulFrontmatter {
+            last_distilled: epoch(),
+            soul_version: SOUL_TEMPLATE_VERSION,
+            setup_soft_epoch: SETUP_SOFT_EPOCH,
+            setup_hard_epoch: SETUP_HARD_EPOCH + 1,
+        };
+        fs::create_dir_all(tmp.path()).unwrap();
+        fs::write(paths::soul_path(tmp.path()), serialize_soul(&fm, "body\n")).unwrap();
+
+        let mut out = Vec::new();
+        let err = agent_setup_instructions(tmp.path(), &mut out).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("binary is older than your soul file")
+        );
+    }
+
+    #[test]
+    fn agent_setup_instructions_old_soul_epoch_mismatch_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fm = SoulFrontmatter {
+            last_distilled: epoch(),
+            soul_version: SOUL_TEMPLATE_VERSION,
+            setup_soft_epoch: SETUP_SOFT_EPOCH,
+            setup_hard_epoch: SETUP_HARD_EPOCH.saturating_sub(1),
+        };
+        fs::create_dir_all(tmp.path()).unwrap();
+        fs::write(paths::soul_path(tmp.path()), serialize_soul(&fm, "body\n")).unwrap();
+
+        let mut out = Vec::new();
+        let err = agent_setup_instructions(tmp.path(), &mut out).unwrap_err();
+        assert!(err.to_string().contains("leiter claude install"));
+    }
+
+    #[test]
+    fn agent_setup_instructions_corrupt_frontmatter_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path()).unwrap();
+        fs::write(paths::soul_path(tmp.path()), "---\n[invalid yaml\n---\n").unwrap();
+
+        let mut out = Vec::new();
+        let err = agent_setup_instructions(tmp.path(), &mut out).unwrap_err();
+        assert!(err.to_string().contains("invalid YAML"));
+    }
+
+    #[test]
+    fn rerun_with_no_delimiter_frontmatter_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        run_setup(dir, claude_tmp.path());
+
+        let soul = paths::soul_path(dir);
+        fs::write(&soul, "not frontmatter").unwrap();
+
+        let err = run(dir, claude_tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("invalid YAML front matter"));
     }
 }

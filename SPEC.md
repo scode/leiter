@@ -136,13 +136,43 @@ There are two independent epochs, each a monotonic integer starting at 1:
 - **`setup_hard_epoch`**: Bumped when a leiter upgrade introduces changes that require user action before the session
   can function correctly. A mismatch blocks the session (the soul is not injected).
 
-The binary has compiled-in expected values for both epochs. When `leiter hook context` runs, it compares the soul's
-epoch values against the binary's expected values. The check uses exact equality — both older and newer souls are
-flagged, since the binary cannot make assumptions about unknown future epochs.
+The binary has compiled-in expected values for both epochs. Every command except `session-end` validates the soul's
+epoch values against the binary's expected values before doing any work. The check uses exact equality — both older and
+newer souls are flagged, since the binary cannot make assumptions about unknown future epochs. This validation is
+implemented as a single shared function used by all commands, preventing drift between individual command
+implementations.
+
+Corrupt frontmatter (unparseable YAML) is treated equivalently to a hard epoch mismatch — it blocks the command
+entirely, since epochs cannot be verified.
+
+`session-end` is exempt from epoch checks. It only copies transcript files to a known directory, and losing session data
+is worse than any epoch-related risk.
 
 Epochs are independent of `soul_version`. The soul version tracks template format changes (handled by
 `leiter soul upgrade`). Epochs track integration changes (hooks, settings, etc.) that require user action outside the
 soul file.
+
+#### Epoch Error Messages Delivered to the User
+
+When `leiter hook context` or `leiter hook nudge` detects an incompatibility, the output is an instruction to the agent.
+The agent must deliver the quoted message to the user **verbatim** — the instruction must use strong compliance language
+(e.g. "EXACTLY this (word for word)") to maximize the chance the agent relays it unchanged. The exact user-facing
+phrases for each case:
+
+- **Setup outdated** (soul hard epoch < binary): "Leiter setup needs to be re-run — please run `leiter claude install`
+  in your terminal and follow the instructions, then start a new session."
+- **Binary outdated** (soul hard epoch > binary): "Your leiter binary is older than your soul file expects — please
+  upgrade leiter, then start a new session."
+- **Corrupt frontmatter**: "The leiter soul has corrupt frontmatter. Please fix the YAML front matter manually, or
+  delete the soul file and run `leiter claude install` to start fresh, then start a new session."
+- **Soul unreadable**: "The leiter soul file could not be read. Please check file permissions on [path], then start a
+  new session."
+
+The instruction must also tell the agent not to attempt leiter commands for the remainder of the session.
+
+For soft epoch mismatches, the agent is instructed to briefly mention the mismatch direction (setup behind or binary
+behind) and suggest the appropriate action (re-run install or upgrade). These are nudges, not verbatim scripts — the
+agent is told to keep it to one short sentence.
 
 ### Soul Template (built into the binary)
 
@@ -204,9 +234,9 @@ sentinel) to the Claude Code home directory.
 2. Create `~/.leiter/logs/` directory (no-op if exists)
 3. If `~/.leiter/soul.md` does not exist, create it from the soul template with `last_distilled: 1970-01-01T00:00:00Z`,
    `soul_version` set to the current template version, and `setup_soft_epoch`/`setup_hard_epoch` set to the binary's
-   current epoch values in the frontmatter. If `soul.md` already exists, update only the `setup_soft_epoch` and
-   `setup_hard_epoch` fields to the binary's current values (preserving all other frontmatter and body content). If the
-   existing frontmatter cannot be parsed, skip the epoch update silently
+   current epoch values in the frontmatter. If `soul.md` already exists, verify that its `setup_soft_epoch` and
+   `setup_hard_epoch` fields exactly match the binary's current values. If frontmatter cannot be parsed or any epoch
+   does not match, fail with an error — the binary is incompatible with the existing setup
 4. Verify the Claude Code home directory exists (error if not — Claude Code not installed)
 5. Write all four skill files to their respective directories under `<claude_home>/skills/`. Overwrites existing files
    on re-run (idempotent)
@@ -238,6 +268,8 @@ Outputs natural language instructions for the agent to configure Claude Code hoo
 the same hook configuration content that `leiter claude install` used to output directly. It is called by the
 `/leiter-setup` skill.
 
+**Behavior:** Validates the soul file (see Setup Epochs). If incompatible, exits with an error.
+
 **Output (stdout):** Instructions including the exact JSON hook entries for `SessionStart` and `SessionEnd`, plus
 three-case logic for handling fresh install, upgrade, and already-configured states. See Hook Configuration below for
 the exact hook JSON. After hooks are configured, includes an optional permissions prompt (see Permissions below).
@@ -246,6 +278,8 @@ the exact hook JSON. After hooks are configured, includes an optional permission
 
 Outputs natural language instructions for the agent to remove leiter hooks from `~/.claude/settings.json`. Called by the
 `/leiter-teardown` skill.
+
+**Behavior:** Validates the soul file (see Setup Epochs). If incompatible, exits with an error.
 
 **Output (stdout):** Instructions telling the agent to find and remove hook entries whose commands contain
 `"leiter hook context"`, `"leiter hook nudge"`, or `"leiter hook session-end"`, clean up empty arrays, preserve
@@ -258,17 +292,11 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
 
 **Behavior:**
 
-1. If the soul file does not exist, output a message suggesting `leiter claude install` and return
-2. Read the soul file and attempt to parse its frontmatter
-3. If frontmatter is parseable, check setup epochs (see Setup Epochs):
-   - If `setup_hard_epoch` does not exactly match the binary's expected value: output an error message and return
-     without injecting the soul. The message differs based on direction — if the soul's epoch is lower, suggest running
-     `leiter claude install`; if higher, suggest upgrading the binary
-   - If `setup_soft_epoch` does not exactly match the binary's expected value: output a nudge message (different for
-     older vs. newer soul) but continue to inject the soul normally
-4. If frontmatter parsing fails, skip epoch checks but output a warning instructing the agent to tell the user that the
-   soul has invalid YAML front matter (including the soul path). The soul is still injected (fail-open — a corrupt
-   frontmatter should not block the session entirely)
+1. Validate the soul file (see Setup Epochs). If the soul is missing, has corrupt frontmatter, or has a hard epoch
+   mismatch: output an error message and return without injecting the soul
+2. If `setup_soft_epoch` does not exactly match the binary's expected value: output a nudge message (different for older
+   vs. newer soul) but continue to inject the soul normally
+3. Output the preamble and full soul content
 
 **Output (stdout):**
 
@@ -333,13 +361,14 @@ Outputs session logs that haven't been processed since the last distillation.
 
 **Behavior:**
 
-1. Read `last_distilled` timestamp from `~/.leiter/soul.md` frontmatter
-2. Scan `~/.leiter/logs/` for files whose filename timestamps (the `YYYYMMDDTHHMMSSZ` prefix, ignoring the session ID
+1. Validate the soul file (see Setup Epochs). If incompatible, exit with an error
+2. Read `last_distilled` timestamp from the validated frontmatter
+3. Scan `~/.leiter/logs/` for files whose filename timestamps (the `YYYYMMDDTHHMMSSZ` prefix, ignoring the session ID
    suffix) are newer than or equal to `last_distilled`. The inclusive comparison (>=) ensures that a log written in the
    same second as the distillation timestamp is not lost — this matters because the distillation flow has the agent
    write a session log immediately before running `leiter soul distill`, and the two timestamps could collide
-3. Sort matching files chronologically
-4. Output their contents wrapped in XML-like boundary tags (see Output below)
+4. Sort matching files chronologically
+5. Output their contents wrapped in XML-like boundary tags (see Output below)
 
 **Output (stdout):**
 
@@ -367,14 +396,14 @@ updated — the agent must never edit it manually.
 
 **Behavior:**
 
-1. Read `~/.leiter/soul.md` and parse its frontmatter
+1. Validate the soul file (see Setup Epochs). If incompatible, exit with an error
 2. Set `last_distilled` to the current UTC time
 3. Write the soul back, preserving the body and all other frontmatter fields
 
 **Output (stdout):** A confirmation message including the exact timestamp that was set.
 
-**Errors:** If the soul file does not exist or its frontmatter cannot be parsed, exit with a non-zero code and an error
-message on stderr.
+**Errors:** If the soul file is incompatible (missing, corrupt frontmatter, or epoch mismatch), exit with a non-zero
+code and an error message on stderr.
 
 ### `leiter soul instill <text>`
 
@@ -382,6 +411,10 @@ Outputs agent instructions for adding a preference to the soul file. Called by t
 preference ("remember", "learn", "instill", "always", "never", or similar language).
 
 **Input:** A positional argument containing the preference or fact the user wants remembered.
+
+**Behavior:**
+
+1. Validate the soul file (see Setup Epochs). If incompatible, exit with an error
 
 **Output (stdout):**
 
@@ -404,16 +437,16 @@ Checks for stale undistilled session logs and outputs a nudge if any exist. Call
 
 **Behavior:**
 
-1. Read `last_distilled` timestamp from `~/.leiter/soul.md` frontmatter
-2. Scan `~/.leiter/logs/` for files whose filename timestamps are >= `last_distilled` (same inclusive comparison as
+1. Validate the soul file (see Setup Epochs). If the soul does not exist or the logs directory does not exist, silently
+   output nothing and exit successfully. If the soul has corrupt frontmatter or a hard epoch mismatch, output an error
+   message and exit successfully (the hook must never fail the session). If the logs directory cannot be read, silently
+   output nothing
+2. Read `last_distilled` timestamp from the validated frontmatter
+3. Scan `~/.leiter/logs/` for files whose filename timestamps are >= `last_distilled` (same inclusive comparison as
    `leiter soul distill`)
-3. If any such file has a timestamp older than the threshold (`now - 24h`, or `now - 4h` with `--auto-distill`): output
+4. If any such file has a timestamp older than the threshold (`now - 24h`, or `now - 4h` with `--auto-distill`): output
    a message (defined in source code)
-4. Otherwise: output nothing
-
-If the soul file does not exist or the logs directory does not exist, silently output nothing and exit successfully. If
-the soul file cannot be read, its frontmatter cannot be parsed, or the logs directory cannot be read, also output
-nothing and exit successfully (fail-open). The nudge must not break the session.
+5. Otherwise: output nothing
 
 **Output (stdout):**
 
@@ -430,8 +463,8 @@ Invoked by the agent when the user asks to "upgrade the leiter soul".
 
 **Behavior:**
 
-1. Read `soul_version` from `~/.leiter/soul.md` frontmatter
-2. Compare against the current template version built into the binary
+1. Validate the soul file (see Setup Epochs). If incompatible, exit with an error
+2. Compare `soul_version` against the current template version built into the binary
 3. If already up to date: output a message saying so
 4. If outdated: output upgrade instructions for the agent (see below)
 

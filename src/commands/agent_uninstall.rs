@@ -12,6 +12,7 @@ use anyhow::{Result, bail};
 use tracing::{info, warn};
 
 use crate::paths;
+use crate::soul_validation::{SoulStatus, validate_soul};
 use crate::templates::{PLUGIN_SENTINEL, SKILL_CONTENTS};
 
 /// Run the `leiter claude uninstall` command.
@@ -20,6 +21,11 @@ use crate::templates::{PLUGIN_SENTINEL, SKILL_CONTENTS};
 /// SKILL.md and removes that skill's directory only if it is. This ensures
 /// we never delete a directory we haven't verified ownership of.
 pub fn run(state_dir: &Path, claude_home: &Path) -> Result<()> {
+    match validate_soul(state_dir) {
+        SoulStatus::Incompatible(reason) => bail!("{}", reason.user_message()),
+        SoulStatus::Compatible { .. } => {}
+    }
+
     let mut removed = 0;
     let mut failed: Vec<String> = Vec::new();
 
@@ -80,6 +86,10 @@ pub fn run(state_dir: &Path, claude_home: &Path) -> Result<()> {
 ///
 /// Used by `leiter claude agent-teardown-instructions`.
 pub fn agent_teardown_instructions(state_dir: &Path, out: &mut impl Write) -> Result<()> {
+    match validate_soul(state_dir) {
+        SoulStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
+        SoulStatus::Compatible { .. } => {}
+    }
     write!(
         out,
         "{}",
@@ -92,6 +102,9 @@ pub fn agent_teardown_instructions(state_dir: &Path, out: &mut impl Write) -> Re
 mod tests {
     use super::*;
     use crate::commands::agent_setup;
+    use crate::frontmatter::{SoulFrontmatter, serialize_soul};
+    use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH, SOUL_TEMPLATE_VERSION};
+    use chrono::{TimeZone, Utc};
 
     fn setup_plugin_files(claude_home: &Path, state_dir: &Path) {
         agent_setup::run(state_dir, claude_home).unwrap();
@@ -99,6 +112,17 @@ mod tests {
 
     fn run_uninstall(state_dir: &Path, claude_home: &Path) -> Result<()> {
         run(state_dir, claude_home)
+    }
+
+    fn write_soul_with_epochs(state_dir: &Path, soft: u32, hard: u32) {
+        let fm = SoulFrontmatter {
+            last_distilled: Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap(),
+            soul_version: SOUL_TEMPLATE_VERSION,
+            setup_soft_epoch: soft,
+            setup_hard_epoch: hard,
+        };
+        fs::create_dir_all(state_dir).unwrap();
+        fs::write(paths::soul_path(state_dir), serialize_soul(&fm, "body\n")).unwrap();
     }
 
     #[test]
@@ -130,9 +154,27 @@ mod tests {
     }
 
     #[test]
-    fn uninstall_fails_without_skill_files() {
+    fn uninstall_fails_without_soul() {
         let claude_tmp = tempfile::tempdir().unwrap();
         let state_tmp = tempfile::tempdir().unwrap();
+        let err = run_uninstall(state_tmp.path(), claude_tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("not initialized"));
+    }
+
+    #[test]
+    fn uninstall_fails_without_skill_files() {
+        let state_tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        setup_plugin_files(claude_tmp.path(), state_tmp.path());
+
+        // Remove all skill dirs so none have the sentinel.
+        for (name, _) in SKILL_CONTENTS {
+            let skill_dir = paths::skill_dir(claude_tmp.path(), name);
+            if skill_dir.exists() {
+                fs::remove_dir_all(&skill_dir).unwrap();
+            }
+        }
+
         let err = run_uninstall(state_tmp.path(), claude_tmp.path()).unwrap_err();
         assert!(err.to_string().contains("nothing to uninstall"));
     }
@@ -167,11 +209,15 @@ mod tests {
 
     #[test]
     fn uninstall_fails_when_all_lack_sentinel() {
-        let claude_tmp = tempfile::tempdir().unwrap();
         let state_tmp = tempfile::tempdir().unwrap();
-        let skill_dir = paths::skill_dir(claude_tmp.path(), "leiter-setup");
-        fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(skill_dir.join("SKILL.md"), "no sentinel here").unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        setup_plugin_files(claude_tmp.path(), state_tmp.path());
+
+        // Replace all skill SKILL.md files with content lacking the sentinel.
+        for (name, _) in SKILL_CONTENTS {
+            let skill_dir = paths::skill_dir(claude_tmp.path(), name);
+            fs::write(skill_dir.join("SKILL.md"), "no sentinel here").unwrap();
+        }
 
         let err = run_uninstall(state_tmp.path(), claude_tmp.path()).unwrap_err();
         assert!(err.to_string().contains("nothing to uninstall"));
@@ -215,11 +261,96 @@ mod tests {
 
     #[test]
     fn teardown_instructions_contain_hook_commands() {
+        let state_tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        setup_plugin_files(claude_tmp.path(), state_tmp.path());
+
         let mut out = Vec::new();
-        agent_teardown_instructions(Path::new("/test/state"), &mut out).unwrap();
+        agent_teardown_instructions(state_tmp.path(), &mut out).unwrap();
         let output = String::from_utf8(out).unwrap();
         assert!(output.contains("leiter hook context"));
         assert!(output.contains("leiter hook nudge"));
         assert!(output.contains("leiter hook session-end"));
+    }
+
+    #[test]
+    fn teardown_instructions_missing_soul_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut out = Vec::new();
+        let result = agent_teardown_instructions(tmp.path(), &mut out);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn hard_epoch_mismatch_new_soul_errors() {
+        let state_tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        write_soul_with_epochs(state_tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
+
+        let err = run(state_tmp.path(), claude_tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("binary is outdated"));
+    }
+
+    #[test]
+    fn hard_epoch_mismatch_old_soul_errors() {
+        let state_tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        write_soul_with_epochs(
+            state_tmp.path(),
+            SETUP_SOFT_EPOCH,
+            SETUP_HARD_EPOCH.saturating_sub(1),
+        );
+
+        let err = run(state_tmp.path(), claude_tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("setup is incompatible"));
+    }
+
+    #[test]
+    fn corrupt_frontmatter_errors() {
+        let state_tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(state_tmp.path()).unwrap();
+        fs::write(paths::soul_path(state_tmp.path()), "not frontmatter").unwrap();
+
+        let err = run(state_tmp.path(), claude_tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("invalid YAML front matter"));
+    }
+
+    #[test]
+    fn teardown_instructions_new_soul_epoch_mismatch_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
+
+        let mut out = Vec::new();
+        let err = agent_teardown_instructions(tmp.path(), &mut out).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("binary is older than your soul file")
+        );
+    }
+
+    #[test]
+    fn teardown_instructions_old_soul_epoch_mismatch_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_soul_with_epochs(
+            tmp.path(),
+            SETUP_SOFT_EPOCH,
+            SETUP_HARD_EPOCH.saturating_sub(1),
+        );
+
+        let mut out = Vec::new();
+        let err = agent_teardown_instructions(tmp.path(), &mut out).unwrap_err();
+        assert!(err.to_string().contains("leiter claude install"));
+    }
+
+    #[test]
+    fn teardown_instructions_corrupt_frontmatter_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path()).unwrap();
+        fs::write(paths::soul_path(tmp.path()), "---\n---\n").unwrap();
+
+        let mut out = Vec::new();
+        let err = agent_teardown_instructions(tmp.path(), &mut out).unwrap_err();
+        assert!(err.to_string().contains("invalid YAML"));
     }
 }

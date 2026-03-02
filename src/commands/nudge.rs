@@ -6,7 +6,6 @@
 //! Otherwise outputs nothing (zero context pollution). Silently succeeds when
 //! leiter is not initialized.
 
-use std::fs;
 use std::io::ErrorKind;
 use std::io::Write;
 use std::path::Path;
@@ -15,33 +14,23 @@ use anyhow::Result;
 use chrono::Utc;
 use tracing::warn;
 
-use crate::frontmatter::parse_soul;
 use crate::log_filename::collect_log_entries;
 use crate::paths;
+use crate::soul_validation::{SoulIncompatibility, SoulStatus, validate_soul};
 use crate::templates::{AUTO_DISTILL_MESSAGE, NUDGE_MESSAGE};
 
 pub fn run(state_dir: &Path, out: &mut impl Write, auto_distill: bool) -> Result<()> {
-    let soul_path = paths::soul_path(state_dir);
     let logs_dir = paths::logs_dir(state_dir);
 
-    // This hook runs on every SessionStart. By design it must never block startup:
-    // if state is unreadable or malformed, we degrade to "no nudge" and let the
-    // session continue, while logging diagnostics for debugging.
-    let content = match fs::read_to_string(&soul_path) {
-        Ok(content) => content,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
-        Err(err) => {
-            warn!("failed to read soul file {}: {err}", soul_path.display());
+    let fm = match validate_soul(state_dir) {
+        SoulStatus::Incompatible(SoulIncompatibility::SoulNotFound) => return Ok(()),
+        SoulStatus::Incompatible(reason) => {
+            writeln!(out, "{}", reason.agent_message())?;
             return Ok(());
         }
+        SoulStatus::Compatible { frontmatter, .. } => frontmatter,
     };
-    let (fm, _) = match parse_soul(&content) {
-        Ok(parsed) => parsed,
-        Err(err) => {
-            warn!("failed to parse soul file {}: {err}", soul_path.display());
-            return Ok(());
-        }
-    };
+
     let entries = match collect_log_entries(&logs_dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
@@ -75,9 +64,23 @@ pub fn run(state_dir: &Path, out: &mut impl Write, auto_distill: bool) -> Result
 mod tests {
     use super::*;
     use crate::commands::test_support::{bytes_to_string, setup_state_dir};
-    use crate::frontmatter::serialize_soul;
+    use crate::frontmatter::{SoulFrontmatter, parse_soul, serialize_soul};
     use crate::log_filename::generate_log_filename;
-    use chrono::Utc;
+    use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
+    use chrono::{TimeZone, Utc};
+    use std::fs;
+
+    fn write_soul_with_epochs(state_dir: &Path, soft: u32, hard: u32) {
+        let fm = SoulFrontmatter {
+            last_distilled: Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap(),
+            soul_version: 2,
+            setup_soft_epoch: soft,
+            setup_hard_epoch: hard,
+        };
+        let soul = serialize_soul(&fm, "body\n");
+        fs::create_dir_all(state_dir).unwrap();
+        fs::write(paths::soul_path(state_dir), soul).unwrap();
+    }
 
     fn run_nudge(state_dir: &Path) -> String {
         run_nudge_with(state_dir, false)
@@ -193,12 +196,35 @@ mod tests {
     }
 
     #[test]
-    fn malformed_soul_outputs_nothing() {
+    fn malformed_soul_outputs_error() {
         let tmp = setup_state_dir();
         fs::write(paths::soul_path(tmp.path()), "not frontmatter").unwrap();
 
         let output = run_nudge(tmp.path());
-        assert!(output.is_empty());
+        assert!(output.contains("ACTION REQUIRED"));
+        assert!(output.contains("invalid YAML"));
+    }
+
+    #[test]
+    fn hard_epoch_mismatch_new_soul_outputs_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
+        let output = run_nudge(tmp.path());
+        assert!(output.contains("ACTION REQUIRED"));
+        assert!(output.contains("binary is older than your soul file"));
+    }
+
+    #[test]
+    fn hard_epoch_mismatch_old_soul_outputs_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_soul_with_epochs(
+            tmp.path(),
+            SETUP_SOFT_EPOCH,
+            SETUP_HARD_EPOCH.saturating_sub(1),
+        );
+        let output = run_nudge(tmp.path());
+        assert!(output.contains("ACTION REQUIRED"));
+        assert!(output.contains("leiter claude install"));
     }
 
     #[test]

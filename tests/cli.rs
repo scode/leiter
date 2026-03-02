@@ -53,8 +53,8 @@ fn parses_claude_agent_setup_instructions() {
     leiter(tmp.path())
         .args(["claude", "agent-setup-instructions"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("leiter hook context"));
+        .failure()
+        .stderr(predicate::str::contains("not initialized"));
 }
 
 #[test]
@@ -63,8 +63,8 @@ fn parses_claude_agent_teardown_instructions() {
     leiter(tmp.path())
         .args(["claude", "agent-teardown-instructions"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("Remove leiter hooks"));
+        .failure()
+        .stderr(predicate::str::contains("not initialized"));
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn parses_soul_distill() {
         .args(["soul", "distill"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("soul file not found"));
+        .stderr(predicate::str::contains("not initialized"));
 }
 
 #[test]
@@ -135,7 +135,7 @@ fn parses_soul_upgrade() {
         .args(["soul", "upgrade"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("soul file not found"));
+        .stderr(predicate::str::contains("not initialized"));
 }
 
 // Verbosity tests use "dispatching command" (emitted at DEBUG) to verify levels.
@@ -216,9 +216,8 @@ fn parses_soul_instill() {
     leiter(tmp.path())
         .args(["soul", "instill", "test preference"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("test preference"))
-        .stdout(predicate::str::contains("Soul-writing guidelines"));
+        .failure()
+        .stderr(predicate::str::contains("not initialized"));
 }
 
 #[test]
@@ -228,7 +227,7 @@ fn parses_soul_mark_distilled() {
         .args(["soul", "mark-distilled"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("soul file not found"));
+        .stderr(predicate::str::contains("not initialized"));
 }
 
 #[test]

@@ -10,6 +10,9 @@ remote host and exercise the full lifecycle through real `claude -p` invocations
 seams — hook firing, skill matching, soul injection, session logging, and the instill/distill flows — that isolated
 tests cannot reach.
 
+These tests are inherently flaky because several steps depend on an LLM interpreting prompts and taking the right
+actions. They are developed on a best-effort basis and refined as failures are observed during manual testing runs.
+
 ## Prerequisites
 
 You need a remote host (or VM) with:

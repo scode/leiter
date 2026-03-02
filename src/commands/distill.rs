@@ -38,34 +38,27 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-use crate::errors::LeiterError;
-use crate::frontmatter::parse_soul;
 use crate::log_filename::collect_log_entries;
 use crate::paths;
+use crate::soul_validation::{SoulStatus, validate_soul};
 use crate::templates::{DISTILL_DATA_PREAMBLE, SOUL_WRITING_GUIDELINES};
 
 /// Run the distill command.
 ///
-/// Outputs all session logs whose filename timestamps are >= `last_distilled`
-/// from the soul frontmatter, sorted chronologically. Each log is preceded by
-/// a header line with the filename. Then deletes obsolete logs (timestamps
-/// strictly before `last_distilled`). With `dry_run`, reports what would be
-/// deleted instead.
+/// Validates the soul file, then outputs all session logs whose filename
+/// timestamps are >= `last_distilled` from the soul frontmatter, sorted
+/// chronologically. Then deletes obsolete logs (timestamps strictly before
+/// `last_distilled`). With `dry_run`, reports what would be deleted instead.
 pub fn run(state_dir: &Path, out: &mut impl Write, dry_run: bool) -> Result<()> {
-    let soul_path = paths::soul_path(state_dir);
     let logs_dir = paths::logs_dir(state_dir);
 
-    let content = fs::read_to_string(&soul_path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            LeiterError::SoulNotFound.into()
-        } else {
-            anyhow::anyhow!("failed to read {}: {e}", soul_path.display())
-        }
-    })?;
-    let (fm, _) = parse_soul(&content)?;
+    let fm = match validate_soul(state_dir) {
+        SoulStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
+        SoulStatus::Compatible { frontmatter, .. } => frontmatter,
+    };
 
     let entries = collect_log_entries(&logs_dir)
         .with_context(|| format!("failed to read logs directory: {}", logs_dir.display()))?;
@@ -208,8 +201,9 @@ fn filter_session_log(content: &str, out: &mut impl Write) -> Result<()> {
 mod tests {
     use super::*;
     use crate::commands::test_support::{bytes_to_string, setup_state_dir};
-    use crate::frontmatter::serialize_soul;
+    use crate::frontmatter::{SoulFrontmatter, parse_soul, serialize_soul};
     use crate::log_filename::generate_log_filename;
+    use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
     use chrono::{TimeZone, Utc};
 
     fn run_distill(state_dir: &Path) -> String {
@@ -670,5 +664,71 @@ mod tests {
             .collect();
         assert_eq!(remaining.len(), 1);
         assert!(remaining[0].contains("exact"));
+    }
+
+    fn write_soul_with_epochs(state_dir: &Path, soft: u32, hard: u32) {
+        let fm = SoulFrontmatter {
+            last_distilled: Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap(),
+            soul_version: 2,
+            setup_soft_epoch: soft,
+            setup_hard_epoch: hard,
+        };
+        let soul = serialize_soul(&fm, "body\n");
+        fs::create_dir_all(state_dir).unwrap();
+        fs::write(paths::soul_path(state_dir), soul).unwrap();
+    }
+
+    #[test]
+    fn soft_epoch_mismatch_succeeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
+        write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH + 1, SETUP_HARD_EPOCH);
+        write_log(tmp.path(), 2026, 1, 1, 0, "sess1", "log content");
+
+        let mut out = Vec::new();
+        run(tmp.path(), &mut out, false).unwrap();
+        let output = bytes_to_string(out);
+        assert!(output.contains("log content"));
+    }
+
+    #[test]
+    fn hard_epoch_mismatch_new_soul_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
+        write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
+
+        let mut out = Vec::new();
+        let err = run(tmp.path(), &mut out, false).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("binary is older than your soul file")
+        );
+    }
+
+    #[test]
+    fn hard_epoch_mismatch_old_soul_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
+        write_soul_with_epochs(
+            tmp.path(),
+            SETUP_SOFT_EPOCH,
+            SETUP_HARD_EPOCH.saturating_sub(1),
+        );
+
+        let mut out = Vec::new();
+        let err = run(tmp.path(), &mut out, false).unwrap_err();
+        assert!(err.to_string().contains("leiter claude install"));
+    }
+
+    #[test]
+    fn corrupt_frontmatter_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
+        fs::write(paths::soul_path(tmp.path()), "not frontmatter").unwrap();
+
+        let mut out = Vec::new();
+        let result = run(tmp.path(), &mut out, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid YAML"));
     }
 }
