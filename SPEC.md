@@ -31,10 +31,10 @@ writing to the soul.
 │                                                              │
 │  ... normal session ...                                      │
 │                                                              │
-│  User says "remember X" ──► /leiter-instill skill            │
+│  /leiter-instill (or "instill X") ──► /leiter-instill skill   │
 │                           ──► agent edits soul.md            │
 │                                                              │
-│  User says "distill" ──► /leiter-distill skill               │
+│  /leiter-distill (or "distill") ──► /leiter-distill skill     │
 │                           ──► sub-agent: leiter soul distill │
 │                           ──► sub-agent edits soul.md        │
 │                        ──► agent: leiter soul mark-distilled │
@@ -579,12 +579,12 @@ soul file path. Empty `permissions.allow` arrays and empty `permissions` objects
 
 ### User Asks the Agent to Learn Something
 
-1. User says "learn to always use snake_case for Rust functions"
-2. Agent invokes the `/leiter-instill` skill (auto-matched via trigger keywords)
-3. Skill runs `leiter soul instill "always use snake_case for Rust functions"`
-4. Agent receives writing guidelines and the quoted preference
-5. Agent reads `~/.leiter/soul.md`, edits the appropriate section following the guidelines
-6. Preference is active in all future sessions
+1. User runs `/leiter-instill` (or says "instill", "remember", "always", "never", etc. — the agent auto-matches the
+   skill)
+2. Skill runs `leiter soul instill "always use snake_case for Rust functions"`
+3. Agent receives writing guidelines and the quoted preference
+4. Agent reads `~/.leiter/soul.md`, edits the appropriate section following the guidelines
+5. Preference is active in all future sessions
 
 ### Soul Upgrade
 
@@ -598,11 +598,10 @@ soul file path. Empty `permissions.allow` arrays and empty `permissions` objects
 
 ### Distillation
 
-1. User says "distill my session logs" (or similar natural language)
-2. Agent invokes the `/leiter-distill` skill
-3. Skill spawns a sub-agent to handle distillation (keeps session log output out of the main context)
-4. Sub-agent runs `leiter soul distill`, reads the output, and updates the soul with new learnings
-5. After the sub-agent completes successfully, the main agent always runs `leiter soul mark-distilled` — even if the
+1. User runs `/leiter-distill` (or says "distill" or similar — the agent auto-matches the skill)
+2. Skill spawns a sub-agent to handle distillation (keeps session log output out of the main context)
+3. Sub-agent runs `leiter soul distill`, reads the output, and updates the soul with new learnings
+4. After the sub-agent completes successfully, the main agent always runs `leiter soul mark-distilled` — even if the
    sub-agent found no new preferences to add. This prevents the same logs from being re-processed on every session start
 
 ## Non-Goals (For Now)
