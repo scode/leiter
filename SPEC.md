@@ -382,11 +382,18 @@ Outputs session logs that haven't been processed since the last distillation.
   content of all new session log files wrapped in `<session-transcripts>` / `<session file="...">` XML-like tags
 - If no new logs: a message indicating there are no new session logs to process
 
-**Log pre-processing:** JSONL session logs are pre-processed to extract user-visible content — user messages and
-assistant text responses — filtering out tool results, tool invocations, progress events, thinking blocks, and other
+**Log pre-processing:** JSONL session logs are pre-processed to extract user-visible content — user messages, assistant
+text responses, and tool action summaries — filtering out tool results, progress events, thinking blocks, and other
 non-user-facing content. Leiter only processes files that match the expected log filename format
 `<YYYYMMDDTHHMMSSZ>-<session_id>.jsonl`; files that do not match this format are ignored. Within matching JSONL files,
 lines with unrecognized JSON structures are included as-is (fail-useful: no user content is silently lost).
+
+For assistant messages containing `tool_use` content blocks, a one-line summary is emitted for each tool:
+`[assistant tool]: Name(param)`. The key parameter is chosen heuristically: `input.file_path` if present, else
+`input.command` (truncated to ~120 chars), else `input.pattern`, else just the tool name with no parens. An assistant
+message with both text and tool_use blocks emits both `[assistant]:` and `[assistant tool]:` lines. An assistant message
+with only tool_use blocks (no text) emits only the tool summary lines. Tool results (`type: "user"` with
+`toolUseResult`) remain dropped — the tool name from the assistant side provides sufficient context.
 
 **Obsolete log cleanup:** After outputting new logs (or reporting that there are none), the command collects log files
 whose filename timestamps are strictly before `last_distilled` — these have already been processed by a prior
@@ -425,7 +432,7 @@ preference ("remember", "learn", "instill", "always", "never", or similar langua
 
 1. The user's preference, quoted for clarity
 2. Soul-writing guidelines (shared with `leiter soul distill`) covering entry format, specificity, placement,
-   contradiction resolution, and examples
+   contradiction resolution, recording judgment, and examples
 3. Instruction to read `~/.leiter/soul.md` and edit the appropriate section
 
 See the Architecture section for why guidelines are shared between `instill` and `distill`.
@@ -606,9 +613,11 @@ soul file path. Empty `permissions.allow` arrays and empty `permissions` objects
 
 1. User runs `/leiter-distill` (or says "distill" or similar — the agent auto-matches the skill)
 2. Skill spawns a sub-agent to handle distillation (keeps session log output out of the main context)
-3. Sub-agent runs `leiter soul distill`, reads the output, and updates the soul with new learnings
+3. Sub-agent runs `leiter soul distill`, reads the output, updates the soul with new learnings, and returns a concise
+   summary of what it added, modified, or removed
 4. After the sub-agent completes successfully, the main agent always runs `leiter soul mark-distilled` — even if the
    sub-agent found no new preferences to add. This prevents the same logs from being re-processed on every session start
+5. Main agent relays the sub-agent's summary to the user so they can see what distillation changed
 
 ## Non-Goals (For Now)
 
