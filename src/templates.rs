@@ -119,6 +119,20 @@ entry, update the existing entry to reflect the new behavior. Do not add a \
 second conflicting entry. Do not remove entries just because they are old — \
 only when they are contradicted.
 
+**Recording judgment:** Not everything in a session is worth recording.
+
+- Prefer patterns over one-offs. A correction expressed once might be \
+context-specific. Record it specifically rather than generalizing \
+prematurely. If the same preference appears across multiple sessions, \
+generalize.
+- Look at tool context. When a user correction follows a tool action \
+(`[assistant tool]` line), the correction is about that specific action. \
+Record what was wrong about the approach, not just the user's words.
+- Skip ephemeral decisions. Don't record one-time debugging steps, \
+session-specific file paths, or context that only applies to the current task.
+- Capture implicit positive signals. If the user accepts an approach \
+without correction across multiple sessions, that is a \"What Works Well\" entry.
+
 **Examples of good entries:**
 
 - Communication Style: `- Prefers concise responses; push back when wrong rather than agreeing.`
@@ -354,9 +368,11 @@ user_invocable: true
 
 All `leiter` commands below refer to the installed binary in PATH. Do NOT use `cargo run` or any other way to invoke it.
 
-Spawn a **sub-agent** (via the Agent tool) to handle distillation. The sub-agent should: run `leiter soul distill`, read through the output, and update the soul with new learnings — but NOT update `last_distilled` (the main agent handles that).
+Spawn a **sub-agent** (via the Agent tool) to handle distillation. The sub-agent should: run `leiter soul distill`, read through the output, and update the soul with new learnings — but NOT update `last_distilled` (the main agent handles that). When the sub-agent finishes, it must end with a concise summary of what it added, modified, or removed in the soul (or state that no changes were needed). This summary is the sub-agent's return value.
 
 After the sub-agent completes successfully, ALWAYS run `leiter soul mark-distilled` yourself (in the main context) to record the timestamp — even if the sub-agent found no new preferences to add. Marking distilled is what prevents the same logs from being re-processed on every session start. Never manually edit `last_distilled` in the frontmatter — only `leiter soul mark-distilled` should touch it.
+
+After `mark-distilled` succeeds, relay the sub-agent's summary to the user verbatim so they can see what distillation changed.
 
 IMPORTANT: The `leiter soul mark-distilled` command writes to the leiter state directory which is outside the default sandbox allowed paths. Ensure it is run outside the sandbox (i.e., with sandbox disabled) or writes will fail with \"Operation not permitted\".
 

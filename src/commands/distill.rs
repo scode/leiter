@@ -140,6 +140,52 @@ fn extract_text(content_val: &Value) -> Option<String> {
     }
 }
 
+/// Build a one-line summary for a `tool_use` content block.
+///
+/// Format: `ToolName(key_param)` — the key parameter is chosen heuristically
+/// from `input.file_path`, `input.command` (truncated to ~120 chars),
+/// `input.pattern`, or omitted if none match.
+fn extract_tool_summary(block: &Value) -> Option<String> {
+    let name = block.get("name")?.as_str()?;
+    let input = block.get("input");
+
+    let param = input.and_then(|inp| {
+        if let Some(fp) = inp.get("file_path").and_then(Value::as_str) {
+            return Some(fp.to_string());
+        }
+        if let Some(cmd) = inp.get("command").and_then(Value::as_str) {
+            let truncated: String = cmd.chars().take(120).collect();
+            if truncated.len() < cmd.len() {
+                return Some(format!("{truncated}..."));
+            }
+            return Some(truncated);
+        }
+        if let Some(pat) = inp.get("pattern").and_then(Value::as_str) {
+            return Some(pat.to_string());
+        }
+        None
+    });
+
+    match param {
+        Some(p) => Some(format!("{name}({p})")),
+        None => Some(name.to_string()),
+    }
+}
+
+/// Extract `[assistant tool]:` summary lines from `message.content` blocks.
+fn extract_tool_summaries(content_val: &Value, out: &mut impl Write) -> Result<()> {
+    if let Some(blocks) = content_val.as_array() {
+        for block in blocks {
+            if block.get("type").and_then(Value::as_str) == Some("tool_use")
+                && let Some(summary) = extract_tool_summary(block)
+            {
+                writeln!(out, "[assistant tool]: {summary}")?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Pre-process a JSONL session log to extract user-visible content.
 ///
 /// For each line:
@@ -148,8 +194,9 @@ fn extract_text(content_val: &Value) -> Option<String> {
 /// 3. Known noise types ("progress", "file-history-snapshot", "system") → drop.
 /// 4. `type: "user"`: drop if `toolUseResult` key exists (tool output);
 ///    otherwise extract text from `message.content` → emit as `[user]: <text>`.
-/// 5. `type: "assistant"`: extract text from `message.content` → emit as
-///    `[assistant]: <text>`. Drop if no text could be extracted.
+/// 5. `type: "assistant"`: emit `[assistant]: <text>` for text blocks and
+///    `[assistant tool]: Name(param)` for tool_use blocks. Drop only if
+///    neither text nor tool_use blocks are present.
 /// 6. Unknown type → include raw line (new type we don't know about).
 fn filter_session_log(content: &str, out: &mut impl Write) -> Result<()> {
     for line in content.lines() {
@@ -184,9 +231,22 @@ fn filter_session_log(content: &str, out: &mut impl Write) -> Result<()> {
 
             "assistant" => {
                 let content_val = obj.get("message").and_then(|m| m.get("content"));
-                match content_val.and_then(extract_text) {
-                    Some(text) => writeln!(out, "[assistant]: {text}")?,
-                    None => continue,
+                let has_text = content_val.and_then(extract_text);
+                let has_tools = content_val.and_then(Value::as_array).is_some_and(|blocks| {
+                    blocks
+                        .iter()
+                        .any(|b| b.get("type").and_then(Value::as_str) == Some("tool_use"))
+                });
+
+                if has_text.is_none() && !has_tools {
+                    continue;
+                }
+
+                if let Some(text) = has_text {
+                    writeln!(out, "[assistant]: {text}")?;
+                }
+                if let Some(cv) = content_val {
+                    extract_tool_summaries(cv, out)?;
                 }
             }
 
@@ -475,7 +535,10 @@ mod tests {
         })
         .to_string();
         let output = filter(&line);
-        assert_eq!(output, "[assistant]: first part\n\nsecond part\n");
+        assert_eq!(
+            output,
+            "[assistant]: first part\n\nsecond part\n[assistant tool]: Read\n"
+        );
     }
 
     #[test]
@@ -485,9 +548,9 @@ mod tests {
     }
 
     #[test]
-    fn filter_drops_tool_use_only_assistant() {
+    fn filter_emits_tool_summary_for_tool_use_only_assistant() {
         let output = filter(&jsonl_assistant_tool_use());
-        assert_eq!(output, "");
+        assert_eq!(output, "[assistant tool]: Read\n");
     }
 
     #[test]
@@ -552,6 +615,7 @@ mod tests {
             output,
             "[user]: help me with rust\n\
              [assistant]: Sure, I can help.\n\
+             [assistant tool]: Read\n\
              [assistant]: Here is the result.\n\
              [user]: thanks\n"
         );
@@ -565,6 +629,103 @@ mod tests {
         })
         .to_string();
         assert_eq!(filter(&line), "");
+    }
+
+    #[test]
+    fn filter_tool_summary_with_file_path() {
+        let line = serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [
+                {"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": "src/main.rs"}}
+            ]}
+        })
+        .to_string();
+        assert_eq!(filter(&line), "[assistant tool]: Edit(src/main.rs)\n");
+    }
+
+    #[test]
+    fn filter_tool_summary_with_command() {
+        let line = serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "cargo test"}}
+            ]}
+        })
+        .to_string();
+        assert_eq!(filter(&line), "[assistant tool]: Bash(cargo test)\n");
+    }
+
+    #[test]
+    fn filter_tool_summary_with_pattern() {
+        let line = serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [
+                {"type": "tool_use", "id": "t1", "name": "Grep", "input": {"pattern": "fn main"}}
+            ]}
+        })
+        .to_string();
+        assert_eq!(filter(&line), "[assistant tool]: Grep(fn main)\n");
+    }
+
+    #[test]
+    fn filter_tool_summary_no_key_param() {
+        let line = serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [
+                {"type": "tool_use", "id": "t1", "name": "Agent", "input": {"prompt": "explore"}}
+            ]}
+        })
+        .to_string();
+        assert_eq!(filter(&line), "[assistant tool]: Agent\n");
+    }
+
+    #[test]
+    fn filter_tool_summary_command_truncated() {
+        let long_cmd = "x".repeat(200);
+        let line = serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": long_cmd}}
+            ]}
+        })
+        .to_string();
+        let output = filter(&line);
+        let expected_truncated: String = "x".repeat(120);
+        assert_eq!(
+            output,
+            format!("[assistant tool]: Bash({expected_truncated}...)\n")
+        );
+    }
+
+    #[test]
+    fn filter_tool_summary_multiple_tools() {
+        let line = serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [
+                {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "a.rs"}},
+                {"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "ls"}}
+            ]}
+        })
+        .to_string();
+        assert_eq!(
+            filter(&line),
+            "[assistant tool]: Read(a.rs)\n[assistant tool]: Bash(ls)\n"
+        );
+    }
+
+    #[test]
+    fn filter_tool_summary_file_path_takes_priority_over_command() {
+        let line = serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [
+                {"type": "tool_use", "id": "t1", "name": "Edit", "input": {
+                    "file_path": "src/lib.rs",
+                    "command": "ignored"
+                }}
+            ]}
+        })
+        .to_string();
+        assert_eq!(filter(&line), "[assistant tool]: Edit(src/lib.rs)\n");
     }
 
     #[test]
