@@ -13,6 +13,8 @@ feedback loop that gets out of your way, but slowly improves the agent in the ba
 - `brew install scode/dist-tap-/leiter`
 - `leiter claude install`
 - Start a new claude session and run `/leiter-setup` and follow the instructions.
+- If you did not enable auto-distillation during setup, remember to run `/leiter-distill` every now and then (once a day
+  or so) to apply learnings from past sessions.
 
 For more details, including if you cannot or do not want to use Homebrew, see [docs/setup.md](docs/setup.md) for the
 full setup guide.
