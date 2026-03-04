@@ -267,7 +267,7 @@ I can also install the following OPTIONAL features:
 
   1. Permission to run leiter:* commands w/o a permission prompt (edits settings.json).
   2. Permission to read and update the soul file ({soul}) w/o permission prompt.
-  3. Automatically distill session logs in the background at session start (convenient, but may run at inopportune times).
+  3. Automatically distill session logs in the background at session start (convenient, but may run at inopportune times). Without this, you must run /leiter-distill manually from time to time.
 
 Please tell me which optional features you want by numbers, or "all" or "none" and then I'll proceed.
 
