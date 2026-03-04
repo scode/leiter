@@ -38,10 +38,11 @@ pub fn run(state_dir: &Path, claude_home: &Path) -> Result<()> {
 
     info!("Leiter installed successfully");
     info!("Available skills:");
-    info!("  /leiter-setup     — configure Claude Code hooks");
-    info!("  /leiter-distill   — distill session logs into the soul");
-    info!("  /leiter-instill   — record a preference in the soul");
-    info!("  /leiter-teardown  — remove leiter hooks");
+    info!("  /leiter-setup         — configure Claude Code hooks");
+    info!("  /leiter-distill       — distill session logs into the soul");
+    info!("  /leiter-instill       — record a preference in the soul");
+    info!("  /leiter-soul-upgrade  — upgrade the soul template");
+    info!("  /leiter-teardown      — remove leiter hooks");
     info!("Start a new Claude Code session and run /leiter-setup to configure hooks");
 
     Ok(())

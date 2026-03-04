@@ -86,5 +86,6 @@ After setup, leiter's files live in two places:
 ├── leiter-setup/        # Hook configuration skill
 ├── leiter-distill/      # Distillation skill
 ├── leiter-instill/      # Preference recording skill
+├── leiter-soul-upgrade/ # Soul template upgrade skill
 └── leiter-teardown/     # Hook removal skill
 ```

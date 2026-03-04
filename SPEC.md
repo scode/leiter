@@ -39,6 +39,9 @@ writing to the soul.
 │                           ──► sub-agent edits soul.md        │
 │                        ──► agent: leiter soul mark-distilled │
 │                                                              │
+│  /leiter-soul-upgrade ──► leiter soul upgrade                │
+│                        ──► agent restructures soul.md        │
+│                                                              │
 │  SessionEnd hook ──► leiter hook session-end                 │
 │                      ──► copies transcript to logs/          │
 └──────────────────────────────────────────────────────────────┘
@@ -54,6 +57,7 @@ writing to the soul.
 ├── leiter-setup/SKILL.md        # Each contains <!-- SCODE_LEITER_INSTALLED -->
 ├── leiter-distill/SKILL.md
 ├── leiter-instill/SKILL.md
+├── leiter-soul-upgrade/SKILL.md
 └── leiter-teardown/SKILL.md
 ```
 
@@ -82,6 +86,8 @@ The Claude Code home directory is where leiter installs its plugin files (skill 
 - **`<claude_home>/skills/leiter-distill/SKILL.md`** — skill for distilling session logs into the soul.
 - **`<claude_home>/skills/leiter-instill/SKILL.md`** — skill for recording preferences. Description includes trigger
   keywords (remember, learn, always, never) so Claude can auto-match.
+- **`<claude_home>/skills/leiter-soul-upgrade/SKILL.md`** — skill for upgrading the soul template to the latest version.
+  Runs `leiter soul upgrade` and follows its migration instructions.
 - **`<claude_home>/skills/leiter-teardown/SKILL.md`** — skill that calls `leiter claude agent-teardown-instructions` to
   remove hooks.
 
@@ -238,7 +244,7 @@ sentinel) to the Claude Code home directory.
    `setup_hard_epoch` fields exactly match the binary's current values. If frontmatter cannot be parsed or any epoch
    does not match, fail with an error — the binary is incompatible with the existing setup
 4. Verify the Claude Code home directory exists (error if not — Claude Code not installed)
-5. Write all four skill files to their respective directories under `<claude_home>/skills/`. Overwrites existing files
+5. Write all five skill files to their respective directories under `<claude_home>/skills/`. Overwrites existing files
    on re-run (idempotent)
 
 **Output (stdout):** A success message listing the available skills and telling the user to run `/leiter-setup` to
@@ -255,7 +261,7 @@ Removes leiter plugin files from the Claude Code home directory. Does NOT touch 
 
 1. Scan skill directories under `<claude_home>/skills/` for a `SKILL.md` containing `SCODE_LEITER_INSTALLED`
 2. If no skill file contains the sentinel: error
-3. Remove all four `<claude_home>/skills/leiter-*/` directories (best-effort, skip missing)
+3. Remove all five `<claude_home>/skills/leiter-*/` directories (best-effort, skip missing)
 
 **Output (stdout):** A success message with guidance on how to remove hooks, fully clean up (`~/.leiter/`), and
 re-enable later.
@@ -316,9 +322,8 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
 
    **Distillation:** When the user asks to distill session logs, the agent should invoke the `/leiter-distill` skill.
 
-   **Soul upgrade command:** Must include the literal command `leiter soul upgrade`. Explain that this is user-triggered
-   (the user says "upgrade the leiter soul" or similar) and outputs migration instructions if the soul template is
-   outdated.
+   **Soul upgrade:** When the user asks to upgrade the leiter soul (or runs `/leiter-soul-upgrade`), the agent should
+   invoke the `/leiter-soul-upgrade` skill.
 
 2. The full contents of `~/.leiter/soul.md`
 
@@ -459,7 +464,8 @@ Checks for stale undistilled session logs and outputs a nudge if any exist. Call
 ### `leiter soul upgrade`
 
 Detects soul template drift and outputs agent instructions to migrate the existing soul to the current template format.
-Invoked by the agent when the user asks to "upgrade the leiter soul".
+Invoked by the `/leiter-soul-upgrade` skill (or directly by the agent when the user asks to upgrade the soul using
+natural language).
 
 **Behavior:**
 
@@ -589,8 +595,8 @@ soul file path. Empty `permissions.allow` arrays and empty `permissions` objects
 ### Soul Upgrade
 
 1. User updates `leiter` binary to a newer version
-2. User says "upgrade the leiter soul"
-3. Agent runs `leiter soul upgrade`
+2. User runs `/leiter-soul-upgrade` (or says "upgrade the leiter soul" — the agent auto-matches the skill)
+3. Skill runs `leiter soul upgrade`
 4. If already current: agent relays that no upgrade is needed
 5. If outdated: agent receives the upgrade instructions and new template
 6. Agent reads current `~/.leiter/soul.md`, restructures it into the new format, and updates `soul_version` in the

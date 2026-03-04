@@ -149,7 +149,7 @@ pub fn context_preamble(state_dir: &Path) -> String {
          \n\
          When the user asks to distill session logs, invoke the `/leiter-distill` skill.\n\
          \n\
-         When the user asks to upgrade the leiter soul, run `leiter soul upgrade`. If the soul template is outdated, this outputs migration instructions and the new template. Follow the instructions to restructure the soul while preserving all learned preferences.\n\
+         When the user asks to upgrade the leiter soul, invoke the `/leiter-soul-upgrade` skill.\n\
          \n\
          IMPORTANT: The `leiter hook session-end` hook command writes to `{dir}/` which is outside the default sandbox allowed paths. Ensure it is run outside the sandbox (i.e., with sandbox disabled) or writes will fail with \"Operation not permitted\".\n\
          \n\
@@ -375,6 +375,18 @@ Run the exact command `leiter soul instill \"<the preference or fact to remember
 <!-- SCODE_LEITER_INSTALLED -->
 ";
 
+/// SKILL.md for `/leiter-soul-upgrade` — upgrades the soul template.
+pub const SKILL_SOUL_UPGRADE: &str = "\
+---
+description: Upgrade the leiter soul template to the latest version
+user_invocable: true
+---
+
+Run the exact command `leiter soul upgrade` (the `leiter` binary is already installed in PATH — do NOT use `cargo run` or any other way to invoke it). If the soul is already up to date, report that to the user. If the soul is outdated, follow the migration instructions in the output to restructure the soul while preserving all learned preferences.
+
+<!-- SCODE_LEITER_INSTALLED -->
+";
+
 /// SKILL.md for `/leiter-teardown` — removes Claude Code hooks for leiter.
 pub const SKILL_TEARDOWN: &str = "\
 ---
@@ -392,6 +404,7 @@ pub const SKILL_CONTENTS: &[(&str, &str)] = &[
     ("leiter-setup", SKILL_SETUP),
     ("leiter-distill", SKILL_DISTILL),
     ("leiter-instill", SKILL_INSTILL),
+    ("leiter-soul-upgrade", SKILL_SOUL_UPGRADE),
     ("leiter-teardown", SKILL_TEARDOWN),
 ];
 
@@ -437,7 +450,7 @@ mod tests {
         let preamble = context_preamble(Path::new("/test/state"));
         for literal in [
             "/test/state/soul.md",
-            "leiter soul upgrade",
+            "/leiter-soul-upgrade",
             "/leiter-instill",
             "/leiter-distill",
         ] {
@@ -645,6 +658,11 @@ mod tests {
     #[test]
     fn instill_skill_references_command() {
         assert!(SKILL_INSTILL.contains("leiter soul instill"));
+    }
+
+    #[test]
+    fn soul_upgrade_skill_references_command() {
+        assert!(SKILL_SOUL_UPGRADE.contains("leiter soul upgrade"));
     }
 
     #[test]

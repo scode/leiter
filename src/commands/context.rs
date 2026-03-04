@@ -101,7 +101,7 @@ mod tests {
         assert!(output.contains("session log"));
         assert!(output.contains("/leiter-distill"));
         assert!(output.contains("/leiter-instill"));
-        assert!(output.contains("leiter soul upgrade"));
+        assert!(output.contains("/leiter-soul-upgrade"));
     }
 
     #[test]
