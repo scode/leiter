@@ -259,17 +259,21 @@ pub fn agent_setup_instructions_text(state_dir: &Path) -> String {
 
 Print this EXACTLY as shown (copy it character for character, do not rephrase or reformat):
 
-I'm about to install the following REQUIRED features:
+## Leiter Setup
 
-  - hooks on session start (for context), and session end (for saving sessions for training later)
+Leiter learns your preferences across Claude Code sessions. Let's get it set up.
 
-I can also install the following OPTIONAL features:
+**Required:** Session hooks will be installed for context injection (session start) and transcript saving (session end).
+
+**Optional features:**
 
   1. Permission to run leiter:* commands w/o a permission prompt (edits settings.json).
   2. Permission to read and update the soul file ({soul}) w/o permission prompt.
-  3. Automatically distill session logs in the background at session start (convenient, but may run at inopportune times). Without this, you must run /leiter-distill manually from time to time.
+  3. Automatically distill session logs at session start.
 
-Please tell me which optional features you want by numbers, or "all" or "none" and then I'll proceed.
+> Note: If you skip option 3, run `/leiter-distill` periodically to apply learnings from past sessions.
+
+Which optional features do you want? Reply with numbers (e.g. "1, 3"), "all", or "none".
 
 After printing the above, STOP. Do not call any tools. Do not read or edit any files. Wait for the user to reply.
 
