@@ -1,12 +1,16 @@
 # Leiter
 
-<!-- TODO: screenshot -->
+[![Latest Release](https://img.shields.io/github/v/release/scode/leiter)](https://github.com/scode/leiter/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A self-training system for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+_Your agent learns as you work._
 
-Leiter makes [Claude Code](https://docs.anthropic.com/en/docs/claude-code) learn your habits and preferences
-automatically as you use it - and can operate with zero manual steps involved after installation. It's a self correcting
-feedback loop that gets out of your way, but slowly improves the agent in the background over time.
+Leiter makes [Claude Code](https://docs.anthropic.com/en/docs/claude-code) learn your preferences automatically — no
+manual steps after installation. It quietly improves in the background over time.
+
+Here is an example of it learning:
+
+![Leiter screenshot](docs/screenshot.png)
 
 ## Quickstart
 
