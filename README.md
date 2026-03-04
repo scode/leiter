@@ -64,7 +64,3 @@ If you want to change your choices made during `/leiter-setup`, simply run `/lei
 
 This will leave your soul intact, as well as any undistilled session logs in `~/.leiter`. You are free to remove them if
 you would like.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
