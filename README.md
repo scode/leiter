@@ -1,39 +1,64 @@
 # Leiter
 
-A self-training system for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Leiter logs your Claude Code
-sessions and distills them into a persistent "soul" — a file of learned preferences, coding practices, and workflow
-patterns that gets injected into future sessions to shape agent behavior.
+<!-- TODO: screenshot -->
 
-## Install
+A self-training system for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
-```sh
-brew install scode/dist-tap/leiter
-```
+Leiter makes [Claude Code](https://docs.anthropic.com/en/docs/claude-code) learn your habits and preferences
+automatically as you use it - and can operate with zero manual steps involved after installation. It's a self correcting
+feedback loop that gets out of your way, but slowly improves the agent in the background over time.
 
-Or from source:
+## Quickstart
 
-```sh
-cargo install --path .
-```
+- `brew install scode/dist-tap-/leiter`
+- `leiter claude install`
+- Start a new claude session and run `/leiter-setup` and follow the instructions.
 
-## Setup
+For more details, including if you cannot or do not want to use Homebrew, see [docs/setup.md](docs/setup.md) for the
+full setup guide.
 
-Run `leiter claude install` in your terminal. This creates `~/.leiter/` and installs skill files into
-`~/.claude/skills/`. Then start a Claude Code session and run `/leiter-setup` to configure the hooks in
-`~/.claude/settings.json`.
+## How It Works
 
-On your next session start, leiter is active.
+Leiter maintains a "soul" - a markdown file in `~/.leiter/soul.md` - which contains instructions for how the agent
+should behave. The soal is updated based on distilling learnings from session logs (and can also be directly updated
+when prompted to). You can think of the soul file as an auto-updating personal CLAUDE.md file.
+
+Here's the TLDR of the mechanics:
+
+- **Session start:** Your soul file is injected into the session as context, so the agent starts with your preferences
+  already loaded.
+- **During the session:** Just do what you normally do.
+- **During the session (OPTIONAL):** You can directly trigger immediate soul updates by saying something like "Instill
+  that I never want you to create a PR unless explicitly asked."
+- **Session end:** The session transcript is automatically saved to a log directory under `~/.leiter`.
+- **Distillation:** This refers to "distilling" the logs to extract learnings, and updating the soul. This can be
+  automatic or manual.
+  - If you chose auto-distillation during `/leiter-setup`, leiter will periodically launch automatic distilliation in a
+    background agent after the first turn in a session.
+  - Otherwise, or in addition to automatic distillation, you can run `/leiter-distill` at any time to trigger immediate
+    distillation.
+    - NOTE: The _current session_ is not capture during distillation because it has not yet been logged. If that is what
+      you want, first `/clear` or exit claude and resume the session.
+
+See [docs/how-it-works.md](docs/how-it-works.md) for the full picture.
 
 ## Usage
 
-Session context injection and logging happen automatically via hooks. The soul gets updated in three ways:
+The quickstart above is all you need to use it. A little more details and guidance on whether to enable
+auto-distillation during setup is in [docs/usage.md](docs/usage.md).
 
-**Learning preferences.** Tell the agent something like "remember to always use snake_case" and it invokes the
-`/leiter-instill` skill to update the soul immediately.
+If you want to change your choices made during `/leiter-setup`, simply run `/leiter-teardown` followed by running
+`/leiter-setup` again.
 
-**Distillation.** Periodically say "distill" to have the agent invoke `/leiter-distill`, which processes accumulated
-session logs and folds any new patterns into the soul. If undistilled logs are older than 24 hours, the agent nudges you
-at session start. During `/leiter-setup` you can opt into automatic background distillation instead (4-hour threshold,
-runs silently).
+## Uninstalling
 
-**Soul upgrade.** After updating the leiter binary, say "upgrade the leiter soul" to migrate to the latest template.
+- Run `/leiter-teardown` in a session.
+- Run `leiter claude uninstall`.
+- Uninstall the binary (e.g. `brew uninstall leiter`).
+
+This will leave your soul intact, as well as any undistilled session logs in `~/.leiter`. You are free to remove them if
+you would like.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
