@@ -51,9 +51,9 @@ agent mentions that logs are available for distillation and suggests running it.
 ## Soul upgrades
 
 When you update the leiter binary, the soul template may have changed (new sections, reorganized categories, etc.). The
-agent tells you when an upgrade is available — just follow its suggestion. You can also trigger it manually by telling
-the agent "upgrade the leiter soul". Either way, the agent runs `leiter soul upgrade`, gets the migration instructions,
-and restructures your soul while preserving all learned preferences.
+agent tells you when an upgrade is available — just follow its suggestion. You can also trigger it manually by running
+`/leiter-soul-upgrade` (or saying "upgrade the leiter soul" in natural language). The agent runs `leiter soul upgrade`,
+gets the migration instructions, and restructures your soul while preserving all learned preferences.
 
 ## The soul file
 
