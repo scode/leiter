@@ -14,7 +14,7 @@ Here is an example of it learning:
 
 ## Quickstart
 
-- `brew install scode/dist-tap-/leiter`
+- `brew install scode/dist-tap/leiter`
 - `leiter claude install`
 - Start a new claude session and run `/leiter-setup` and follow the instructions.
 - If you did not enable auto-distillation during setup, remember to run `/leiter-distill` every now and then (once a day
