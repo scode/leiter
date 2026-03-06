@@ -3,7 +3,7 @@
 [![Latest Release](https://img.shields.io/github/v/release/scode/leiter)](https://github.com/scode/leiter/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-_Your agent learns as you work._
+_Your partner agent who learns as you work._
 
 Leiter makes [Claude Code](https://docs.anthropic.com/en/docs/claude-code) learn your preferences automatically — no
 manual steps after installation. It quietly improves in the background over time.
