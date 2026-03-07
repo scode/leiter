@@ -1,4 +1,6 @@
+mod codex;
 mod commands;
+mod config;
 mod errors;
 mod frontmatter;
 mod log_filename;
@@ -31,6 +33,11 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Configure persistent leiter settings
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Claude Code hook commands
     Hook {
         #[command(subcommand)]
@@ -97,6 +104,17 @@ pub enum HookCommand {
     SessionEnd,
 }
 
+#[derive(Subcommand)]
+pub enum ConfigCommand {
+    /// Set a config key to a value
+    Set {
+        /// Config key to update
+        key: String,
+        /// Config value
+        value: String,
+    },
+}
+
 impl Cli {
     pub fn resolve_log_level(&self) -> Level {
         if let Some(level) = self.log_level {
@@ -131,6 +149,11 @@ fn main() -> Result<()> {
     let state_dir = paths::state_dir()?;
 
     match &cli.command {
+        Command::Config { command } => match command {
+            ConfigCommand::Set { key, value } => {
+                commands::config::set(&state_dir, &mut std::io::stdout(), key, value)?;
+            }
+        },
         Command::Hook { command } => match command {
             HookCommand::Context => {
                 commands::context::run(&state_dir, &mut std::io::stdout())?;
