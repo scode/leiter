@@ -7,6 +7,7 @@ use std::path::Path;
 fn leiter(state_dir: &Path) -> Command {
     let mut cmd = cargo_bin_cmd!("leiter");
     cmd.env("LEITER_HOME", state_dir.as_os_str());
+    cmd.env("HOME", state_dir.as_os_str());
     cmd
 }
 
@@ -228,6 +229,18 @@ fn parses_soul_mark_distilled() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("not initialized"));
+}
+
+#[test]
+fn parses_config_set() {
+    let tmp = tempfile::tempdir().unwrap();
+    leiter(tmp.path())
+        .args(["config", "set", "enable_codex_experimental", "true"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "enable_codex_experimental set to true",
+        ));
 }
 
 #[test]

@@ -9,13 +9,17 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 use chrono::{SubsecRound, Utc};
+use tracing::warn;
 
+use crate::codex::CodexMeta;
+use crate::config::LeiterConfig;
 use crate::frontmatter::serialize_soul;
 use crate::paths;
 use crate::soul_validation::{SoulStatus, validate_soul};
 
 pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
     let soul_path = paths::soul_path(state_dir);
+    let codex_meta_path = paths::codex_meta_path(state_dir);
 
     let (mut fm, body) = match validate_soul(state_dir) {
         SoulStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
@@ -27,6 +31,24 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
     fm.last_distilled = Utc::now().trunc_subsecs(0);
     std::fs::write(&soul_path, serialize_soul(&fm, &body))?;
 
+    let config = load_config_best_effort(state_dir);
+    if config.enable_codex_experimental {
+        match CodexMeta::load(&codex_meta_path) {
+            Ok(mut meta) => {
+                if !meta.pending.is_empty() {
+                    meta.committed.extend(meta.pending.clone());
+                    meta.pending.clear();
+                    if let Err(err) = meta.save(&codex_meta_path) {
+                        warn!("failed to update Codex metadata: {err}");
+                    }
+                }
+            }
+            Err(err) => {
+                warn!("Codex metadata unavailable during mark-distilled: {err}");
+            }
+        }
+    }
+
     writeln!(
         out,
         "last_distilled set to {}",
@@ -37,10 +59,23 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
     Ok(())
 }
 
+fn load_config_best_effort(state_dir: &Path) -> LeiterConfig {
+    let config_path = paths::leiter_config_path(state_dir);
+    match LeiterConfig::load(&config_path) {
+        Ok(config) => config,
+        Err(err) => {
+            warn!("failed to load leiter config, using defaults: {err}");
+            LeiterConfig::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codex::CodexSessionMeta;
     use crate::commands::test_support::{bytes_to_string, setup_state_dir};
+    use crate::config::LeiterConfig;
     use crate::frontmatter::{SoulFrontmatter, parse_soul};
     use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
     use chrono::{SubsecRound, TimeZone, Utc};
@@ -50,6 +85,13 @@ mod tests {
         let mut out = Vec::new();
         run(state_dir, &mut out).unwrap();
         bytes_to_string(out)
+    }
+
+    fn set_codex_enabled(state_dir: &Path, enabled: bool) {
+        let config = LeiterConfig {
+            enable_codex_experimental: enabled,
+        };
+        config.save(&paths::leiter_config_path(state_dir)).unwrap();
     }
 
     #[test]
@@ -138,6 +180,73 @@ mod tests {
         let mut out = Vec::new();
         let err = run(tmp.path(), &mut out).unwrap_err();
         assert!(err.to_string().contains("invalid YAML"));
+    }
+
+    /// `mark-distilled` is the commit point for staged Codex watermarks: once
+    /// the user-visible distill flow succeeds, pending session snapshots move
+    /// into committed so unchanged Codex sessions are skipped next time.
+    #[test]
+    fn promotes_pending_codex_metadata() {
+        let tmp = setup_state_dir();
+        set_codex_enabled(tmp.path(), true);
+        let codex_meta_path = paths::codex_meta_path(tmp.path());
+        let ts = Utc.with_ymd_and_hms(2026, 3, 7, 18, 0, 0).unwrap();
+
+        let mut meta = CodexMeta::default();
+        meta.pending.insert(
+            "sess".to_string(),
+            CodexSessionMeta {
+                path: "/tmp/session.jsonl".to_string(),
+                size_bytes: 99,
+                mtime_utc: ts,
+                session_timestamp_utc: Some(ts),
+                latest_event_timestamp_utc: Some(ts),
+            },
+        );
+        meta.save(&codex_meta_path).unwrap();
+
+        run_mark_distilled(tmp.path());
+
+        let updated = CodexMeta::load(&codex_meta_path).unwrap();
+        assert!(updated.pending.is_empty());
+        assert_eq!(updated.committed.len(), 1);
+        assert!(updated.committed.contains_key("sess"));
+    }
+
+    #[test]
+    fn invalid_codex_metadata_does_not_fail() {
+        let tmp = setup_state_dir();
+        set_codex_enabled(tmp.path(), true);
+        fs::write(paths::codex_meta_path(tmp.path()), "version = 999\n").unwrap();
+
+        let output = run_mark_distilled(tmp.path());
+        assert!(output.starts_with("last_distilled set to "));
+    }
+
+    #[test]
+    fn codex_metadata_untouched_when_experimental_gate_is_disabled() {
+        let tmp = setup_state_dir();
+        let codex_meta_path = paths::codex_meta_path(tmp.path());
+        let ts = Utc.with_ymd_and_hms(2026, 3, 7, 18, 0, 0).unwrap();
+
+        let mut meta = CodexMeta::default();
+        meta.pending.insert(
+            "sess".to_string(),
+            CodexSessionMeta {
+                path: "/tmp/session.jsonl".to_string(),
+                size_bytes: 99,
+                mtime_utc: ts,
+                session_timestamp_utc: Some(ts),
+                latest_event_timestamp_utc: Some(ts),
+            },
+        );
+        meta.save(&codex_meta_path).unwrap();
+
+        run_mark_distilled(tmp.path());
+
+        let updated = CodexMeta::load(&codex_meta_path).unwrap();
+        assert_eq!(updated.pending.len(), 1);
+        assert!(updated.committed.is_empty());
     }
 
     fn write_soul_with_epochs(state_dir: &Path, soft: u32, hard: u32) {

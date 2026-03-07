@@ -34,11 +34,28 @@ pub fn logs_dir(state_dir: &Path) -> PathBuf {
     state_dir.join("logs")
 }
 
+/// Path to the Codex distillation metadata file (`<state_dir>/codex-meta.toml`).
+pub fn codex_meta_path(state_dir: &Path) -> PathBuf {
+    state_dir.join("codex-meta.toml")
+}
+
+/// Path to the main leiter config file (`<state_dir>/leiter.toml`).
+pub fn leiter_config_path(state_dir: &Path) -> PathBuf {
+    state_dir.join("leiter.toml")
+}
+
 /// Default Claude Code home directory (`$HOME/.claude/`).
 pub fn default_claude_home() -> Result<PathBuf, LeiterError> {
     Ok(dirs::home_dir()
         .ok_or(LeiterError::HomeNotFound)?
         .join(".claude"))
+}
+
+/// Default Codex home directory (`$HOME/.codex/`).
+pub fn default_codex_home() -> Result<PathBuf, LeiterError> {
+    Ok(dirs::home_dir()
+        .ok_or(LeiterError::HomeNotFound)?
+        .join(".codex"))
 }
 
 /// Format a path for use in Claude Code `permissions.allow` entries.
@@ -93,6 +110,8 @@ mod tests {
         let dir = fake_state_dir();
         assert!(soul_path(dir).starts_with(dir));
         assert!(logs_dir(dir).starts_with(dir));
+        assert!(codex_meta_path(dir).starts_with(dir));
+        assert!(leiter_config_path(dir).starts_with(dir));
     }
 
     fn fake_claude_home() -> &'static Path {

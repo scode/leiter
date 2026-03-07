@@ -13,6 +13,7 @@ use std::path::Path;
 fn leiter(state_dir: &Path) -> Command {
     let mut cmd = cargo_bin_cmd!("leiter");
     cmd.env("LEITER_HOME", state_dir.as_os_str());
+    cmd.env("HOME", state_dir.as_os_str());
     cmd
 }
 
@@ -51,6 +52,60 @@ fn install(state_dir: &Path, claude_home: &Path) {
         .args(["claude", &claude_home_flag(claude_home), "install"])
         .assert()
         .success();
+}
+
+#[test]
+fn config_set_persists_experimental_codex_flag() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    leiter(tmp.path())
+        .args(["config", "set", "enable_codex_experimental", "true"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "enable_codex_experimental set to true",
+        ));
+
+    let config = fs::read_to_string(tmp.path().join("leiter.toml")).unwrap();
+    assert!(config.contains("enable_codex_experimental = true"));
+}
+
+#[test]
+fn codex_distill_is_gated_by_experimental_flag() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    install(dir, claude_tmp.path());
+
+    let codex_path = dir.join(".codex").join("sessions").join("session.jsonl");
+    fs::create_dir_all(codex_path.parent().unwrap()).unwrap();
+    fs::write(
+        &codex_path,
+        concat!(
+            "{\"timestamp\":\"2026-03-07T18:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"sess\",\"timestamp\":\"2026-03-07T18:00:00Z\"}}\n",
+            "{\"timestamp\":\"2026-03-07T18:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"codex hello\"}]}}\n"
+        ),
+    )
+    .unwrap();
+
+    leiter(dir)
+        .args(["soul", "distill"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("codex hello").not());
+    assert!(!dir.join("codex-meta.toml").exists());
+
+    leiter(dir)
+        .args(["config", "set", "enable_codex_experimental", "true"])
+        .assert()
+        .success();
+
+    leiter(dir)
+        .args(["soul", "distill"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("codex hello"));
 }
 
 #[test]

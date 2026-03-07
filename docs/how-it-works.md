@@ -84,10 +84,10 @@ See [usage.md](usage.md) for details on the soul file format and how to customiz
 Distillation is the process of extracting patterns from session transcripts and instilling them into the soul. It runs
 in a sub-agent (a separate context window) to keep the raw transcript data out of your main session.
 
-The sub-agent runs `leiter soul distill`, which outputs all session logs recorded since the last distillation. The
-sub-agent reads through them, identifies new preferences or patterns not already in the soul, and edits the soul file.
-After the sub-agent finishes, the main agent runs `leiter soul mark-distilled` to record the timestamp and prevent the
-same logs from being reprocessed.
+The sub-agent runs `leiter soul distill`, which outputs all Claude session logs recorded since the last distillation.
+The sub-agent reads through the output, identifies new preferences or patterns not already in the soul, and edits the
+soul file. After the sub-agent finishes, the main agent runs `leiter soul mark-distilled` to record the distillation
+timestamp.
 
 Log cleanup is tied to the distillation timestamp. The `last_distilled` timestamp is only advanced after the sub-agent
 successfully finishes — if distillation fails partway through, the timestamp stays put and the same logs are reprocessed

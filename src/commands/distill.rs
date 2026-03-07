@@ -40,7 +40,10 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
+use tracing::{debug, warn};
 
+use crate::codex::{CodexMeta, DistilledCodexSession, collect_changed_sessions};
+use crate::config::LeiterConfig;
 use crate::log_filename::collect_log_entries;
 use crate::paths;
 use crate::soul_validation::{SoulStatus, validate_soul};
@@ -53,6 +56,31 @@ use crate::templates::{DISTILL_DATA_PREAMBLE, SOUL_WRITING_GUIDELINES};
 /// chronologically. Then deletes obsolete logs (timestamps strictly before
 /// `last_distilled`). With `dry_run`, reports what would be deleted instead.
 pub fn run(state_dir: &Path, out: &mut impl Write, dry_run: bool) -> Result<()> {
+    let config = load_config_best_effort(state_dir);
+    let codex_home = resolve_codex_home(config.enable_codex_experimental);
+    distill_with_inputs(
+        state_dir,
+        codex_home.as_deref(),
+        config.enable_codex_experimental,
+        out,
+        dry_run,
+    )
+}
+
+/// Shared distill implementation once runtime inputs have already been
+/// resolved.
+///
+/// `run` uses this after reading config and resolving the default Codex home.
+/// Unit tests call the same function directly so they exercise the production
+/// distill algorithm while still injecting a temp Codex home path and gate
+/// state.
+fn distill_with_inputs(
+    state_dir: &Path,
+    codex_home: Option<&Path>,
+    codex_enabled: bool,
+    out: &mut impl Write,
+    dry_run: bool,
+) -> Result<()> {
     let logs_dir = paths::logs_dir(state_dir);
 
     let fm = match validate_soul(state_dir) {
@@ -74,7 +102,12 @@ pub fn run(state_dir: &Path, out: &mut impl Write, dry_run: bool) -> Result<()> 
         }
     }
 
-    if logs.is_empty() {
+    let codex_sessions = collect_codex_sessions(state_dir, codex_home, codex_enabled, dry_run);
+
+    let has_claude_logs = !logs.is_empty();
+    let has_codex_logs = !codex_sessions.is_empty();
+
+    if !has_claude_logs && !has_codex_logs {
         writeln!(out, "No new session logs to process.")?;
     } else {
         logs.sort_by_key(|entry| entry.timestamp);
@@ -87,8 +120,18 @@ pub fn run(state_dir: &Path, out: &mut impl Write, dry_run: bool) -> Result<()> 
             let content = fs::read_to_string(&entry.path)
                 .with_context(|| format!("failed to read log file: {}", entry.path.display()))?;
             let filename = &entry.filename;
-            writeln!(out, "<session file=\"{filename}\">")?;
+            writeln!(out, "<session source=\"claude\" file=\"{filename}\">")?;
             filter_session_log(&content, out)?;
+            writeln!(out, "</session>")?;
+        }
+
+        for session in &codex_sessions {
+            writeln!(
+                out,
+                "<session source=\"codex\" file=\"{}\">",
+                session.file_label
+            )?;
+            write!(out, "{}", session.rendered)?;
             writeln!(out, "</session>")?;
         }
 
@@ -107,10 +150,10 @@ pub fn run(state_dir: &Path, out: &mut impl Write, dry_run: bool) -> Result<()> 
             for entry in &obsolete {
                 match fs::remove_file(&entry.path) {
                     Ok(()) => {
-                        tracing::debug!("deleted obsolete log: {}", entry.filename);
+                        debug!("deleted obsolete log: {}", entry.filename);
                     }
                     Err(e) => {
-                        tracing::warn!("failed to delete obsolete log {}: {e}", entry.filename);
+                        warn!("failed to delete obsolete log {}: {e}", entry.filename);
                     }
                 }
             }
@@ -118,6 +161,81 @@ pub fn run(state_dir: &Path, out: &mut impl Write, dry_run: bool) -> Result<()> 
     }
 
     Ok(())
+}
+
+fn resolve_codex_home(codex_enabled: bool) -> Option<std::path::PathBuf> {
+    if !codex_enabled {
+        return None;
+    }
+
+    match paths::default_codex_home() {
+        Ok(codex_home) => Some(codex_home),
+        Err(err) => {
+            warn!("Codex home unavailable, skipping Codex distillation: {err}");
+            None
+        }
+    }
+}
+
+/// Best-effort Codex collection for one `leiter soul distill` run.
+///
+/// This encapsulates the Codex-specific metadata load, changed-session
+/// discovery, and pending-watermark staging. It returns only the changed
+/// sessions that produced visible rendered transcript content; changed sessions
+/// that canonicalize to nothing still matter for watermark staging, but they do
+/// not need to escape this helper because they are never emitted to the LLM.
+fn collect_codex_sessions(
+    state_dir: &Path,
+    codex_home: Option<&Path>,
+    codex_enabled: bool,
+    dry_run: bool,
+) -> Vec<DistilledCodexSession> {
+    if !codex_enabled {
+        return Vec::new();
+    }
+
+    let codex_meta_path = paths::codex_meta_path(state_dir);
+    let mut codex_meta = match CodexMeta::load(&codex_meta_path) {
+        Ok(meta) => Some(meta),
+        Err(err) => {
+            warn!("Codex metadata unavailable, skipping Codex distillation: {err}");
+            None
+        }
+    };
+
+    let mut codex_sessions = Vec::new();
+    if let Some(meta) = codex_meta.as_mut()
+        && let Some(codex_home) = codex_home
+    {
+        codex_sessions = collect_changed_sessions(codex_home, &meta.committed);
+        if !dry_run {
+            meta.pending = codex_sessions
+                .iter()
+                .map(|session| (session.session_id.clone(), session.watermark.clone()))
+                .collect();
+            let should_persist =
+                codex_meta_path.exists() || !meta.pending.is_empty() || !meta.committed.is_empty();
+            if should_persist && let Err(err) = meta.save(&codex_meta_path) {
+                warn!("failed to update Codex metadata: {err}");
+            }
+        }
+    }
+
+    codex_sessions
+        .into_iter()
+        .filter(|session| !session.rendered.is_empty())
+        .collect()
+}
+
+fn load_config_best_effort(state_dir: &Path) -> LeiterConfig {
+    let config_path = paths::leiter_config_path(state_dir);
+    match LeiterConfig::load(&config_path) {
+        Ok(config) => config,
+        Err(err) => {
+            warn!("failed to load leiter config, using defaults: {err}");
+            LeiterConfig::default()
+        }
+    }
 }
 
 /// Extract concatenated text from a `message.content` value that may be either
@@ -260,22 +378,40 @@ fn filter_session_log(content: &str, out: &mut impl Write) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codex::CodexMeta;
     use crate::commands::test_support::{bytes_to_string, setup_state_dir};
+    use crate::config::LeiterConfig;
     use crate::frontmatter::{SoulFrontmatter, parse_soul, serialize_soul};
     use crate::log_filename::generate_log_filename;
     use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
     use chrono::{TimeZone, Utc};
+    use std::path::PathBuf;
 
     fn run_distill(state_dir: &Path) -> String {
+        let codex_home = tempfile::tempdir().unwrap();
         let mut out = Vec::new();
-        run(state_dir, &mut out, false).unwrap();
+        distill_with_inputs(state_dir, Some(codex_home.path()), false, &mut out, false).unwrap();
         bytes_to_string(out)
     }
 
     fn run_distill_dry(state_dir: &Path) -> String {
+        let codex_home = tempfile::tempdir().unwrap();
         let mut out = Vec::new();
-        run(state_dir, &mut out, true).unwrap();
+        distill_with_inputs(state_dir, Some(codex_home.path()), false, &mut out, true).unwrap();
         bytes_to_string(out)
+    }
+
+    fn run_distill_with_codex_home(state_dir: &Path, codex_home: &Path, dry_run: bool) -> String {
+        let mut out = Vec::new();
+        distill_with_inputs(state_dir, Some(codex_home), true, &mut out, dry_run).unwrap();
+        bytes_to_string(out)
+    }
+
+    fn set_codex_enabled(state_dir: &Path, enabled: bool) {
+        let config = LeiterConfig {
+            enable_codex_experimental: enabled,
+        };
+        config.save(&paths::leiter_config_path(state_dir)).unwrap();
     }
 
     fn write_log(
@@ -360,7 +496,9 @@ mod tests {
         write_log(tmp.path(), 2026, 1, 1, 0, "sess1", "content1");
 
         let output = run_distill(tmp.path());
-        assert!(output.contains("<session file=\"20260101T000000Z-sess1.jsonl\">"));
+        assert!(
+            output.contains("<session source=\"claude\" file=\"20260101T000000Z-sess1.jsonl\">")
+        );
     }
 
     #[test]
@@ -403,7 +541,7 @@ mod tests {
         let output = run_distill(tmp.path());
         let guidelines_pos = output.find("Soul-writing guidelines").unwrap();
         let log_pos = output
-            .find("<session file=\"20260101T000000Z-sess1.jsonl\">")
+            .find("<session source=\"claude\" file=\"20260101T000000Z-sess1.jsonl\">")
             .unwrap();
         assert!(guidelines_pos < log_pos);
     }
@@ -446,8 +584,8 @@ mod tests {
         write_log(tmp.path(), 2026, 2, 1, 0, "s2", "content2");
 
         let output = run_distill(tmp.path());
-        assert!(output.contains("<session file=\"20260101T000000Z-s1.jsonl\">"));
-        assert!(output.contains("<session file=\"20260201T000000Z-s2.jsonl\">"));
+        assert!(output.contains("<session source=\"claude\" file=\"20260101T000000Z-s1.jsonl\">"));
+        assert!(output.contains("<session source=\"claude\" file=\"20260201T000000Z-s2.jsonl\">"));
         assert!(output.contains("</session>"));
         assert!(output.contains("</session-transcripts>"));
     }
@@ -888,8 +1026,303 @@ mod tests {
         fs::write(paths::soul_path(tmp.path()), "not frontmatter").unwrap();
 
         let mut out = Vec::new();
-        let result = run(tmp.path(), &mut out, false);
+        let codex_home = tempfile::tempdir().unwrap();
+        let result =
+            distill_with_inputs(tmp.path(), Some(codex_home.path()), false, &mut out, false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("invalid YAML"));
+    }
+
+    fn write_codex_rollout(codex_home: &Path, rel: &str, lines: &[Value]) -> PathBuf {
+        let path = codex_home.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut rendered = String::new();
+        for line in lines {
+            rendered.push_str(&serde_json::to_string(line).unwrap());
+            rendered.push('\n');
+        }
+        fs::write(&path, rendered).unwrap();
+        path
+    }
+
+    fn codex_session_meta(id: &str, ts: &str) -> Value {
+        serde_json::json!({
+            "timestamp": ts,
+            "type": "session_meta",
+            "payload": {
+                "id": id,
+                "timestamp": ts
+            }
+        })
+    }
+
+    #[test]
+    fn codex_missing_is_best_effort() {
+        let tmp = setup_state_dir();
+        set_codex_enabled(tmp.path(), true);
+        let codex_home = tempfile::tempdir().unwrap();
+        fs::remove_dir_all(codex_home.path()).unwrap();
+
+        let output = run_distill_with_codex_home(tmp.path(), codex_home.path(), false);
+        assert!(output.contains("No new session logs to process"));
+    }
+
+    #[test]
+    fn codex_live_and_archived_sessions_are_included() {
+        let tmp = setup_state_dir();
+        set_codex_enabled(tmp.path(), true);
+        let codex_home = tempfile::tempdir().unwrap();
+        write_codex_rollout(
+            codex_home.path(),
+            "sessions/2026/03/07/live.jsonl",
+            &[
+                codex_session_meta("live-sess", "2026-03-07T18:00:00Z"),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T18:00:01Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "live hello"}]
+                    }
+                }),
+            ],
+        );
+        write_codex_rollout(
+            codex_home.path(),
+            "archived_sessions/archived.jsonl",
+            &[
+                codex_session_meta("archived-sess", "2026-03-07T19:00:00Z"),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T19:00:01Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "archived hello"}]
+                    }
+                }),
+            ],
+        );
+
+        let output = run_distill_with_codex_home(tmp.path(), codex_home.path(), false);
+        assert!(output.contains("live hello"));
+        assert!(output.contains("archived hello"));
+        assert!(
+            output.contains("<session source=\"codex\" file=\"sessions/2026/03/07/live.jsonl\">")
+        );
+        assert!(
+            output.contains("<session source=\"codex\" file=\"archived_sessions/archived.jsonl\">")
+        );
+    }
+
+    #[test]
+    fn unchanged_codex_session_not_emitted_twice_after_mark() {
+        let tmp = setup_state_dir();
+        set_codex_enabled(tmp.path(), true);
+        let codex_home = tempfile::tempdir().unwrap();
+        write_codex_rollout(
+            codex_home.path(),
+            "sessions/session.jsonl",
+            &[
+                codex_session_meta("sess", "2026-03-07T18:00:00Z"),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T18:00:01Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "hello once"}]
+                    }
+                }),
+            ],
+        );
+
+        let first = run_distill_with_codex_home(tmp.path(), codex_home.path(), false);
+        assert!(first.contains("hello once"));
+
+        let meta_path = paths::codex_meta_path(tmp.path());
+        let mut meta = CodexMeta::load(&meta_path).unwrap();
+        meta.committed.extend(meta.pending.clone());
+        meta.pending.clear();
+        meta.save(&meta_path).unwrap();
+
+        let second = run_distill_with_codex_home(tmp.path(), codex_home.path(), false);
+        assert!(!second.contains("hello once"));
+        assert!(second.contains("No new session logs to process"));
+    }
+
+    #[test]
+    fn changed_codex_session_is_re_emitted_in_full() {
+        let tmp = setup_state_dir();
+        set_codex_enabled(tmp.path(), true);
+        let codex_home = tempfile::tempdir().unwrap();
+        let path = write_codex_rollout(
+            codex_home.path(),
+            "sessions/session.jsonl",
+            &[
+                codex_session_meta("sess", "2026-03-07T18:00:00Z"),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T18:00:01Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "hello once"}]
+                    }
+                }),
+            ],
+        );
+
+        run_distill_with_codex_home(tmp.path(), codex_home.path(), false);
+        let meta_path = paths::codex_meta_path(tmp.path());
+        let mut meta = CodexMeta::load(&meta_path).unwrap();
+        meta.committed.extend(meta.pending.clone());
+        meta.pending.clear();
+        meta.save(&meta_path).unwrap();
+
+        write_codex_rollout(
+            codex_home.path(),
+            "sessions/session.jsonl",
+            &[
+                codex_session_meta("sess", "2026-03-07T18:00:00Z"),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T18:00:01Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "hello once"}]
+                    }
+                }),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T18:00:02Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "hello twice"}]
+                    }
+                }),
+            ],
+        );
+        assert!(fs::metadata(&path).unwrap().len() > 0);
+
+        let output = run_distill_with_codex_home(tmp.path(), codex_home.path(), false);
+        assert!(output.contains("hello once"));
+        assert!(output.contains("hello twice"));
+    }
+
+    #[test]
+    fn dry_run_does_not_create_codex_metadata() {
+        let tmp = setup_state_dir();
+        set_codex_enabled(tmp.path(), true);
+        let codex_home = tempfile::tempdir().unwrap();
+        write_codex_rollout(
+            codex_home.path(),
+            "sessions/session.jsonl",
+            &[codex_session_meta("sess", "2026-03-07T18:00:00Z")],
+        );
+
+        let _ = run_distill_with_codex_home(tmp.path(), codex_home.path(), true);
+        assert!(!paths::codex_meta_path(tmp.path()).exists());
+    }
+
+    #[test]
+    fn invalid_codex_meta_warns_and_skips_codex() {
+        let tmp = setup_state_dir();
+        set_codex_enabled(tmp.path(), true);
+        let codex_home = tempfile::tempdir().unwrap();
+        write_codex_rollout(
+            codex_home.path(),
+            "sessions/session.jsonl",
+            &[
+                codex_session_meta("sess", "2026-03-07T18:00:00Z"),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T18:00:01Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "should skip"}]
+                    }
+                }),
+            ],
+        );
+        fs::write(paths::codex_meta_path(tmp.path()), "version = 999\n").unwrap();
+
+        let output = run_distill_with_codex_home(tmp.path(), codex_home.path(), false);
+        assert!(!output.contains("should skip"));
+        assert!(output.contains("No new session logs to process"));
+    }
+
+    #[test]
+    fn changed_codex_session_repeats_until_mark_distilled() {
+        let tmp = setup_state_dir();
+        set_codex_enabled(tmp.path(), true);
+        let codex_home = tempfile::tempdir().unwrap();
+        write_codex_rollout(
+            codex_home.path(),
+            "sessions/session.jsonl",
+            &[
+                codex_session_meta("sess", "2026-03-07T18:00:00Z"),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T18:00:01Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "repeat me"}]
+                    }
+                }),
+            ],
+        );
+
+        let first = run_distill_with_codex_home(tmp.path(), codex_home.path(), false);
+        let second = run_distill_with_codex_home(tmp.path(), codex_home.path(), false);
+        assert!(first.contains("repeat me"));
+        assert!(second.contains("repeat me"));
+    }
+
+    #[test]
+    fn malformed_codex_file_is_skipped() {
+        let tmp = setup_state_dir();
+        set_codex_enabled(tmp.path(), true);
+        let codex_home = tempfile::tempdir().unwrap();
+        let bad_path = codex_home.path().join("sessions/bad.jsonl");
+        fs::create_dir_all(bad_path.parent().unwrap()).unwrap();
+        fs::write(&bad_path, "not json\n").unwrap();
+
+        let output = run_distill_with_codex_home(tmp.path(), codex_home.path(), false);
+        assert!(output.contains("No new session logs to process"));
+    }
+
+    #[test]
+    fn codex_disabled_ignores_rollouts_and_metadata() {
+        let tmp = setup_state_dir();
+        let codex_home = tempfile::tempdir().unwrap();
+        write_codex_rollout(
+            codex_home.path(),
+            "sessions/session.jsonl",
+            &[
+                codex_session_meta("sess", "2026-03-07T18:00:00Z"),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T18:00:01Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "should stay hidden"}]
+                    }
+                }),
+            ],
+        );
+
+        let mut out = Vec::new();
+        distill_with_inputs(tmp.path(), Some(codex_home.path()), false, &mut out, false).unwrap();
+        let output = bytes_to_string(out);
+        assert!(!output.contains("should stay hidden"));
+        assert!(output.contains("No new session logs to process"));
+        assert!(!paths::codex_meta_path(tmp.path()).exists());
     }
 }
