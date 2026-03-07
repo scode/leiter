@@ -8,6 +8,10 @@ _Your partner agent who learns as you work._
 Leiter makes [Claude Code](https://docs.anthropic.com/en/docs/claude-code) learn your preferences automatically — no
 manual steps after installation. It quietly improves in the background over time.
 
+Inspired by [Joe Romano](https://github.com/joerromano), who was inspired by
+[Matt Greenfield](https://www.threads.com/@sobri909)'s
+[thread on the topic](https://www.threads.com/@sobri909/post/DSOrEqlEd8u/just-got-claude-to-do-another-consolidation-on-its-partner-model-md-file-the).
+
 Here is an example of it learning:
 
 ![Leiter screenshot](docs/screenshot.png)
