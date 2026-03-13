@@ -267,7 +267,7 @@ Leiter learns your preferences across Claude Code sessions. Let's get it set up.
 
 **Optional features:**
 
-  1. Permission to run leiter:* commands w/o a permission prompt (edits settings.json).
+  1. Permission to run leiter:* commands w/o a permission prompt (edits settings.json). [What does this mean?](https://github.com/scode/leiter/blob/main/docs/leiter_command_permissions.md)
   2. Permission to read and update the soul file ({soul}) w/o permission prompt.
   3. Automatically distill session logs at session start.
 
