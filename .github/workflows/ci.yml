@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: dprint/check@v2.2
+      - uses: dprint/check@v2.3
 
   fmt:
     runs-on: ubuntu-latest
