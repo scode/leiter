@@ -379,9 +379,9 @@ fn filter_session_log(content: &str, out: &mut impl Write) -> Result<()> {
 mod tests {
     use super::*;
     use crate::codex::CodexMeta;
-    use crate::commands::test_support::{bytes_to_string, setup_state_dir};
+    use crate::commands::test_support::{bytes_to_string, setup_state_dir, write_soul_with_epochs};
     use crate::config::LeiterConfig;
-    use crate::frontmatter::{SoulFrontmatter, parse_soul, serialize_soul};
+    use crate::frontmatter::{parse_soul, serialize_soul};
     use crate::log_filename::generate_log_filename;
     use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
     use chrono::{TimeZone, Utc};
@@ -963,18 +963,6 @@ mod tests {
             .collect();
         assert_eq!(remaining.len(), 1);
         assert!(remaining[0].contains("exact"));
-    }
-
-    fn write_soul_with_epochs(state_dir: &Path, soft: u32, hard: u32) {
-        let fm = SoulFrontmatter {
-            last_distilled: Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap(),
-            soul_version: 2,
-            setup_soft_epoch: soft,
-            setup_hard_epoch: hard,
-        };
-        let soul = serialize_soul(&fm, "body\n");
-        fs::create_dir_all(state_dir).unwrap();
-        fs::write(paths::soul_path(state_dir), soul).unwrap();
     }
 
     #[test]

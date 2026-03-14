@@ -44,10 +44,8 @@ pub fn run(state_dir: &Path, out: &mut impl Write, text: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_support::setup_state_dir;
-    use crate::frontmatter::{SoulFrontmatter, serialize_soul};
+    use crate::commands::test_support::{setup_state_dir, write_soul_with_epochs};
     use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
-    use chrono::{TimeZone, Utc};
     use std::fs;
 
     fn run_instill(state_dir: &Path, text: &str) -> String {
@@ -92,18 +90,6 @@ mod tests {
         let result = run(tmp.path(), &mut out, "test");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not initialized"));
-    }
-
-    fn write_soul_with_epochs(state_dir: &Path, soft: u32, hard: u32) {
-        let fm = SoulFrontmatter {
-            last_distilled: Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap(),
-            soul_version: 2,
-            setup_soft_epoch: soft,
-            setup_hard_epoch: hard,
-        };
-        let soul = serialize_soul(&fm, "body\n");
-        fs::create_dir_all(state_dir).unwrap();
-        fs::write(paths::soul_path(state_dir), soul).unwrap();
     }
 
     #[test]
