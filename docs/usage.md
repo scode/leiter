@@ -55,6 +55,11 @@ agent tells you when an upgrade is available — just follow its suggestion. You
 `/leiter-soul-upgrade` (or saying "upgrade the leiter soul" in natural language). The agent runs `leiter soul upgrade`,
 gets the migration instructions, and restructures your soul while preserving all learned preferences.
 
+## Viewing the soul
+
+Run `/leiter-soul` to see the current contents of your soul file. The agent displays the learned preferences verbatim,
+without the internal frontmatter.
+
 ## The soul file
 
 The soul lives at `~/.leiter/soul.md`. It is a markdown file you can read and edit directly — there is nothing magic

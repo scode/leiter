@@ -35,9 +35,14 @@ fn set_last_distilled(dir: &Path, timestamp: &str) {
 fn tamper_soul_epoch(state_dir: &Path, field: &str, value: u32) {
     let soul_path = state_dir.join("soul.md");
     let original = fs::read_to_string(&soul_path).unwrap();
-    let pattern = format!("{field}: 1");
+    // Find the current value of the field and replace it.
+    let prefix = format!("{field}: ");
+    let line = original
+        .lines()
+        .find(|l| l.starts_with(&prefix))
+        .unwrap_or_else(|| panic!("{field} not found in soul"));
     let replacement = format!("{field}: {value}");
-    let updated = original.replacen(&pattern, &replacement, 1);
+    let updated = original.replacen(line, &replacement, 1);
     assert_ne!(updated, original, "{field} replacement must match");
     fs::write(&soul_path, updated).unwrap();
 }
@@ -136,6 +141,7 @@ fn claude_install_creates_skill_files() {
         "leiter-setup",
         "leiter-distill",
         "leiter-instill",
+        "leiter-soul",
         "leiter-soul-upgrade",
         "leiter-teardown",
     ] {
@@ -162,6 +168,7 @@ fn claude_uninstall_removes_plugin_files() {
         "leiter-setup",
         "leiter-distill",
         "leiter-instill",
+        "leiter-soul",
         "leiter-soul-upgrade",
         "leiter-teardown",
     ] {
@@ -366,6 +373,24 @@ fn nudge_outputs_message_when_stale_logs_exist() {
 }
 
 #[test]
+fn soul_show_outputs_wrapped_body() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    install(dir, claude_tmp.path());
+
+    leiter(dir)
+        .args(["soul", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("<leiter-soul-content>"))
+        .stdout(predicate::str::contains("</leiter-soul-content>"))
+        .stdout(predicate::str::contains("# Communication Style"))
+        .stdout(predicate::str::contains("last_distilled").not());
+}
+
+#[test]
 fn soul_instill_outputs_guidelines_and_preference() {
     let tmp = tempfile::tempdir().unwrap();
     let claude_tmp = tempfile::tempdir().unwrap();
@@ -564,13 +589,13 @@ fn context_soft_epoch_mismatch_nudges_and_injects() {
     let dir = tmp.path();
 
     install(dir, claude_tmp.path());
-    tamper_soul_epoch(dir, "setup_soft_epoch", 2);
+    tamper_soul_epoch(dir, "setup_soft_epoch", 3);
 
     leiter(dir)
         .args(["hook", "context"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("binary is slightly behind"))
+        .stdout(predicate::str::contains("binary is a bit behind"))
         .stdout(predicate::str::contains("Leiter is a self-training system"));
 }
 

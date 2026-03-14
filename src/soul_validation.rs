@@ -193,23 +193,23 @@ pub fn validate_soul(state_dir: &Path) -> SoulStatus {
     }
 
     let soft_nudge = if fm.setup_soft_epoch < SETUP_SOFT_EPOCH {
-        Some(format!(
+        Some(
             "Before responding to the user's first message, briefly mention \
-             that leiter setup is slightly behind the binary \
-             (setup_soft_epoch: soul={}, binary={SETUP_SOFT_EPOCH}). \
-             Suggest they run `leiter claude install` when convenient. \
-             Keep it to one short sentence.",
-            fm.setup_soft_epoch,
-        ))
+             that a newer version of leiter has optional improvements available. \
+             There are no breaking changes, so there is no rush. \
+             Suggest they run `leiter claude install` when convenient to pick up \
+             the new features. Keep it to one short sentence."
+                .to_string(),
+        )
     } else if fm.setup_soft_epoch > SETUP_SOFT_EPOCH {
-        Some(format!(
+        Some(
             "Before responding to the user's first message, briefly mention \
-             that the leiter binary is slightly behind the setup \
-             (setup_soft_epoch: soul={}, binary={SETUP_SOFT_EPOCH}). \
+             that the leiter binary is a bit behind the current setup. \
+             There are no breaking changes, so there is no rush. \
              Suggest they upgrade leiter when convenient. \
-             Keep it to one short sentence.",
-            fm.setup_soft_epoch,
-        ))
+             Keep it to one short sentence."
+                .to_string(),
+        )
     } else {
         None
     };
@@ -307,7 +307,7 @@ mod tests {
         match validate_soul(tmp.path()) {
             SoulStatus::Compatible { soft_nudge, .. } => {
                 let nudge = soft_nudge.expect("expected soft nudge");
-                assert!(nudge.contains("setup is slightly behind"));
+                assert!(nudge.contains("optional improvements"));
             }
             other => panic!(
                 "expected Compatible with nudge, got {}",
@@ -323,7 +323,7 @@ mod tests {
         match validate_soul(tmp.path()) {
             SoulStatus::Compatible { soft_nudge, .. } => {
                 let nudge = soft_nudge.expect("expected soft nudge");
-                assert!(nudge.contains("binary is slightly behind"));
+                assert!(nudge.contains("binary is a bit behind"));
             }
             other => panic!(
                 "expected Compatible with nudge, got {}",
@@ -415,8 +415,8 @@ mod tests {
              epoch before updating this assertion. See DESIGN.md."
         );
         assert_eq!(
-            SETUP_SOFT_EPOCH, 1,
-            "SETUP_SOFT_EPOCH was bumped from 1. Update verify_epochs() in \
+            SETUP_SOFT_EPOCH, 2,
+            "SETUP_SOFT_EPOCH was bumped from 2. Update verify_epochs() in \
              agent_setup.rs with migration logic for souls at the previous \
              epoch before updating this assertion. See DESIGN.md."
         );

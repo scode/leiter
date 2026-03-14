@@ -29,9 +29,10 @@ full setup guide.
 
 ## How It Works
 
-Leiter maintains a "soul" - a markdown file in `~/.leiter/soul.md` - which contains instructions for how the agent
-should behave. The soal is updated based on distilling learnings from session logs (and can also be directly updated
-when prompted to). You can think of the soul file as an auto-updating personal CLAUDE.md file.
+Leiter maintains a "soul" — a markdown file in `~/.leiter/soul.md` — which contains instructions for how the agent
+should behave. The soul is updated based on distilling learnings from session logs (and can also be directly updated
+when prompted to). You can think of the soul file as an auto-updating personal CLAUDE.md file. You can view it at any
+time by running `/leiter-soul`.
 
 Here's the TLDR of the mechanics:
 
@@ -43,7 +44,7 @@ Here's the TLDR of the mechanics:
 - **Session end:** The session transcript is automatically saved to a log directory under `~/.leiter`.
 - **Distillation:** This refers to "distilling" the logs to extract learnings, and updating the soul. This can be
   automatic or manual.
-  - If you chose auto-distillation during `/leiter-setup`, leiter will periodically launch automatic distilliation in a
+  - If you chose auto-distillation during `/leiter-setup`, leiter will periodically launch automatic distillation in a
     background agent after the first turn in a session.
   - Otherwise, or in addition to automatic distillation, you can run `/leiter-distill` at any time to trigger immediate
     distillation.

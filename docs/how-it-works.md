@@ -38,6 +38,9 @@ Here is what happens during a typical session, from start to finish:
 │                        ──► sub-agent edits soul.md           │
 │                        ──► agent marks distillation timestamp │
 │                                                              │
+│  /leiter-soul ──► leiter soul show ──► agent displays        │
+│                                        soul verbatim         │
+│                                                              │
 │  SessionEnd hook ──► leiter hook session-end                 │
 │                      ──► copies transcript to logs/          │
 └──────────────────────────────────────────────────────────────┘
@@ -62,7 +65,7 @@ after earlier messages are compressed, your preferences remain available.
 
 The session proceeds normally. When you tell the agent to "remember" something (or use similar language like "always",
 "never", "learn"), it invokes the `/leiter-instill` skill, which provides writing guidelines and tells the agent to edit
-the soul file directly.
+the soul file directly. You can also run `/leiter-soul` at any time to see what the agent has learned about you so far.
 
 ### Session end
 

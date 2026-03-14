@@ -41,6 +41,7 @@ pub fn run(state_dir: &Path, claude_home: &Path) -> Result<()> {
     info!("  /leiter-setup         — configure Claude Code hooks");
     info!("  /leiter-distill       — distill session logs into the soul");
     info!("  /leiter-instill       — record a preference in the soul");
+    info!("  /leiter-soul          — show the current soul file contents");
     info!("  /leiter-soul-upgrade  — upgrade the soul template");
     info!("  /leiter-teardown      — remove leiter hooks");
     info!("Start a new Claude Code session and run /leiter-setup to configure hooks");
@@ -106,29 +107,31 @@ fn write_plugin_files(claude_home: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Verify that epochs in the existing soul match the binary's epochs.
-///
-/// Since no binary has been released with epochs other than 1, any soul with
-/// different epochs must have been created by a future binary. Overwriting
-/// would be a destructive downgrade, so we refuse.
+/// Verify that epochs in the existing soul match the binary's epochs,
+/// migrating the soft epoch forward when the soul is behind.
 fn verify_epochs(state_dir: &Path) -> Result<()> {
     match validate_soul(state_dir) {
         SoulStatus::Compatible {
-            soft_nudge: None, ..
+            frontmatter, body, ..
         } => {
-            info!("epochs already current");
+            if frontmatter.setup_soft_epoch == SETUP_SOFT_EPOCH {
+                info!("epochs already current");
+            } else if frontmatter.setup_soft_epoch < SETUP_SOFT_EPOCH {
+                let old_epoch = frontmatter.setup_soft_epoch;
+                let soul_path = paths::soul_path(state_dir);
+                let mut fm = frontmatter;
+                fm.setup_soft_epoch = SETUP_SOFT_EPOCH;
+                fs::write(&soul_path, serialize_soul(&fm, &body))?;
+                info!("updated setup_soft_epoch from {old_epoch} to {SETUP_SOFT_EPOCH}");
+            } else {
+                bail!(
+                    "soul was created by a newer version of leiter \
+                     (setup_soft_epoch: soul={}, binary={SETUP_SOFT_EPOCH}). \
+                     Please upgrade leiter.",
+                    frontmatter.setup_soft_epoch
+                );
+            }
             Ok(())
-        }
-        SoulStatus::Compatible {
-            soft_nudge: Some(_),
-            ..
-        } => {
-            bail!(
-                "soul was created by a different version of leiter \
-                 (soft epoch mismatch). Run `leiter claude install` \
-                 from the version that created this soul, or delete \
-                 the soul to start fresh."
-            );
         }
         SoulStatus::Incompatible(reason) => {
             bail!("{}", reason.user_message());
@@ -236,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn rerun_with_mismatched_soft_epoch_fails() {
+    fn rerun_with_newer_soft_epoch_fails() {
         let tmp = tempfile::tempdir().unwrap();
         let claude_tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
@@ -249,7 +252,48 @@ mod tests {
         fs::write(&soul, serialize_soul(&fm, body)).unwrap();
 
         let err = run(dir, claude_tmp.path()).unwrap_err();
-        assert!(err.to_string().contains("different version"));
+        assert!(err.to_string().contains("newer version"));
+    }
+
+    #[test]
+    fn rerun_with_older_soft_epoch_migrates_forward() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        run_setup(dir, claude_tmp.path());
+
+        let soul = paths::soul_path(dir);
+        let content = fs::read_to_string(&soul).unwrap();
+        let (mut fm, body) = parse_soul(&content).unwrap();
+        fm.setup_soft_epoch = SETUP_SOFT_EPOCH - 1;
+        fs::write(&soul, serialize_soul(&fm, body)).unwrap();
+
+        run_setup(dir, claude_tmp.path());
+
+        let updated = fs::read_to_string(&soul).unwrap();
+        let (updated_fm, _) = parse_soul(&updated).unwrap();
+        assert_eq!(updated_fm.setup_soft_epoch, SETUP_SOFT_EPOCH);
+    }
+
+    #[test]
+    fn soft_epoch_migration_preserves_body() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        run_setup(dir, claude_tmp.path());
+
+        let soul = paths::soul_path(dir);
+        let content = fs::read_to_string(&soul).unwrap();
+        let (mut fm, body) = parse_soul(&content).unwrap();
+        let original_body = body.to_string();
+        fm.setup_soft_epoch = SETUP_SOFT_EPOCH - 1;
+        fs::write(&soul, serialize_soul(&fm, body)).unwrap();
+
+        run_setup(dir, claude_tmp.path());
+
+        let updated = fs::read_to_string(&soul).unwrap();
+        let (_, updated_body) = parse_soul(&updated).unwrap();
+        assert_eq!(updated_body, original_body);
     }
 
     #[test]
