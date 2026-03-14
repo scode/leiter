@@ -30,6 +30,12 @@ Override tags:
 - Add `changelog: skip` in the commit body or footer to force exclusion.
 - If both tags are present, `changelog: skip` wins.
 
+## Release Notes
+
+Custom release commentary can be added by creating a file at `release-notes/X.Y.Z.md` before cutting the release. The
+content is inserted into `CHANGELOG.md` between the version heading and the auto-generated commit entries, so it
+survives changelog regeneration (the source file is separate from `CHANGELOG.md`).
+
 ## Releasing
 
 Ask the user what version to bump to. Read the current version from `Cargo.toml`, then offer three options showing the
@@ -47,14 +53,17 @@ Then proceed:
 3. Refresh the lockfile: `cargo update --workspace`
 4. Validate lockfile consistency: `cargo metadata --format-version 1 --locked > /dev/null`
 5. Generate the changelog: `git-cliff --tag "v$VERSION" -o CHANGELOG.md`
-6. Run `dprint fmt` to fix any formatting issues in the generated changelog.
-7. Verify the changelog heading exists: `rg -n "^## \[$VERSION\]" CHANGELOG.md`
-8. Create a release PR with commit message `chore: release $VERSION`. The PR must include `Cargo.toml`, `Cargo.lock`,
+6. Check for custom release notes at `release-notes/$VERSION.md`. If the file exists, insert its contents into
+   `CHANGELOG.md` immediately after the `## [$VERSION]` heading line (before the first `###` group). If the file does
+   not exist, ask the user whether to proceed without custom release notes. Abort if they decline.
+7. Run `dprint fmt` to fix any formatting issues in the generated changelog.
+8. Verify the changelog heading exists: `rg -n "^## \[$VERSION\]" CHANGELOG.md`
+9. Create a release PR with commit message `chore: release $VERSION`. The PR must include `Cargo.toml`, `Cargo.lock`,
    and `CHANGELOG.md` (CHANGELOG.md will be untracked on first release — `gt add` it before committing).
-9. **Stop and explicitly ask the user for confirmation before merging and tagging.** Do not silently wait — tell the
-   user you are ready to merge and tag, and ask them to confirm.
-10. Merge the PR: `gh pr merge <number> --squash`
-11. Sync and checkout main: `gt sync --all`, `gt checkout main`.
-12. Tag the merge commit and push: `git tag v$VERSION && git push origin v$VERSION`
-13. Watch the Release workflow: `gh run watch <run-id>`. Confirm it succeeds (dist plan, release-plan tests, artifact
+10. **Stop and explicitly ask the user for confirmation before merging and tagging.** Do not silently wait — tell the
+    user you are ready to merge and tag, and ask them to confirm.
+11. Merge the PR: `gh pr merge <number> --squash`
+12. Sync and checkout main: `gt sync --all`, `gt checkout main`.
+13. Tag the merge commit and push: `git tag v$VERSION && git push origin v$VERSION`
+14. Watch the Release workflow: `gh run watch <run-id>`. Confirm it succeeds (dist plan, release-plan tests, artifact
     builds, Homebrew formula publish).
