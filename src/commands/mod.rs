@@ -7,6 +7,7 @@ pub mod instill;
 pub mod mark_distilled;
 pub mod nudge;
 pub mod session_end;
+pub mod soul_show;
 pub mod soul_upgrade;
 
 #[cfg(test)]

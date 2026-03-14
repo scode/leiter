@@ -84,6 +84,8 @@ pub enum SoulCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Output soul contents wrapped in XML boundary tags
+    Show,
     /// Detect and output soul template migration instructions
     Upgrade,
     /// Set last_distilled to the current time
@@ -166,6 +168,9 @@ fn main() -> Result<()> {
             }
         },
         Command::Soul { command } => match command {
+            SoulCommand::Show => {
+                commands::soul_show::run(&state_dir, &mut std::io::stdout())?;
+            }
             SoulCommand::Instill { text } => {
                 commands::instill::run(&state_dir, &mut std::io::stdout(), text)?;
             }

@@ -150,7 +150,7 @@ mod tests {
             SETUP_HARD_EPOCH,
         );
         let output = run_context(tmp.path());
-        assert!(output.contains("setup is slightly behind"));
+        assert!(output.contains("optional improvements"));
         assert!(output.contains("leiter claude install"));
         assert!(output.contains(&context_preamble(tmp.path())));
     }
@@ -160,7 +160,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH + 1, SETUP_HARD_EPOCH);
         let output = run_context(tmp.path());
-        assert!(output.contains("binary is slightly behind"));
+        assert!(output.contains("binary is a bit behind"));
         assert!(output.contains("upgrade leiter"));
         assert!(output.contains(&context_preamble(tmp.path())));
     }
@@ -184,7 +184,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let output = setup_and_context(tmp.path());
         assert!(!output.contains("incompatible"));
-        assert!(!output.contains("slightly behind"));
+        assert!(!output.contains("optional improvements"));
+        assert!(!output.contains("a bit behind"));
         assert!(output.starts_with(&context_preamble(tmp.path())));
     }
 }

@@ -39,6 +39,9 @@ writing to the soul.
 │                           ──► sub-agent edits soul.md        │
 │                        ──► agent: leiter soul mark-distilled │
 │                                                              │
+│  /leiter-soul ──► leiter soul show ──► agent displays         │
+│                                       soul verbatim          │
+│                                                              │
 │  /leiter-soul-upgrade ──► leiter soul upgrade                │
 │                        ──► agent restructures soul.md        │
 │                                                              │
@@ -59,6 +62,7 @@ writing to the soul.
 ├── leiter-setup/SKILL.md        # Each contains <!-- SCODE_LEITER_INSTALLED -->
 ├── leiter-distill/SKILL.md
 ├── leiter-instill/SKILL.md
+├── leiter-soul/SKILL.md
 ├── leiter-soul-upgrade/SKILL.md
 └── leiter-teardown/SKILL.md
 ```
@@ -88,6 +92,8 @@ The Claude Code home directory is where leiter installs its plugin files (skill 
 - **`<claude_home>/skills/leiter-distill/SKILL.md`** — skill for distilling session logs into the soul.
 - **`<claude_home>/skills/leiter-instill/SKILL.md`** — skill for recording preferences. Description includes trigger
   keywords (remember, learn, always, never) so Claude can auto-match.
+- **`<claude_home>/skills/leiter-soul/SKILL.md`** — skill for showing the current soul file contents. Runs
+  `leiter soul show` and displays the output verbatim.
 - **`<claude_home>/skills/leiter-soul-upgrade/SKILL.md`** — skill for upgrading the soul template to the latest version.
   Runs `leiter soul upgrade` and follows its migration instructions.
 - **`<claude_home>/skills/leiter-teardown/SKILL.md`** — skill that calls `leiter claude agent-teardown-instructions` to
@@ -128,9 +134,9 @@ setup_hard_epoch: 1
 Both epoch fields default to 1 when absent (for backward compatibility with souls created before epochs were
 introduced).
 
-The agent edits the soul file directly using its Read/Edit/Write tools. The CLI only writes to this file during
-`leiter claude install` to create the initial soul from the template; after that, all modifications are made by the
-agent.
+The agent edits the soul file directly using its Read/Edit/Write tools. The CLI writes to this file during
+`leiter claude install` (to create the initial soul or migrate epoch fields forward on re-run) and during
+`leiter soul mark-distilled` (to update `last_distilled`). All other modifications are made by the agent.
 
 ### Setup Epochs
 
@@ -145,10 +151,11 @@ There are two independent epochs, each a monotonic integer starting at 1:
   can function correctly. A mismatch blocks the session (the soul is not injected).
 
 The binary has compiled-in expected values for both epochs. Every command except `session-end` validates the soul's
-epoch values against the binary's expected values before doing any work. The check uses exact equality — both older and
-newer souls are flagged, since the binary cannot make assumptions about unknown future epochs. This validation is
-implemented as a single shared function used by all commands, preventing drift between individual command
-implementations.
+epoch values against the binary's expected values before doing any work. Hard epoch checks use exact equality — both
+older and newer souls are flagged. Soft epoch mismatches in either direction produce a nudge but do not block commands.
+`leiter claude install` additionally migrates a behind-the-binary soft epoch forward on re-run, and refuses to run when
+the soul is ahead of the binary (to avoid downgrading). This validation is implemented as a single shared function used
+by all commands, preventing drift between individual command implementations.
 
 Corrupt frontmatter (unparseable YAML) is treated equivalently to a hard epoch mismatch — it blocks the command
 entirely, since epochs cannot be verified.
@@ -178,9 +185,10 @@ phrases for each case:
 
 The instruction must also tell the agent not to attempt leiter commands for the remainder of the session.
 
-For soft epoch mismatches, the agent is instructed to briefly mention the mismatch direction (setup behind or binary
-behind) and suggest the appropriate action (re-run install or upgrade). These are nudges, not verbatim scripts — the
-agent is told to keep it to one short sentence.
+For soft epoch mismatches, the agent is instructed to briefly mention that optional improvements are available (or that
+the binary is a bit behind) and suggest the appropriate action (re-run install or upgrade). The nudge explicitly notes
+there are no breaking changes. These are nudges, not verbatim scripts — the agent is told to keep it to one short
+sentence.
 
 ### Soul Template (built into the binary)
 
@@ -306,12 +314,13 @@ sentinel) to the Claude Code home directory.
 2. Create `~/.leiter/logs/` directory (no-op if exists)
 3. If `~/.leiter/soul.md` does not exist, create it from the soul template with `last_distilled: 1970-01-01T00:00:00Z`,
    `soul_version` set to the current template version, and `setup_soft_epoch`/`setup_hard_epoch` set to the binary's
-   current epoch values in the frontmatter. If `soul.md` already exists, verify that its `setup_soft_epoch` and
-   `setup_hard_epoch` fields exactly match the binary's current values. If frontmatter cannot be parsed or any epoch
-   does not match, fail with an error — the binary is incompatible with the existing setup
+   current epoch values in the frontmatter. If `soul.md` already exists, verify epoch compatibility: hard epochs must
+   exactly match (any mismatch is an error). For soft epochs, if the soul is behind the binary, migrate it forward by
+   rewriting the frontmatter with the binary's current `setup_soft_epoch` (preserving the body). If the soul is ahead of
+   the binary, fail with an error. If frontmatter cannot be parsed, fail with an error
 4. Verify the Claude Code home directory exists (error if not — Claude Code not installed)
-5. Write all five skill files to their respective directories under `<claude_home>/skills/`. Overwrites existing files
-   on re-run (idempotent)
+5. Write all six skill files to their respective directories under `<claude_home>/skills/`. Overwrites existing files on
+   re-run (idempotent)
 
 **Output (stdout):** A success message listing the available skills and telling the user to run `/leiter-setup` to
 configure hooks.
@@ -327,7 +336,7 @@ Removes leiter plugin files from the Claude Code home directory. Does NOT touch 
 
 1. Scan skill directories under `<claude_home>/skills/` for a `SKILL.md` containing `SCODE_LEITER_INSTALLED`
 2. If no skill file contains the sentinel: error
-3. Remove all five `<claude_home>/skills/leiter-*/` directories (best-effort, skip missing)
+3. Remove all six `<claude_home>/skills/leiter-*/` directories (best-effort, skip missing)
 
 **Output (stdout):** A success message with guidance on how to remove hooks, fully clean up (`~/.leiter/`), and
 re-enable later.
@@ -387,6 +396,8 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
    to do anything — no manual logging is required.
 
    **Distillation:** When the user asks to distill session logs, the agent should invoke the `/leiter-distill` skill.
+
+   **Soul viewing:** When the user asks to see or view their soul, the agent should invoke the `/leiter-soul` skill.
 
    **Soul upgrade:** When the user asks to upgrade the leiter soul (or runs `/leiter-soul-upgrade`), the agent should
    invoke the `/leiter-soul-upgrade` skill.
@@ -536,6 +547,26 @@ preference ("remember", "learn", "instill", "always", "never", or similar langua
 3. Instruction to read `~/.leiter/soul.md` and edit the appropriate section
 
 See the Architecture section for why guidelines are shared between `instill` and `distill`.
+
+### `leiter soul show`
+
+Outputs the soul body (without frontmatter) wrapped in XML boundary tags for safe verbatim display. Called by the
+`/leiter-soul` skill when the user asks to see their soul.
+
+**Behavior:**
+
+1. Validate the soul file (see Setup Epochs). If incompatible, exit with an error
+
+**Output (stdout):**
+
+The soul body content (everything after the YAML frontmatter) wrapped in `<leiter-soul-content>` /
+`</leiter-soul-content>` XML tags. The frontmatter is stripped so the user sees only the learned preferences, not
+internal metadata.
+
+The XML boundary tags, combined with skill instructions that tell the agent to display content verbatim in a fenced code
+block, mitigate the risk of the agent interpreting soul content as directives. The skill instructions tell the agent to
+use enough backtick characters in the fence to avoid conflicts with any backticks in the soul content, since the soul
+body may contain markdown including fenced code blocks.
 
 ### `leiter hook nudge`
 

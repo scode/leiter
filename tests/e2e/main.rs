@@ -37,12 +37,14 @@ fn e2e_suite() {
     step_7_soul_upgrade(&host);
     step_8_hard_epoch_mismatch_blocks_session(&host);
     step_9_session_end_exempt_from_epoch_checks(&host);
+    step_10_soft_epoch_mismatch_nudges(&host);
+    step_11_soul_show(&host);
 }
 
 /// Fully deterministic. Verifies that `leiter claude install` left the right
 /// artifacts: soul.md with expected frontmatter fields, logs/ directory, and
-/// all 4 skill files containing the SCODE_LEITER_INSTALLED sentinel. No Claude
-/// involvement — just SSH file checks.
+/// all six skill files containing the SCODE_LEITER_INSTALLED sentinel. No
+/// Claude involvement — just SSH file checks.
 fn step_1_install_verification(host: &RemoteHost) {
     info!("Step 1: Install verification");
 
@@ -74,6 +76,8 @@ fn step_1_install_verification(host: &RemoteHost) {
         "leiter-setup",
         "leiter-distill",
         "leiter-instill",
+        "leiter-soul",
+        "leiter-soul-upgrade",
         "leiter-teardown",
     ] {
         let path = format!("~/.claude/skills/{skill}/SKILL.md");
@@ -332,6 +336,79 @@ fn step_9_session_end_exempt_from_epoch_checks(host: &RemoteHost) {
     host.run_ok("mv ~/.leiter/soul.md.bak ~/.leiter/soul.md");
 
     info!("Step 9 passed");
+}
+
+/// Deterministic setup + agent-driven. Downgrades `setup_soft_epoch` to 1 so
+/// the binary sees a soft mismatch. The context hook nudge tells the agent to
+/// mention optional improvements and suggest `leiter claude install`.
+/// We verify the agent relays this by checking for "leiter claude install" in
+/// the response — a generic mention of "install" or "setup" is not sufficient.
+fn step_10_soft_epoch_mismatch_nudges(host: &RemoteHost) {
+    info!("Step 10: Soft epoch mismatch nudges");
+
+    host.run_ok("cp ~/.leiter/soul.md ~/.leiter/soul.md.bak");
+
+    host.run_ok("sed 's/setup_soft_epoch: 2/setup_soft_epoch: 1/' ~/.leiter/soul.md > ~/.leiter/soul.md.tmp && mv ~/.leiter/soul.md.tmp ~/.leiter/soul.md");
+
+    let soul_check = host.read_file("~/.leiter/soul.md");
+    assert!(
+        soul_check.contains("setup_soft_epoch: 1"),
+        "setup_soft_epoch should be 1 after sed"
+    );
+
+    let stdout = host.claude_prompt_ok(
+        "Are there any warnings or notices from session startup hooks? If so, tell me what they say.",
+        3,
+    );
+
+    let lower = stdout.to_lowercase();
+    assert!(
+        lower.contains("leiter claude install") || lower.contains("behind"),
+        "Agent should relay the soft epoch nudge mentioning 'leiter claude install' or 'behind'. Got: {stdout}"
+    );
+
+    host.run_ok("mv ~/.leiter/soul.md.bak ~/.leiter/soul.md");
+
+    info!("Step 10 passed");
+}
+
+/// Agent-driven. Asks Claude to show the soul via `/leiter-soul`. Claude runs
+/// `leiter soul show`, gets the XML-wrapped body, and displays it verbatim.
+/// We require multiple section headings to be present — a summary or
+/// interpretation would not reproduce all of them. We also verify frontmatter
+/// fields are absent (soul show strips them).
+fn step_11_soul_show(host: &RemoteHost) {
+    info!("Step 11: Soul show");
+
+    let stdout = host.claude_prompt_ok("Show me my leiter soul.", 5);
+
+    // Require at least 3 of the 7 section headings to be present verbatim.
+    // A summary or interpretation would not reproduce these exact strings.
+    let headings = [
+        "Communication Style",
+        "Coding Preferences",
+        "Workflow Patterns",
+        "Tool Preferences",
+        "Technology & Environment",
+        "What Works Well",
+        "What to Avoid",
+    ];
+    let matches = headings.iter().filter(|h| stdout.contains(**h)).count();
+    assert!(
+        matches >= 3,
+        "Agent should display soul verbatim with section headings (found {matches}/7). Got: {stdout}"
+    );
+
+    assert!(
+        !stdout.contains("last_distilled"),
+        "Soul show output should not contain frontmatter. Got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("setup_soft_epoch"),
+        "Soul show output should not contain frontmatter. Got: {stdout}"
+    );
+
+    info!("Step 11 passed");
 }
 
 fn count_log_files(host: &RemoteHost) -> usize {
