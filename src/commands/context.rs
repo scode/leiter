@@ -45,10 +45,9 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
 mod tests {
     use super::*;
     use crate::commands::agent_setup;
-    use crate::frontmatter::{SoulFrontmatter, serialize_soul};
+    use crate::commands::test_support::write_soul_with_epochs;
     use crate::paths;
     use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
-    use chrono::{TimeZone, Utc};
     use std::fs;
 
     fn run_context(state_dir: &Path) -> String {
@@ -61,18 +60,6 @@ mod tests {
         let claude_tmp = tempfile::tempdir().unwrap();
         agent_setup::run(state_dir, claude_tmp.path()).unwrap();
         run_context(state_dir)
-    }
-
-    fn write_soul_with_epochs(state_dir: &Path, soft: u32, hard: u32) {
-        let fm = SoulFrontmatter {
-            last_distilled: Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap(),
-            soul_version: 2,
-            setup_soft_epoch: soft,
-            setup_hard_epoch: hard,
-        };
-        let soul = serialize_soul(&fm, "body\n");
-        fs::create_dir_all(state_dir).unwrap();
-        fs::write(paths::soul_path(state_dir), soul).unwrap();
     }
 
     #[test]

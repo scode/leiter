@@ -225,21 +225,7 @@ pub fn validate_soul(state_dir: &Path) -> SoulStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_support::setup_state_dir;
-    use crate::frontmatter::{SoulFrontmatter, serialize_soul};
-    use chrono::{TimeZone, Utc};
-
-    fn write_soul_with_epochs(state_dir: &Path, soft: u32, hard: u32) {
-        let fm = SoulFrontmatter {
-            last_distilled: Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap(),
-            soul_version: 2,
-            setup_soft_epoch: soft,
-            setup_hard_epoch: hard,
-        };
-        let soul = serialize_soul(&fm, "body\n");
-        std::fs::create_dir_all(state_dir).unwrap();
-        std::fs::write(paths::soul_path(state_dir), soul).unwrap();
-    }
+    use crate::commands::test_support::{setup_state_dir, write_soul_with_epochs};
 
     #[test]
     fn missing_soul_returns_not_found() {

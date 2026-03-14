@@ -102,9 +102,8 @@ pub fn agent_teardown_instructions(state_dir: &Path, out: &mut impl Write) -> Re
 mod tests {
     use super::*;
     use crate::commands::agent_setup;
-    use crate::frontmatter::{SoulFrontmatter, serialize_soul};
-    use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH, SOUL_TEMPLATE_VERSION};
-    use chrono::{TimeZone, Utc};
+    use crate::commands::test_support::write_soul_with_epochs;
+    use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
 
     fn setup_plugin_files(claude_home: &Path, state_dir: &Path) {
         agent_setup::run(state_dir, claude_home).unwrap();
@@ -112,17 +111,6 @@ mod tests {
 
     fn run_uninstall(state_dir: &Path, claude_home: &Path) -> Result<()> {
         run(state_dir, claude_home)
-    }
-
-    fn write_soul_with_epochs(state_dir: &Path, soft: u32, hard: u32) {
-        let fm = SoulFrontmatter {
-            last_distilled: Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap(),
-            soul_version: SOUL_TEMPLATE_VERSION,
-            setup_soft_epoch: soft,
-            setup_hard_epoch: hard,
-        };
-        fs::create_dir_all(state_dir).unwrap();
-        fs::write(paths::soul_path(state_dir), serialize_soul(&fm, "body\n")).unwrap();
     }
 
     #[test]
