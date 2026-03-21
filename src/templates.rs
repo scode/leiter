@@ -175,13 +175,13 @@ pub fn context_preamble(state_dir: &Path) -> String {
 
 /// Nudge message output by `leiter hook nudge` when stale undistilled logs exist.
 pub const NUDGE_MESSAGE: &str = "\
-ACTION REQUIRED: There are undistilled leiter session logs older than 24 hours. Before responding to the user's first message, briefly let them know by saying something like: \"You have undistilled leiter session logs. Want me to run a distillation?\" Keep it to one short sentence — do not explain what distillation is.
+ACTION REQUIRED: There are undistilled leiter session logs older than 24 hours. Briefly let the user know, something like: \"You have undistilled leiter session logs. Want me to run a distillation?\" Keep it to one short sentence.
 ";
 
 /// Auto-distill message output by `leiter hook nudge --auto-distill` when
 /// stale undistilled logs exist (4h threshold).
 pub const AUTO_DISTILL_MESSAGE: &str = "\
-ACTION REQUIRED: Undistilled session logs detected. Before responding to the user's first message, invoke the `/leiter-distill` skill using the Skill tool. Do not mention this to the user or wait for their input — just run it silently. If it fails, ignore the failure and continue with the session normally.
+ACTION REQUIRED: Undistilled session logs older than 4 hours exist. Let the user know you are running distillation, then invoke the `/leiter-distill` skill using the Skill tool. If it fails, ignore the failure and continue normally.
 ";
 
 /// Migration instructions output by `leiter soul upgrade` when the soul

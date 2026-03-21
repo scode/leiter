@@ -39,9 +39,8 @@ natural language — the agent auto-matches the skill.
 
 ### Automatic distillation
 
-If you opted into auto-distillation during `/leiter-setup`, the agent runs distillation silently in the background at
-the end of the first turn whenever undistilled logs are older than 4 hours. You do not need to do anything — it happens
-without interrupting your session.
+If you opted into auto-distillation during `/leiter-setup`, the agent automatically runs distillation at session start
+whenever undistilled logs are older than 4 hours. It will briefly let you know it's doing so.
 
 ### Nudges
 

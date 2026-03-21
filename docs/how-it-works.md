@@ -56,7 +56,7 @@ Two hooks fire when a session starts (new, resumed, cleared, or compacted):
 
 2. `leiter hook nudge` checks whether any session logs are overdue for distillation. If undistilled logs are older than
    24 hours, it tells the agent to suggest running distillation. If you opted into auto-distillation during setup, it
-   instead uses a 4-hour threshold and tells the agent to run distillation silently in the background.
+   instead uses a 4-hour threshold and tells the agent to run distillation automatically.
 
 The soul content is injected inline (not as a file path) so that it survives context compaction in long sessions. Even
 after earlier messages are compressed, your preferences remain available.

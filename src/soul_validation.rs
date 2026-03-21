@@ -53,8 +53,7 @@ impl SoulIncompatibility {
                 "ACTION REQUIRED: Leiter setup is incompatible \
                  (setup_hard_epoch: soul={soul_epoch}, binary={binary_epoch}). \
                  The binary was upgraded but setup was not re-run. \
-                 Before responding to the user's first message, tell them \
-                 EXACTLY this (word for word): \
+                 Tell the user EXACTLY this (word for word): \
                  \"Leiter setup needs to be re-run \u{2014} please run \
                  `leiter claude install` in your terminal and follow the \
                  instructions, then start a new session.\" \
@@ -67,8 +66,7 @@ impl SoulIncompatibility {
                 "ACTION REQUIRED: Leiter setup is incompatible \
                  (setup_hard_epoch: soul={soul_epoch}, binary={binary_epoch}). \
                  The soul was created by a newer leiter binary than the one \
-                 currently installed. Before responding to the user's first \
-                 message, tell them EXACTLY this (word for word): \
+                 currently installed. Tell the user EXACTLY this (word for word): \
                  \"Your leiter binary is older than your soul file expects \
                  \u{2014} please upgrade leiter, then start a new session.\" \
                  Do not attempt to use leiter commands in this session."
@@ -76,8 +74,7 @@ impl SoulIncompatibility {
             Self::FrontmatterCorrupt { soul_path, error } => format!(
                 "ACTION REQUIRED: The leiter soul ({}) has invalid YAML \
                  front matter ({error}) and leiter cannot verify compatibility. \
-                 Before responding to the user's first message, tell them \
-                 EXACTLY this (word for word): \
+                 Tell the user EXACTLY this (word for word): \
                  \"The leiter soul has corrupt frontmatter. Please fix \
                  the YAML front matter manually, or delete the soul file and \
                  run `leiter claude install` to start fresh, then start a new \
@@ -87,8 +84,7 @@ impl SoulIncompatibility {
             ),
             Self::SoulUnreadable { soul_path, error } => format!(
                 "ACTION REQUIRED: The leiter soul ({}) could not be read \
-                 ({error}). Before responding to the user's first message, \
-                 tell them EXACTLY this (word for word): \
+                 ({error}). Tell the user EXACTLY this (word for word): \
                  \"The leiter soul file could not be read. \
                  Please check file permissions on {}, then start a new \
                  session.\" \
@@ -194,7 +190,7 @@ pub fn validate_soul(state_dir: &Path) -> SoulStatus {
 
     let soft_nudge = if fm.setup_soft_epoch < SETUP_SOFT_EPOCH {
         Some(
-            "Before responding to the user's first message, briefly mention \
+            "Briefly mention to the user \
              that a newer version of leiter has optional improvements available. \
              There are no breaking changes, so there is no rush. \
              Suggest they run `leiter claude install` when convenient to pick up \
@@ -203,7 +199,7 @@ pub fn validate_soul(state_dir: &Path) -> SoulStatus {
         )
     } else if fm.setup_soft_epoch > SETUP_SOFT_EPOCH {
         Some(
-            "Before responding to the user's first message, briefly mention \
+            "Briefly mention to the user \
              that the leiter binary is a bit behind the current setup. \
              There are no breaking changes, so there is no rush. \
              Suggest they upgrade leiter when convenient. \
