@@ -575,8 +575,8 @@ Checks for stale undistilled session logs and outputs a nudge if any exist. Call
 
 **Flags:**
 
-- `--auto-distill`: Use a 4-hour threshold instead of 24 hours, and output an instruction for the agent to silently run
-  distillation in a background sub-agent (instead of asking the user). This is opt-in via `/leiter-setup` option 3.
+- `--auto-distill`: Use a 4-hour threshold instead of 24 hours, and output an instruction for the agent to run
+  distillation (instead of asking the user). This is opt-in via `/leiter-setup` option 3.
 
 **Behavior:**
 
@@ -595,8 +595,7 @@ Checks for stale undistilled session logs and outputs a nudge if any exist. Call
 
 - Without `--auto-distill`: if stale undistilled logs exist (24h), a short nudge message reminding the agent to suggest
   distillation
-- With `--auto-distill`: if stale undistilled logs exist (4h), an instruction for the agent to silently invoke
-  distillation in a background sub-agent without mentioning it to the user
+- With `--auto-distill`: if stale undistilled logs exist (4h), an instruction for the agent to invoke distillation
 - Otherwise: nothing (zero context pollution)
 
 ### `leiter soul upgrade`
@@ -656,7 +655,7 @@ Fires on every session start (new, resume, clear, compact). The stdout output is
 `leiter hook context` hook injects the soul and agent instructions; the `leiter hook nudge` hook outputs a distillation
 reminder only when stale undistilled logs exist (otherwise it outputs nothing, adding zero context). If the user opts
 into auto-distillation during `/leiter-setup` (option 3), the nudge command is configured as
-`leiter hook nudge --auto-distill`, which uses a 4-hour threshold and instructs the agent to silently run distillation.
+`leiter hook nudge --auto-distill`, which uses a 4-hour threshold and instructs the agent to run distillation.
 
 ### SessionEnd Hook
 
@@ -691,8 +690,7 @@ After configuring hooks, `agent-setup-instructions` offers three optional featur
    bare absolute path like `/Users/alice/.leiter/soul.md` would be interpreted as project-relative and never match. The
    soul path must be formatted as `~/.leiter/soul.md` (when under `$HOME`) or `//path/to/soul.md` (otherwise).
 3. **Auto-distillation:** Changes the nudge hook command from `leiter hook nudge` to `leiter hook nudge --auto-distill`,
-   so the agent silently runs distillation in the background at session start when stale logs exist (4h threshold)
-   instead of asking the user.
+   so the agent runs distillation at session start when stale logs exist (4h threshold) instead of asking the user.
 
 The user can accept any combination, all, or none.
 
@@ -716,8 +714,8 @@ soul file path. Empty `permissions.allow` arrays and empty `permissions` objects
 ### Normal Session (After Setup)
 
 1. Session starts → SessionStart hook fires → `leiter hook context` outputs soul + instructions, `leiter hook nudge`
-   outputs a distillation reminder if stale logs exist (or instructs silent distillation when `--auto-distill` is
-   enabled) → agent has leiter hook context
+   outputs a distillation reminder if stale logs exist (or instructs distillation when `--auto-distill` is enabled) →
+   agent has leiter hook context
 2. Normal session proceeds
 3. Session ends → SessionEnd hook fires → `leiter hook session-end` copies transcript to `~/.leiter/logs/`
 

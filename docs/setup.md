@@ -43,9 +43,8 @@ After configuring hooks, the agent offers three optional features. You can accep
    permission every time it runs a `leiter` command.
 2. **Soul file access** — allows reading and editing `~/.leiter/soul.md` without confirmation. Without this, Claude asks
    permission when instilling preferences or during distillation.
-3. **Auto-distillation** — runs distillation silently in the background at the end of the first turn when stale logs
-   exist (4-hour threshold), instead of nudging you to do it manually. See [usage.md](usage.md) for more on
-   distillation.
+3. **Auto-distillation** — runs distillation automatically at the start of a session when stale logs exist (4-hour
+   threshold), instead of nudging you to do it manually. See [usage.md](usage.md) for more on distillation.
 
 ## Re-running setup after upgrades
 

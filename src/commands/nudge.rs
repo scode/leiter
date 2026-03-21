@@ -2,7 +2,7 @@
 //!
 //! Checks for undistilled session logs older than a threshold. In normal mode
 //! (24h threshold), outputs a nudge asking the user. In `--auto-distill` mode
-//! (4h threshold), outputs an instruction to silently run distillation.
+//! (4h threshold), outputs an instruction to run distillation.
 //! Otherwise outputs nothing (zero context pollution). Silently succeeds when
 //! leiter is not initialized.
 
