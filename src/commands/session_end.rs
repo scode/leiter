@@ -9,7 +9,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::Deserialize;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::log_filename::generate_log_filename;
 use crate::paths;
@@ -35,7 +35,16 @@ pub fn run(state_dir: &Path, input: &mut impl Read) -> Result<()> {
     let hook_input: SessionEndInput =
         serde_json::from_str(&raw).context("failed to parse session-end JSON")?;
 
-    let transcript = std::fs::read(&hook_input.transcript_path).with_context(|| {
+    let transcript_path = Path::new(&hook_input.transcript_path);
+    if !transcript_path.exists() {
+        debug!(
+            "Transcript file does not exist (zero-turn session?), skipping: {}",
+            hook_input.transcript_path
+        );
+        return Ok(());
+    }
+
+    let transcript = std::fs::read(transcript_path).with_context(|| {
         format!(
             "failed to read transcript at {}",
             hook_input.transcript_path
@@ -138,8 +147,12 @@ mod tests {
         );
     }
 
+    /// Claude Code doesn't write a transcript file for zero-turn sessions
+    /// (user starts Claude and exits without sending a message), but the
+    /// SessionEnd hook still fires with a transcript_path. Treat this as a
+    /// silent no-op rather than an error to avoid noisy failures on exit.
     #[test]
-    fn missing_transcript_file_errors() {
+    fn missing_transcript_file_is_noop() {
         let tmp = setup_state_dir();
         let json = serde_json::json!({
             "session_id": "sess1",
@@ -147,13 +160,11 @@ mod tests {
         });
         let mut input = Cursor::new(json.to_string().into_bytes());
         let result = run(tmp.path(), &mut input);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("failed to read transcript")
-        );
+        assert!(result.is_ok());
+
+        // No log file should be created.
+        let entries: Vec<_> = fs::read_dir(paths::logs_dir(tmp.path())).unwrap().collect();
+        assert_eq!(entries.len(), 0);
     }
 
     #[test]

@@ -434,8 +434,11 @@ and are ignored):
 **Output:** None. A confirmation message with the saved file path is logged to stderr (via `tracing`). The SessionEnd
 hook fires after the session terminates, so no agent is present to read stdout.
 
-**Errors:** If `~/.leiter/logs/` does not exist, the transcript file cannot be read, the write fails, or the atomic
-rename fails, print an error to stderr and exit with a non-zero code. Clean up the temporary file on any error.
+**No-op case:** If the transcript file does not exist (e.g., Claude Code does not write a transcript for zero-turn
+sessions), log a debug message and exit successfully. No log file is created.
+
+**Errors:** If `~/.leiter/logs/` does not exist, the transcript file exists but cannot be read, the write fails, or the
+atomic rename fails, print an error to stderr and exit with a non-zero code. Clean up the temporary file on any error.
 
 ### `leiter soul distill`
 
