@@ -36,6 +36,11 @@ pub fn run(state_dir: &Path, claude_home: &Path) -> Result<()> {
 
     write_plugin_files(claude_home)?;
 
+    // Bump the epoch only after all operations succeeded, so a partial
+    // failure doesn't leave the soul claiming a version that wasn't
+    // fully installed.
+    update_soft_epoch(state_dir)?;
+
     info!("Leiter installed successfully");
     info!("Available skills:");
     info!("  /leiter-setup         — configure Claude Code hooks");
@@ -87,7 +92,10 @@ fn init_filesystem(state_dir: &Path) -> Result<()> {
             .with_context(|| format!("failed to write {}", soul_path.display()))?;
         info!("created {}", soul_path.display());
     } else {
-        verify_epochs(state_dir)?;
+        // Validate the soul is compatible but don't update the epoch yet.
+        // The epoch is bumped in update_soft_epoch() after all operations
+        // succeed.
+        validate_epochs(state_dir)?;
     }
 
     Ok(())
@@ -107,23 +115,14 @@ fn write_plugin_files(claude_home: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Verify that epochs in the existing soul match the binary's epochs,
-/// migrating the soft epoch forward when the soul is behind.
-fn verify_epochs(state_dir: &Path) -> Result<()> {
+/// Validate that epochs in the existing soul are compatible with this binary.
+///
+/// Does not modify the soul file. Returns an error if the soul was created by
+/// a newer binary or has an incompatible hard epoch.
+fn validate_epochs(state_dir: &Path) -> Result<()> {
     match validate_soul(state_dir) {
-        SoulStatus::Compatible {
-            frontmatter, body, ..
-        } => {
-            if frontmatter.setup_soft_epoch == SETUP_SOFT_EPOCH {
-                info!("epochs already current");
-            } else if frontmatter.setup_soft_epoch < SETUP_SOFT_EPOCH {
-                let old_epoch = frontmatter.setup_soft_epoch;
-                let soul_path = paths::soul_path(state_dir);
-                let mut fm = frontmatter;
-                fm.setup_soft_epoch = SETUP_SOFT_EPOCH;
-                fs::write(&soul_path, serialize_soul(&fm, &body))?;
-                info!("updated setup_soft_epoch from {old_epoch} to {SETUP_SOFT_EPOCH}");
-            } else {
+        SoulStatus::Compatible { frontmatter, .. } => {
+            if frontmatter.setup_soft_epoch > SETUP_SOFT_EPOCH {
                 bail!(
                     "soul was created by a newer version of leiter \
                      (setup_soft_epoch: soul={}, binary={SETUP_SOFT_EPOCH}). \
@@ -135,6 +134,32 @@ fn verify_epochs(state_dir: &Path) -> Result<()> {
         }
         SoulStatus::Incompatible(reason) => {
             bail!("{}", reason.user_message());
+        }
+    }
+}
+
+/// Bump the soft epoch in the soul file to match this binary's epoch.
+///
+/// Called after all install operations succeed so a partial failure doesn't
+/// leave the soul claiming a version that wasn't fully installed.
+fn update_soft_epoch(state_dir: &Path) -> Result<()> {
+    match validate_soul(state_dir) {
+        SoulStatus::Compatible {
+            frontmatter, body, ..
+        } => {
+            if frontmatter.setup_soft_epoch < SETUP_SOFT_EPOCH {
+                let old_epoch = frontmatter.setup_soft_epoch;
+                let soul_path = paths::soul_path(state_dir);
+                let mut fm = frontmatter;
+                fm.setup_soft_epoch = SETUP_SOFT_EPOCH;
+                fs::write(&soul_path, serialize_soul(&fm, &body))?;
+                info!("updated setup_soft_epoch from {old_epoch} to {SETUP_SOFT_EPOCH}");
+            }
+            Ok(())
+        }
+        SoulStatus::Incompatible(_) => {
+            // validate_epochs already passed, so this shouldn't happen.
+            Ok(())
         }
     }
 }
