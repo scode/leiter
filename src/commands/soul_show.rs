@@ -1,7 +1,6 @@
 //! `leiter soul show` — output soul body wrapped in XML boundary tags.
 //!
-//! Validates the soul file (epoch checks), strips frontmatter, and
-//! wraps the body in `<leiter-soul-content>` tags so the agent can
+//! Validates state and wraps the full soul in `<leiter-soul-content>` tags so the agent can
 //! display it verbatim without interpreting the content as directives.
 
 use std::io::Write;
@@ -9,20 +8,20 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
-use crate::soul_validation::{SoulStatus, validate_soul};
+use crate::validation::{ValidationStatus, validate_state};
 
 /// Run the soul show command.
 ///
-/// Validates the soul, then outputs the body (without frontmatter)
+/// Validates state, then outputs the whole soul
 /// wrapped in XML boundary tags for safe verbatim display.
 pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
-    let body = match validate_soul(state_dir) {
-        SoulStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
-        SoulStatus::Compatible { body, .. } => body,
+    let soul = match validate_state(state_dir) {
+        ValidationStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
+        ValidationStatus::Compatible { soul, .. } => soul,
     };
 
     writeln!(out, "<leiter-soul-content>")?;
-    write!(out, "{body}")?;
+    write!(out, "{soul}")?;
     writeln!(out, "</leiter-soul-content>")?;
 
     Ok(())
@@ -31,7 +30,7 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_support::{setup_state_dir, write_soul_with_epochs};
+    use crate::commands::test_support::{setup_state_dir, write_state_with_epochs};
     use crate::paths;
     use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
     use std::fs;
@@ -79,7 +78,7 @@ mod tests {
     #[test]
     fn hard_epoch_mismatch_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
+        write_state_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
 
         let mut out = Vec::new();
         let err = run(tmp.path(), &mut out).unwrap_err();
@@ -90,13 +89,14 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_frontmatter_errors() {
+    fn corrupt_state_errors() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path()).unwrap();
-        fs::write(paths::soul_path(tmp.path()), "not frontmatter").unwrap();
+        fs::write(paths::soul_path(tmp.path()), "body\n").unwrap();
+        fs::write(paths::state_path(tmp.path()), "not = valid = toml").unwrap();
 
         let mut out = Vec::new();
         let err = run(tmp.path(), &mut out).unwrap_err();
-        assert!(err.to_string().contains("invalid YAML"));
+        assert!(err.to_string().contains("state file"));
     }
 }

@@ -29,6 +29,11 @@ pub fn soul_path(state_dir: &Path) -> PathBuf {
     state_dir.join("soul.md")
 }
 
+/// Path to leiter-managed metadata (`<state_dir>/state.toml`).
+pub fn state_path(state_dir: &Path) -> PathBuf {
+    state_dir.join("state.toml")
+}
+
 /// Path to the session logs directory (`<state_dir>/logs/`).
 pub fn logs_dir(state_dir: &Path) -> PathBuf {
     state_dir.join("logs")
@@ -109,6 +114,7 @@ mod tests {
     fn paths_are_under_state_dir() {
         let dir = fake_state_dir();
         assert!(soul_path(dir).starts_with(dir));
+        assert!(state_path(dir).starts_with(dir));
         assert!(logs_dir(dir).starts_with(dir));
         assert!(codex_meta_path(dir).starts_with(dir));
         assert!(leiter_config_path(dir).starts_with(dir));

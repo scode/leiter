@@ -1,6 +1,6 @@
 //! `leiter soul upgrade` — detect soul template drift and output migration instructions.
 //!
-//! Compares the `soul_version` in the user's soul file against the current
+//! Compares the `soul_version` in `state.toml` against the current
 //! template version built into the binary. When outdated, outputs a changelog,
 //! the current template, and instructions so the agent can restructure the soul
 //! while preserving learned preferences.
@@ -10,37 +10,37 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
-use crate::soul_validation::{SoulStatus, validate_soul};
 use crate::templates::{
     SOUL_TEMPLATE, SOUL_TEMPLATE_CHANGELOG, SOUL_TEMPLATE_VERSION, soul_upgrade_instructions,
 };
+use crate::validation::{ValidationStatus, validate_state};
 
 /// Run the soul upgrade command.
 ///
-/// Validates the soul file, then compares `soul_version` to the binary's
-/// built-in template version. If up to date, says so. If outdated, outputs
-/// the changelog of intervening versions, the full current template, and
-/// migration instructions for the agent to follow.
+/// Validates `state.toml` epochs and soul readability, then compares
+/// `soul_version` to the binary's built-in template version. If up to date,
+/// says so. If outdated, outputs the changelog of intervening versions, the
+/// full current template, and migration instructions for the agent to follow.
 pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
-    let fm = match validate_soul(state_dir) {
-        SoulStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
-        SoulStatus::Compatible { frontmatter, .. } => frontmatter,
+    let state = match validate_state(state_dir) {
+        ValidationStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
+        ValidationStatus::Compatible { state, .. } => state,
     };
 
-    if fm.soul_version >= SOUL_TEMPLATE_VERSION {
-        writeln!(out, "Soul is up to date (version {}).", fm.soul_version)?;
+    if state.soul_version >= SOUL_TEMPLATE_VERSION {
+        writeln!(out, "Soul is up to date (version {}).", state.soul_version)?;
         return Ok(());
     }
 
     writeln!(
         out,
         "Soul version {} is outdated (current: {}).\n",
-        fm.soul_version, SOUL_TEMPLATE_VERSION
+        state.soul_version, SOUL_TEMPLATE_VERSION
     )?;
 
     writeln!(out, "## Changelog\n")?;
     for &(version, description) in SOUL_TEMPLATE_CHANGELOG {
-        if version > fm.soul_version && version <= SOUL_TEMPLATE_VERSION {
+        if version > state.soul_version && version <= SOUL_TEMPLATE_VERSION {
             writeln!(out, "**Version {version}:** {description}\n")?;
         }
     }
@@ -63,8 +63,9 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_support::{bytes_to_string, setup_state_dir, write_soul_with_epochs};
-    use crate::frontmatter::{parse_soul, serialize_soul};
+    use crate::commands::test_support::{
+        bytes_to_string, setup_state_dir, update_state, write_state_with_epochs,
+    };
     use crate::paths;
     use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
     use std::fs;
@@ -76,11 +77,7 @@ mod tests {
     }
 
     fn set_soul_version(state_dir: &Path, version: u32) {
-        let soul_path = paths::soul_path(state_dir);
-        let content = fs::read_to_string(&soul_path).unwrap();
-        let (mut fm, body) = parse_soul(&content).unwrap();
-        fm.soul_version = version;
-        fs::write(&soul_path, serialize_soul(&fm, body)).unwrap();
+        update_state(state_dir, |state| state.soul_version = version);
     }
 
     #[test]
@@ -134,7 +131,7 @@ mod tests {
     #[test]
     fn hard_epoch_mismatch_new_soul_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
+        write_state_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
 
         let mut out = Vec::new();
         let err = run(tmp.path(), &mut out).unwrap_err();
@@ -147,7 +144,7 @@ mod tests {
     #[test]
     fn hard_epoch_mismatch_old_soul_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(
+        write_state_with_epochs(
             tmp.path(),
             SETUP_SOFT_EPOCH,
             SETUP_HARD_EPOCH.saturating_sub(1),
@@ -159,14 +156,15 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_frontmatter_errors() {
+    fn corrupt_state_errors() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path()).unwrap();
-        fs::write(paths::soul_path(tmp.path()), "not frontmatter").unwrap();
+        fs::write(paths::soul_path(tmp.path()), "body\n").unwrap();
+        fs::write(paths::state_path(tmp.path()), "not = valid = toml").unwrap();
 
         let mut out = Vec::new();
         let result = run(tmp.path(), &mut out);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid YAML"));
+        assert!(result.unwrap_err().to_string().contains("state file"));
     }
 }

@@ -12,8 +12,8 @@ use anyhow::{Result, bail};
 use tracing::{info, warn};
 
 use crate::paths;
-use crate::soul_validation::{SoulStatus, validate_soul};
 use crate::templates::{PLUGIN_SENTINEL, SKILL_CONTENTS};
+use crate::validation::{ValidationStatus, validate_state};
 
 /// Run the `leiter claude uninstall` command.
 ///
@@ -21,9 +21,9 @@ use crate::templates::{PLUGIN_SENTINEL, SKILL_CONTENTS};
 /// SKILL.md and removes that skill's directory only if it is. This ensures
 /// we never delete a directory we haven't verified ownership of.
 pub fn run(state_dir: &Path, claude_home: &Path) -> Result<()> {
-    match validate_soul(state_dir) {
-        SoulStatus::Incompatible(reason) => bail!("{}", reason.user_message()),
-        SoulStatus::Compatible { .. } => {}
+    match validate_state(state_dir) {
+        ValidationStatus::Incompatible(reason) => bail!("{}", reason.user_message()),
+        ValidationStatus::Compatible { .. } => {}
     }
 
     let mut removed = 0;
@@ -86,9 +86,9 @@ pub fn run(state_dir: &Path, claude_home: &Path) -> Result<()> {
 ///
 /// Used by `leiter claude agent-teardown-instructions`.
 pub fn agent_teardown_instructions(state_dir: &Path, out: &mut impl Write) -> Result<()> {
-    match validate_soul(state_dir) {
-        SoulStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
-        SoulStatus::Compatible { .. } => {}
+    match validate_state(state_dir) {
+        ValidationStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
+        ValidationStatus::Compatible { .. } => {}
     }
     write!(
         out,
@@ -102,7 +102,7 @@ pub fn agent_teardown_instructions(state_dir: &Path, out: &mut impl Write) -> Re
 mod tests {
     use super::*;
     use crate::commands::agent_setup;
-    use crate::commands::test_support::write_soul_with_epochs;
+    use crate::commands::test_support::write_state_with_epochs;
     use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
 
     fn setup_plugin_files(claude_home: &Path, state_dir: &Path) {
@@ -270,20 +270,20 @@ mod tests {
     }
 
     #[test]
-    fn hard_epoch_mismatch_new_soul_errors() {
+    fn hard_epoch_mismatch_new_state_errors() {
         let state_tmp = tempfile::tempdir().unwrap();
         let claude_tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(state_tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
+        write_state_with_epochs(state_tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
 
         let err = run(state_tmp.path(), claude_tmp.path()).unwrap_err();
         assert!(err.to_string().contains("binary is outdated"));
     }
 
     #[test]
-    fn hard_epoch_mismatch_old_soul_errors() {
+    fn hard_epoch_mismatch_old_state_errors() {
         let state_tmp = tempfile::tempdir().unwrap();
         let claude_tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(
+        write_state_with_epochs(
             state_tmp.path(),
             SETUP_SOFT_EPOCH,
             SETUP_HARD_EPOCH.saturating_sub(1),
@@ -294,20 +294,21 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_frontmatter_errors() {
+    fn corrupt_state_errors() {
         let state_tmp = tempfile::tempdir().unwrap();
         let claude_tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(state_tmp.path()).unwrap();
-        fs::write(paths::soul_path(state_tmp.path()), "not frontmatter").unwrap();
+        fs::write(paths::soul_path(state_tmp.path()), "body\n").unwrap();
+        fs::write(paths::state_path(state_tmp.path()), "not = valid = toml").unwrap();
 
         let err = run(state_tmp.path(), claude_tmp.path()).unwrap_err();
-        assert!(err.to_string().contains("invalid YAML front matter"));
+        assert!(err.to_string().contains("state file"));
     }
 
     #[test]
-    fn teardown_instructions_new_soul_epoch_mismatch_errors() {
+    fn teardown_instructions_new_state_epoch_mismatch_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
+        write_state_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
 
         let mut out = Vec::new();
         let err = agent_teardown_instructions(tmp.path(), &mut out).unwrap_err();
@@ -318,9 +319,9 @@ mod tests {
     }
 
     #[test]
-    fn teardown_instructions_old_soul_epoch_mismatch_errors() {
+    fn teardown_instructions_old_state_epoch_mismatch_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(
+        write_state_with_epochs(
             tmp.path(),
             SETUP_SOFT_EPOCH,
             SETUP_HARD_EPOCH.saturating_sub(1),
@@ -332,13 +333,14 @@ mod tests {
     }
 
     #[test]
-    fn teardown_instructions_corrupt_frontmatter_errors() {
+    fn teardown_instructions_corrupt_state_errors() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path()).unwrap();
-        fs::write(paths::soul_path(tmp.path()), "---\n---\n").unwrap();
+        fs::write(paths::soul_path(tmp.path()), "body\n").unwrap();
+        fs::write(paths::state_path(tmp.path()), "not = valid = toml").unwrap();
 
         let mut out = Vec::new();
         let err = agent_teardown_instructions(tmp.path(), &mut out).unwrap_err();
-        assert!(err.to_string().contains("invalid YAML"));
+        assert!(err.to_string().contains("state file"));
     }
 }

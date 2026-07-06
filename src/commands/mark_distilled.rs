@@ -1,8 +1,8 @@
 //! `leiter soul mark-distilled` — set `last_distilled` to the current time.
 //!
-//! Deterministically updates the soul frontmatter timestamp so the agent
-//! never has to edit `last_distilled` by hand. This avoids imprecise
-//! timestamps caused by agent rounding.
+//! Deterministically updates `state.toml` so the agent never has to edit
+//! `last_distilled` by hand. When Codex distillation is enabled, the same
+//! atomic write also promotes pending Codex watermarks.
 
 use std::io::Write;
 use std::path::Path;
@@ -11,48 +11,30 @@ use anyhow::{Result, bail};
 use chrono::{SubsecRound, Utc};
 use tracing::warn;
 
-use crate::codex::CodexMeta;
 use crate::config::LeiterConfig;
-use crate::frontmatter::serialize_soul;
 use crate::paths;
-use crate::soul_validation::{SoulStatus, validate_soul};
+use crate::validation::{ValidationStatus, validate_state};
 
 pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
-    let soul_path = paths::soul_path(state_dir);
-    let codex_meta_path = paths::codex_meta_path(state_dir);
-
-    let (mut fm, body) = match validate_soul(state_dir) {
-        SoulStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
-        SoulStatus::Compatible {
-            frontmatter, body, ..
-        } => (frontmatter, body),
+    let mut state = match validate_state(state_dir) {
+        ValidationStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
+        ValidationStatus::Compatible { state, .. } => state,
     };
 
-    fm.last_distilled = Utc::now().trunc_subsecs(0);
-    std::fs::write(&soul_path, serialize_soul(&fm, &body))?;
-
     let config = load_config_best_effort(state_dir);
-    if config.enable_codex_experimental {
-        match CodexMeta::load(&codex_meta_path) {
-            Ok(mut meta) => {
-                if !meta.pending.is_empty() {
-                    meta.committed.extend(meta.pending.clone());
-                    meta.pending.clear();
-                    if let Err(err) = meta.save(&codex_meta_path) {
-                        warn!("failed to update Codex metadata: {err}");
-                    }
-                }
-            }
-            Err(err) => {
-                warn!("Codex metadata unavailable during mark-distilled: {err}");
-            }
-        }
+    state.last_distilled = Utc::now().trunc_subsecs(0);
+    if config.enable_codex_experimental && !state.codex.pending.is_empty() {
+        let pending = std::mem::take(&mut state.codex.pending);
+        state.codex.committed.extend(pending);
     }
+
+    state.save(&paths::state_path(state_dir))?;
 
     writeln!(
         out,
         "last_distilled set to {}",
-        fm.last_distilled
+        state
+            .last_distilled
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     )?;
 
@@ -73,10 +55,11 @@ fn load_config_best_effort(state_dir: &Path) -> LeiterConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codex::CodexSessionMeta;
-    use crate::commands::test_support::{bytes_to_string, setup_state_dir, write_soul_with_epochs};
+    use crate::commands::test_support::{
+        bytes_to_string, setup_state_dir, write_state_with_epochs,
+    };
     use crate::config::LeiterConfig;
-    use crate::frontmatter::parse_soul;
+    use crate::state::{LeiterState, SessionWatermark};
     use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
     use chrono::{SubsecRound, TimeZone, Utc};
     use std::fs;
@@ -101,10 +84,9 @@ mod tests {
         run_mark_distilled(tmp.path());
         let after = Utc::now();
 
-        let content = fs::read_to_string(paths::soul_path(tmp.path())).unwrap();
-        let (fm, _) = parse_soul(&content).unwrap();
-        assert!(fm.last_distilled >= before);
-        assert!(fm.last_distilled <= after);
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(state.last_distilled >= before);
+        assert!(state.last_distilled <= after);
     }
 
     #[test]
@@ -113,30 +95,23 @@ mod tests {
         let soul_path = paths::soul_path(tmp.path());
 
         let original = fs::read_to_string(&soul_path).unwrap();
-        let (_, original_body) = parse_soul(&original).unwrap();
-
         run_mark_distilled(tmp.path());
 
         let updated = fs::read_to_string(&soul_path).unwrap();
-        let (_, updated_body) = parse_soul(&updated).unwrap();
-        assert_eq!(updated_body, original_body);
+        assert_eq!(updated, original);
     }
 
     #[test]
-    fn preserves_other_frontmatter_fields() {
+    fn preserves_other_state_fields() {
         let tmp = setup_state_dir();
-        let soul_path = paths::soul_path(tmp.path());
-
-        let original = fs::read_to_string(&soul_path).unwrap();
-        let (original_fm, _) = parse_soul(&original).unwrap();
+        let original = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
 
         run_mark_distilled(tmp.path());
 
-        let updated = fs::read_to_string(&soul_path).unwrap();
-        let (updated_fm, _) = parse_soul(&updated).unwrap();
-        assert_eq!(updated_fm.soul_version, original_fm.soul_version);
-        assert_eq!(updated_fm.setup_soft_epoch, original_fm.setup_soft_epoch);
-        assert_eq!(updated_fm.setup_hard_epoch, original_fm.setup_hard_epoch);
+        let updated = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert_eq!(updated.soul_version, original.soul_version);
+        assert_eq!(updated.setup_soft_epoch, original.setup_soft_epoch);
+        assert_eq!(updated.setup_hard_epoch, original.setup_hard_epoch);
     }
 
     #[test]
@@ -163,23 +138,22 @@ mod tests {
             .strip_prefix("last_distilled set to ")
             .unwrap();
 
-        let content = fs::read_to_string(paths::soul_path(tmp.path())).unwrap();
-        let (fm, _) = parse_soul(&content).unwrap();
-        let stored_ts = fm
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        let stored_ts = state
             .last_distilled
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         assert_eq!(displayed_ts, stored_ts);
     }
 
     #[test]
-    fn malformed_frontmatter_errors() {
+    fn corrupt_state_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        let soul_path = paths::soul_path(tmp.path());
-        fs::write(&soul_path, "---\nnot: valid: frontmatter\n---\nbody\n").unwrap();
+        fs::write(paths::soul_path(tmp.path()), "body\n").unwrap();
+        fs::write(paths::state_path(tmp.path()), "not = valid = toml").unwrap();
 
         let mut out = Vec::new();
         let err = run(tmp.path(), &mut out).unwrap_err();
-        assert!(err.to_string().contains("invalid YAML"));
+        assert!(err.to_string().contains("state file"));
     }
 
     /// `mark-distilled` is the commit point for staged Codex watermarks: once
@@ -189,13 +163,12 @@ mod tests {
     fn promotes_pending_codex_metadata() {
         let tmp = setup_state_dir();
         set_codex_enabled(tmp.path(), true);
-        let codex_meta_path = paths::codex_meta_path(tmp.path());
         let ts = Utc.with_ymd_and_hms(2026, 3, 7, 18, 0, 0).unwrap();
 
-        let mut meta = CodexMeta::default();
-        meta.pending.insert(
+        let mut state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        state.codex.pending.insert(
             "sess".to_string(),
-            CodexSessionMeta {
+            SessionWatermark {
                 path: "/tmp/session.jsonl".to_string(),
                 size_bytes: 99,
                 mtime_utc: ts,
@@ -203,36 +176,25 @@ mod tests {
                 latest_event_timestamp_utc: Some(ts),
             },
         );
-        meta.save(&codex_meta_path).unwrap();
+        state.save(&paths::state_path(tmp.path())).unwrap();
 
         run_mark_distilled(tmp.path());
 
-        let updated = CodexMeta::load(&codex_meta_path).unwrap();
-        assert!(updated.pending.is_empty());
-        assert_eq!(updated.committed.len(), 1);
-        assert!(updated.committed.contains_key("sess"));
-    }
-
-    #[test]
-    fn invalid_codex_metadata_does_not_fail() {
-        let tmp = setup_state_dir();
-        set_codex_enabled(tmp.path(), true);
-        fs::write(paths::codex_meta_path(tmp.path()), "version = 999\n").unwrap();
-
-        let output = run_mark_distilled(tmp.path());
-        assert!(output.starts_with("last_distilled set to "));
+        let updated = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(updated.codex.pending.is_empty());
+        assert_eq!(updated.codex.committed.len(), 1);
+        assert!(updated.codex.committed.contains_key("sess"));
     }
 
     #[test]
     fn codex_metadata_untouched_when_experimental_gate_is_disabled() {
         let tmp = setup_state_dir();
-        let codex_meta_path = paths::codex_meta_path(tmp.path());
         let ts = Utc.with_ymd_and_hms(2026, 3, 7, 18, 0, 0).unwrap();
 
-        let mut meta = CodexMeta::default();
-        meta.pending.insert(
+        let mut state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        state.codex.pending.insert(
             "sess".to_string(),
-            CodexSessionMeta {
+            SessionWatermark {
                 path: "/tmp/session.jsonl".to_string(),
                 size_bytes: 99,
                 mtime_utc: ts,
@@ -240,19 +202,19 @@ mod tests {
                 latest_event_timestamp_utc: Some(ts),
             },
         );
-        meta.save(&codex_meta_path).unwrap();
+        state.save(&paths::state_path(tmp.path())).unwrap();
 
         run_mark_distilled(tmp.path());
 
-        let updated = CodexMeta::load(&codex_meta_path).unwrap();
-        assert_eq!(updated.pending.len(), 1);
-        assert!(updated.committed.is_empty());
+        let updated = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert_eq!(updated.codex.pending.len(), 1);
+        assert!(updated.codex.committed.is_empty());
     }
 
     #[test]
-    fn hard_epoch_mismatch_new_soul_errors() {
+    fn hard_epoch_mismatch_new_state_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
+        write_state_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
 
         let mut out = Vec::new();
         let err = run(tmp.path(), &mut out).unwrap_err();
@@ -263,9 +225,9 @@ mod tests {
     }
 
     #[test]
-    fn hard_epoch_mismatch_old_soul_errors() {
+    fn hard_epoch_mismatch_old_state_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(
+        write_state_with_epochs(
             tmp.path(),
             SETUP_SOFT_EPOCH,
             SETUP_HARD_EPOCH.saturating_sub(1),

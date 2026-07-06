@@ -16,19 +16,20 @@ use tracing::warn;
 
 use crate::log_filename::collect_log_entries;
 use crate::paths;
-use crate::soul_validation::{SoulIncompatibility, SoulStatus, validate_soul};
 use crate::templates::{AUTO_DISTILL_MESSAGE, NUDGE_MESSAGE};
+use crate::validation::{ValidationIncompatibility, ValidationStatus, validate_state};
 
 pub fn run(state_dir: &Path, out: &mut impl Write, auto_distill: bool) -> Result<()> {
     let logs_dir = paths::logs_dir(state_dir);
 
-    let fm = match validate_soul(state_dir) {
-        SoulStatus::Incompatible(SoulIncompatibility::SoulNotFound) => return Ok(()),
-        SoulStatus::Incompatible(reason) => {
+    let state = match validate_state(state_dir) {
+        ValidationStatus::Incompatible(ValidationIncompatibility::StateNotFound)
+        | ValidationStatus::Incompatible(ValidationIncompatibility::SoulNotFound) => return Ok(()),
+        ValidationStatus::Incompatible(reason) => {
             writeln!(out, "{}", reason.agent_message())?;
             return Ok(());
         }
-        SoulStatus::Compatible { frontmatter, .. } => frontmatter,
+        ValidationStatus::Compatible { state, .. } => state,
     };
 
     let entries = match collect_log_entries(&logs_dir) {
@@ -51,7 +52,7 @@ pub fn run(state_dir: &Path, out: &mut impl Write, auto_distill: bool) -> Result
     let cutoff = Utc::now() - threshold;
 
     for entry in entries {
-        if entry.timestamp >= fm.last_distilled && entry.timestamp < cutoff {
+        if entry.timestamp >= state.last_distilled && entry.timestamp < cutoff {
             write!(out, "{message}")?;
             return Ok(());
         }
@@ -63,8 +64,9 @@ pub fn run(state_dir: &Path, out: &mut impl Write, auto_distill: bool) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_support::{bytes_to_string, setup_state_dir, write_soul_with_epochs};
-    use crate::frontmatter::{parse_soul, serialize_soul};
+    use crate::commands::test_support::{
+        bytes_to_string, setup_state_dir, update_state, write_state_with_epochs,
+    };
     use crate::log_filename::generate_log_filename;
     use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
     use chrono::Utc;
@@ -87,11 +89,7 @@ mod tests {
     }
 
     fn set_last_distilled(state_dir: &Path, ts: chrono::DateTime<Utc>) {
-        let soul_path = paths::soul_path(state_dir);
-        let content = fs::read_to_string(&soul_path).unwrap();
-        let (mut fm, body) = parse_soul(&content).unwrap();
-        fm.last_distilled = ts;
-        fs::write(&soul_path, serialize_soul(&fm, body)).unwrap();
+        update_state(state_dir, |state| state.last_distilled = ts);
     }
 
     #[test]
@@ -130,8 +128,16 @@ mod tests {
     }
 
     #[test]
-    fn missing_soul_outputs_nothing() {
+    fn missing_state_outputs_nothing() {
         let tmp = tempfile::tempdir().unwrap();
+        let output = run_nudge(tmp.path());
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn missing_soul_outputs_nothing() {
+        let tmp = setup_state_dir();
+        fs::remove_file(paths::soul_path(tmp.path())).unwrap();
         let output = run_nudge(tmp.path());
         assert!(output.is_empty());
     }
@@ -184,28 +190,28 @@ mod tests {
     }
 
     #[test]
-    fn malformed_soul_outputs_error() {
+    fn corrupt_state_outputs_error() {
         let tmp = setup_state_dir();
-        fs::write(paths::soul_path(tmp.path()), "not frontmatter").unwrap();
+        fs::write(paths::state_path(tmp.path()), "not = valid = toml").unwrap();
 
         let output = run_nudge(tmp.path());
         assert!(output.contains("ACTION REQUIRED"));
-        assert!(output.contains("invalid YAML"));
+        assert!(output.contains("state file"));
     }
 
     #[test]
-    fn hard_epoch_mismatch_new_soul_outputs_error() {
+    fn hard_epoch_mismatch_new_state_outputs_error() {
         let tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
+        write_state_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
         let output = run_nudge(tmp.path());
         assert!(output.contains("ACTION REQUIRED"));
         assert!(output.contains("binary is older than your soul file"));
     }
 
     #[test]
-    fn hard_epoch_mismatch_old_soul_outputs_error() {
+    fn hard_epoch_mismatch_old_state_outputs_error() {
         let tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(
+        write_state_with_epochs(
             tmp.path(),
             SETUP_SOFT_EPOCH,
             SETUP_HARD_EPOCH.saturating_sub(1),

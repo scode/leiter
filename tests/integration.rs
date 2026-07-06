@@ -22,34 +22,33 @@ fn claude_home_flag(claude_home: &Path) -> String {
 }
 
 fn set_last_distilled(dir: &Path, timestamp: &str) {
-    let soul_path = dir.join("soul.md");
-    let original = fs::read_to_string(&soul_path).unwrap();
+    let state_path = dir.join("state.toml");
+    let original = fs::read_to_string(&state_path).unwrap();
     let updated = original.replace(
-        "last_distilled: 1970-01-01T00:00:00Z",
-        &format!("last_distilled: {timestamp}"),
+        "last_distilled = 1970-01-01T00:00:00Z",
+        &format!("last_distilled = {timestamp}"),
     );
     assert_ne!(updated, original, "last_distilled replacement must match");
-    fs::write(&soul_path, updated).unwrap();
+    fs::write(&state_path, updated).unwrap();
 }
 
-fn tamper_soul_epoch(state_dir: &Path, field: &str, value: u32) {
-    let soul_path = state_dir.join("soul.md");
-    let original = fs::read_to_string(&soul_path).unwrap();
+fn tamper_state_field(state_dir: &Path, field: &str, value: u32) {
+    let state_path = state_dir.join("state.toml");
+    let original = fs::read_to_string(&state_path).unwrap();
     // Find the current value of the field and replace it.
-    let prefix = format!("{field}: ");
+    let prefix = format!("{field} = ");
     let line = original
         .lines()
         .find(|l| l.starts_with(&prefix))
-        .unwrap_or_else(|| panic!("{field} not found in soul"));
-    let replacement = format!("{field}: {value}");
+        .unwrap_or_else(|| panic!("{field} not found in state"));
+    let replacement = format!("{field} = {value}");
     let updated = original.replacen(line, &replacement, 1);
     assert_ne!(updated, original, "{field} replacement must match");
-    fs::write(&soul_path, updated).unwrap();
+    fs::write(&state_path, updated).unwrap();
 }
 
-fn corrupt_soul(state_dir: &Path) {
-    let soul_path = state_dir.join("soul.md");
-    fs::write(&soul_path, "not valid frontmatter\n").unwrap();
+fn corrupt_state(state_dir: &Path) {
+    fs::write(state_dir.join("state.toml"), "not = valid = toml\n").unwrap();
 }
 
 fn install(state_dir: &Path, claude_home: &Path) {
@@ -509,9 +508,9 @@ fn mark_distilled_updates_timestamp() {
         .success()
         .stdout(predicate::str::contains("last_distilled set to "));
 
-    let content = fs::read_to_string(dir.join("soul.md")).unwrap();
+    let content = fs::read_to_string(dir.join("state.toml")).unwrap();
     assert!(
-        !content.contains("last_distilled: 1970-01-01T00:00:00Z"),
+        !content.contains("last_distilled = 1970-01-01T00:00:00Z"),
         "timestamp should have been updated from epoch"
     );
 }
@@ -572,7 +571,7 @@ fn context_hard_epoch_mismatch_blocks_soul() {
     let dir = tmp.path();
 
     install(dir, claude_tmp.path());
-    tamper_soul_epoch(dir, "setup_hard_epoch", 2);
+    tamper_state_field(dir, "setup_hard_epoch", 2);
 
     leiter(dir)
         .args(["hook", "context"])
@@ -589,7 +588,7 @@ fn context_soft_epoch_mismatch_nudges_and_injects() {
     let dir = tmp.path();
 
     install(dir, claude_tmp.path());
-    tamper_soul_epoch(dir, "setup_soft_epoch", 3);
+    tamper_state_field(dir, "setup_soft_epoch", 3);
 
     leiter(dir)
         .args(["hook", "context"])
@@ -600,20 +599,20 @@ fn context_soft_epoch_mismatch_nudges_and_injects() {
 }
 
 #[test]
-fn context_corrupt_frontmatter_blocks_soul() {
+fn context_corrupt_state_blocks_soul() {
     let tmp = tempfile::tempdir().unwrap();
     let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
     install(dir, claude_tmp.path());
-    corrupt_soul(dir);
+    corrupt_state(dir);
 
     leiter(dir)
         .args(["hook", "context"])
         .assert()
         .success()
         .stdout(predicate::str::contains("ACTION REQUIRED"))
-        .stdout(predicate::str::contains("invalid YAML"))
+        .stdout(predicate::str::contains("state file"))
         .stdout(predicate::str::contains("Leiter is a self-training system").not());
 }
 
@@ -624,7 +623,7 @@ fn session_end_succeeds_despite_hard_epoch_mismatch() {
     let dir = tmp.path();
 
     install(dir, claude_tmp.path());
-    tamper_soul_epoch(dir, "setup_hard_epoch", 2);
+    tamper_state_field(dir, "setup_hard_epoch", 2);
 
     let transcript = tmp.path().join("transcript.jsonl");
     fs::write(&transcript, "{\"role\":\"user\",\"message\":\"hello\"}\n").unwrap();
@@ -652,7 +651,7 @@ fn distill_hard_epoch_mismatch_fails() {
     let dir = tmp.path();
 
     install(dir, claude_tmp.path());
-    tamper_soul_epoch(dir, "setup_hard_epoch", 2);
+    tamper_state_field(dir, "setup_hard_epoch", 2);
 
     leiter(dir)
         .args(["soul", "distill"])

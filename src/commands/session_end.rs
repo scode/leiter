@@ -71,10 +71,7 @@ pub fn run(state_dir: &Path, input: &mut impl Read) -> Result<()> {
 mod tests {
     use super::*;
     use crate::commands::test_support::setup_state_dir;
-    use crate::frontmatter::{SoulFrontmatter, serialize_soul};
     use crate::log_filename::parse_log_filename;
-    use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
-    use chrono::TimeZone;
     use std::fs;
     use std::io::Cursor;
 
@@ -176,16 +173,15 @@ mod tests {
     }
 
     #[test]
-    fn succeeds_with_mismatched_hard_epoch() {
+    fn succeeds_with_mismatched_hard_epoch_state() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
-        let fm = SoulFrontmatter {
-            last_distilled: Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap(),
-            soul_version: 2,
-            setup_soft_epoch: SETUP_SOFT_EPOCH,
-            setup_hard_epoch: SETUP_HARD_EPOCH + 1,
-        };
-        fs::write(paths::soul_path(tmp.path()), serialize_soul(&fm, "body\n")).unwrap();
+        fs::write(paths::soul_path(tmp.path()), "body\n").unwrap();
+        fs::write(
+            paths::state_path(tmp.path()),
+            "version = 1\nsoul_version = 2\nsetup_soft_epoch = 2\nsetup_hard_epoch = 99\nlast_distilled = 1970-01-01T00:00:00Z\n",
+        )
+        .unwrap();
 
         let transcript = tempfile::NamedTempFile::new().unwrap();
         fs::write(transcript.path(), b"data").unwrap();
@@ -197,10 +193,11 @@ mod tests {
     }
 
     #[test]
-    fn succeeds_with_corrupt_frontmatter() {
+    fn succeeds_with_corrupt_state() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
-        fs::write(paths::soul_path(tmp.path()), "garbage yaml").unwrap();
+        fs::write(paths::soul_path(tmp.path()), "body\n").unwrap();
+        fs::write(paths::state_path(tmp.path()), "not = valid = toml").unwrap();
 
         let transcript = tempfile::NamedTempFile::new().unwrap();
         fs::write(transcript.path(), b"data").unwrap();

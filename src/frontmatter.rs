@@ -1,18 +1,20 @@
-//! Parse and serialize the YAML frontmatter in `soul.md`.
+//! Parse the legacy YAML frontmatter that used to live in `soul.md`.
 //!
-//! The soul file uses Jekyll-style frontmatter: a YAML block delimited by `---`
-//! lines, followed by a markdown body. Only the first `---` pair is treated as
-//! frontmatter; any `---` in the body (e.g., horizontal rules) is left alone.
+//! Current souls are plain markdown. This module exists only so
+//! `migrate_legacy_layout` can recognize the pre-`state.toml` file shape,
+//! recover the metadata that used to be embedded there, and strip the body
+//! without teaching runtime commands to understand frontmatter again.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::errors::LeiterError;
 
-/// CLI-managed metadata stored in the soul file's YAML frontmatter.
+/// CLI-managed metadata from the retired soul frontmatter format.
 ///
-/// The agent owns the soul body, but the CLI reads and writes these fields
-/// to coordinate distillation timing and template upgrades.
+/// These fields now live in `state.toml`. The struct is kept as the migration
+/// contract for old installs: parse the former header exactly enough to seed
+/// current state, then leave the soul as plain markdown.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SoulFrontmatter {
     /// Used by `leiter soul distill` to select only unprocessed session logs.
@@ -34,7 +36,7 @@ fn default_setup_epoch() -> u32 {
     1
 }
 
-/// Extract frontmatter and body from a soul file's content.
+/// Extract the retired frontmatter header and the markdown body.
 ///
 /// Splits on the first `\n---\n` after the opening `---\n`, so `---` lines
 /// inside the body (markdown horizontal rules) are not mistaken for delimiters.
@@ -53,10 +55,11 @@ pub fn parse_soul(content: &str) -> Result<(SoulFrontmatter, &str), LeiterError>
     Ok((frontmatter, body))
 }
 
-/// Reassemble a soul file from frontmatter and body.
+/// Reassemble a legacy soul document for migration tests.
 ///
 /// `serde_yaml::to_string` always emits a trailing newline, so the output
 /// naturally produces `---\n<yaml>\n---\n<body>`.
+#[allow(dead_code)] // Retained for SPEC.md "Legacy layout migration" tests and later wiring.
 pub fn serialize_soul(frontmatter: &SoulFrontmatter, body: &str) -> String {
     let yaml = serde_yaml::to_string(frontmatter)
         .expect("SoulFrontmatter contains only simple scalar types");

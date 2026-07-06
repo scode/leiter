@@ -42,7 +42,7 @@ fn e2e_suite() {
 }
 
 /// Fully deterministic. Verifies that `leiter claude install` left the right
-/// artifacts: soul.md with expected frontmatter fields, logs/ directory, and
+/// artifacts: raw soul.md, state.toml with expected metadata fields, logs/ directory, and
 /// all six skill files containing the SCODE_LEITER_INSTALLED sentinel. No
 /// Claude involvement — just SSH file checks.
 fn step_1_install_verification(host: &RemoteHost) {
@@ -52,19 +52,33 @@ fn step_1_install_verification(host: &RemoteHost) {
         host.file_exists("~/.leiter/soul.md"),
         "soul.md should exist after install"
     );
+    assert!(
+        host.file_exists("~/.leiter/state.toml"),
+        "state.toml should exist after install"
+    );
 
     let soul = host.read_file("~/.leiter/soul.md");
     assert!(
-        soul.contains("soul_version"),
-        "soul.md should contain soul_version"
+        soul.contains("Communication Style"),
+        "soul.md should contain the template body"
     );
     assert!(
-        soul.contains("setup_soft_epoch"),
-        "soul.md should contain setup_soft_epoch"
+        !soul.contains("soul_version"),
+        "soul.md should not contain CLI metadata"
+    );
+
+    let state = host.read_file("~/.leiter/state.toml");
+    assert!(
+        state.contains("soul_version"),
+        "state.toml should contain soul_version"
     );
     assert!(
-        soul.contains("setup_hard_epoch"),
-        "soul.md should contain setup_hard_epoch"
+        state.contains("setup_soft_epoch"),
+        "state.toml should contain setup_soft_epoch"
+    );
+    assert!(
+        state.contains("setup_hard_epoch"),
+        "state.toml should contain setup_hard_epoch"
     );
 
     assert!(
@@ -223,14 +237,14 @@ fn step_5_instill_preference(host: &RemoteHost) {
 fn step_6_distill(host: &RemoteHost) {
     info!("Step 6: Distill");
 
-    let soul_before = host.read_file("~/.leiter/soul.md");
-    let ts_before = extract_last_distilled(&soul_before);
+    let state_before = host.read_file("~/.leiter/state.toml");
+    let ts_before = extract_last_distilled(&state_before);
     info!(ts_before, "last_distilled before");
 
     host.claude_prompt_ok("Distill my session logs.", 25);
 
-    let soul_after = host.read_file("~/.leiter/soul.md");
-    let ts_after = extract_last_distilled(&soul_after);
+    let state_after = host.read_file("~/.leiter/state.toml");
+    let ts_after = extract_last_distilled(&state_after);
     info!(ts_after, "last_distilled after");
 
     assert!(
@@ -241,28 +255,27 @@ fn step_6_distill(host: &RemoteHost) {
     info!("Step 6 passed");
 }
 
-/// Deterministic setup + agent-driven. Downgrades soul_version to 1 via sed,
+/// Deterministic setup + agent-driven. Downgrades soul_version to 1 in state.toml,
 /// then asks Claude to upgrade. Claude runs `leiter soul upgrade`, gets the
-/// changelog and new template, restructures the soul, and updates soul_version.
+/// changelog and new template, restructures the soul, and runs mark-upgraded.
 /// Deterministic assertion checks soul_version is back to 2.
 fn step_7_soul_upgrade(host: &RemoteHost) {
     info!("Step 7: Soul upgrade (synthetic)");
 
-    // Avoid sed -i which behaves differently on BSD sed (macOS remotes).
-    host.run_ok("sed 's/soul_version: 2/soul_version: 1/' ~/.leiter/soul.md > ~/.leiter/soul.md.tmp && mv ~/.leiter/soul.md.tmp ~/.leiter/soul.md");
+    host.run_ok("sed 's/soul_version = 2/soul_version = 1/' ~/.leiter/state.toml > ~/.leiter/state.toml.tmp && mv ~/.leiter/state.toml.tmp ~/.leiter/state.toml");
 
-    let soul_check = host.read_file("~/.leiter/soul.md");
+    let state_check = host.read_file("~/.leiter/state.toml");
     assert!(
-        soul_check.contains("soul_version: 1"),
+        state_check.contains("soul_version = 1"),
         "soul_version should be 1 after sed"
     );
 
     host.claude_prompt_ok("Upgrade the leiter soul.", 15);
 
-    let soul_after = host.read_file("~/.leiter/soul.md");
+    let state_after = host.read_file("~/.leiter/state.toml");
     assert!(
-        soul_after.contains("soul_version: 2"),
-        "soul_version should be back to 2 after upgrade. Got:\n{soul_after}"
+        state_after.contains("soul_version = 2"),
+        "soul_version should be back to 2 after upgrade. Got:\n{state_after}"
     );
 
     info!("Step 7 passed");
@@ -277,13 +290,13 @@ fn step_7_soul_upgrade(host: &RemoteHost) {
 fn step_8_hard_epoch_mismatch_blocks_session(host: &RemoteHost) {
     info!("Step 8: Hard epoch mismatch blocks Claude session");
 
-    host.run_ok("cp ~/.leiter/soul.md ~/.leiter/soul.md.bak");
+    host.run_ok("cp ~/.leiter/state.toml ~/.leiter/state.toml.bak");
 
-    host.run_ok("sed 's/setup_hard_epoch: 1/setup_hard_epoch: 99/' ~/.leiter/soul.md > ~/.leiter/soul.md.tmp && mv ~/.leiter/soul.md.tmp ~/.leiter/soul.md");
+    host.run_ok("sed 's/setup_hard_epoch = 1/setup_hard_epoch = 99/' ~/.leiter/state.toml > ~/.leiter/state.toml.tmp && mv ~/.leiter/state.toml.tmp ~/.leiter/state.toml");
 
-    let soul_check = host.read_file("~/.leiter/soul.md");
+    let state_check = host.read_file("~/.leiter/state.toml");
     assert!(
-        soul_check.contains("setup_hard_epoch: 99"),
+        state_check.contains("setup_hard_epoch = 99"),
         "setup_hard_epoch should be 99 after sed"
     );
 
@@ -303,7 +316,7 @@ fn step_8_hard_epoch_mismatch_blocks_session(host: &RemoteHost) {
         "Agent should relay epoch error to user. Got: {stdout}"
     );
 
-    host.run_ok("mv ~/.leiter/soul.md.bak ~/.leiter/soul.md");
+    host.run_ok("mv ~/.leiter/state.toml.bak ~/.leiter/state.toml");
 
     info!("Step 8 passed");
 }
@@ -314,9 +327,9 @@ fn step_8_hard_epoch_mismatch_blocks_session(host: &RemoteHost) {
 fn step_9_session_end_exempt_from_epoch_checks(host: &RemoteHost) {
     info!("Step 9: Session-end exempt from epoch checks");
 
-    host.run_ok("cp ~/.leiter/soul.md ~/.leiter/soul.md.bak");
+    host.run_ok("cp ~/.leiter/state.toml ~/.leiter/state.toml.bak");
 
-    host.run_ok("sed 's/setup_hard_epoch: 1/setup_hard_epoch: 99/' ~/.leiter/soul.md > ~/.leiter/soul.md.tmp && mv ~/.leiter/soul.md.tmp ~/.leiter/soul.md");
+    host.run_ok("sed 's/setup_hard_epoch = 1/setup_hard_epoch = 99/' ~/.leiter/state.toml > ~/.leiter/state.toml.tmp && mv ~/.leiter/state.toml.tmp ~/.leiter/state.toml");
 
     let before = count_log_files(host);
     info!(before, "log file count before prompt");
@@ -333,7 +346,7 @@ fn step_9_session_end_exempt_from_epoch_checks(host: &RemoteHost) {
         "SessionEnd hook should save transcript despite epoch mismatch (before={before}, after={after})"
     );
 
-    host.run_ok("mv ~/.leiter/soul.md.bak ~/.leiter/soul.md");
+    host.run_ok("mv ~/.leiter/state.toml.bak ~/.leiter/state.toml");
 
     info!("Step 9 passed");
 }
@@ -346,13 +359,13 @@ fn step_9_session_end_exempt_from_epoch_checks(host: &RemoteHost) {
 fn step_10_soft_epoch_mismatch_nudges(host: &RemoteHost) {
     info!("Step 10: Soft epoch mismatch nudges");
 
-    host.run_ok("cp ~/.leiter/soul.md ~/.leiter/soul.md.bak");
+    host.run_ok("cp ~/.leiter/state.toml ~/.leiter/state.toml.bak");
 
-    host.run_ok("sed 's/setup_soft_epoch: 2/setup_soft_epoch: 1/' ~/.leiter/soul.md > ~/.leiter/soul.md.tmp && mv ~/.leiter/soul.md.tmp ~/.leiter/soul.md");
+    host.run_ok("sed 's/setup_soft_epoch = 2/setup_soft_epoch = 1/' ~/.leiter/state.toml > ~/.leiter/state.toml.tmp && mv ~/.leiter/state.toml.tmp ~/.leiter/state.toml");
 
-    let soul_check = host.read_file("~/.leiter/soul.md");
+    let state_check = host.read_file("~/.leiter/state.toml");
     assert!(
-        soul_check.contains("setup_soft_epoch: 1"),
+        state_check.contains("setup_soft_epoch = 1"),
         "setup_soft_epoch should be 1 after sed"
     );
 
@@ -367,7 +380,7 @@ fn step_10_soft_epoch_mismatch_nudges(host: &RemoteHost) {
         "Agent should relay the soft epoch nudge mentioning 'leiter claude install' or 'behind'. Got: {stdout}"
     );
 
-    host.run_ok("mv ~/.leiter/soul.md.bak ~/.leiter/soul.md");
+    host.run_ok("mv ~/.leiter/state.toml.bak ~/.leiter/state.toml");
 
     info!("Step 10 passed");
 }
@@ -375,8 +388,8 @@ fn step_10_soft_epoch_mismatch_nudges(host: &RemoteHost) {
 /// Agent-driven. Asks Claude to show the soul via `/leiter-soul`. Claude runs
 /// `leiter soul show`, gets the XML-wrapped body, and displays it verbatim.
 /// We require multiple section headings to be present — a summary or
-/// interpretation would not reproduce all of them. We also verify frontmatter
-/// fields are absent (soul show strips them).
+/// interpretation would not reproduce all of them. We also verify state fields
+/// are absent because `soul.md` no longer contains CLI metadata.
 fn step_11_soul_show(host: &RemoteHost) {
     info!("Step 11: Soul show");
 
@@ -401,11 +414,11 @@ fn step_11_soul_show(host: &RemoteHost) {
 
     assert!(
         !stdout.contains("last_distilled"),
-        "Soul show output should not contain frontmatter. Got: {stdout}"
+        "Soul show output should not contain state metadata. Got: {stdout}"
     );
     assert!(
         !stdout.contains("setup_soft_epoch"),
-        "Soul show output should not contain frontmatter. Got: {stdout}"
+        "Soul show output should not contain state metadata. Got: {stdout}"
     );
 
     info!("Step 11 passed");
@@ -420,11 +433,11 @@ fn count_log_files(host: &RemoteHost) -> usize {
     stdout.lines().filter(|l| !l.is_empty()).count()
 }
 
-fn extract_last_distilled(soul: &str) -> String {
-    for line in soul.lines() {
-        if let Some(rest) = line.strip_prefix("last_distilled:") {
+fn extract_last_distilled(state: &str) -> String {
+    for line in state.lines() {
+        if let Some(rest) = line.strip_prefix("last_distilled =") {
             return rest.trim().to_string();
         }
     }
-    panic!("last_distilled not found in soul:\n{soul}");
+    panic!("last_distilled not found in state:\n{state}");
 }

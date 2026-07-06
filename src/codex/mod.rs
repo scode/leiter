@@ -4,8 +4,6 @@
 //! consult any Codex SQLite state. Per-session file metadata decides whether an
 //! unchanged session can be skipped entirely.
 
-pub mod meta;
-
 use std::collections::{BTreeMap, btree_map::Entry};
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -16,7 +14,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use tracing::warn;
 
-pub use self::meta::{CodexMeta, CodexSessionMeta};
+use crate::state::SessionWatermark;
 
 /// Canonicalized Codex session content that is ready to include in
 /// `leiter soul distill` output.
@@ -36,7 +34,7 @@ pub struct DistilledCodexSession {
     /// User-visible transcript text after Codex-specific canonicalization.
     pub rendered: String,
     /// File-state snapshot to stage or commit after distillation.
-    pub watermark: CodexSessionMeta,
+    pub watermark: SessionWatermark,
 }
 
 /// Discovered rollout file that looks like the current best on-disk
@@ -85,7 +83,7 @@ struct CodexHeader {
 /// canonicalized and sorted for distill output.
 pub fn collect_changed_sessions(
     codex_home: &Path,
-    committed: &BTreeMap<String, CodexSessionMeta>,
+    committed: &BTreeMap<String, SessionWatermark>,
 ) -> Vec<DistilledCodexSession> {
     let mut files = Vec::new();
     collect_rollout_files(&codex_home.join("sessions"), codex_home, &mut files);
@@ -360,7 +358,7 @@ fn parse_changed_session(candidate: CodexCandidate) -> Result<Option<DistilledCo
         format!("{}\n", rendered_items.join("\n"))
     };
 
-    let watermark = CodexSessionMeta {
+    let watermark = SessionWatermark {
         path: candidate.path.display().to_string(),
         size_bytes: candidate.size_bytes,
         mtime_utc: candidate.mtime_utc,
@@ -615,7 +613,7 @@ mod tests {
         let mut committed = BTreeMap::new();
         committed.insert(
             "sess".to_string(),
-            CodexSessionMeta {
+            SessionWatermark {
                 path: path.display().to_string(),
                 size_bytes: metadata.len(),
                 mtime_utc: mtime,
@@ -764,7 +762,7 @@ mod tests {
         let mut committed = BTreeMap::new();
         committed.insert(
             "sess".to_string(),
-            CodexSessionMeta {
+            SessionWatermark {
                 path: old_path.display().to_string(),
                 size_bytes: metadata.len(),
                 mtime_utc: mtime,

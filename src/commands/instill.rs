@@ -12,18 +12,18 @@ use std::path::Path;
 use anyhow::{Result, bail};
 
 use crate::paths;
-use crate::soul_validation::{SoulStatus, validate_soul};
 use crate::templates::SOUL_WRITING_GUIDELINES;
+use crate::validation::{ValidationStatus, validate_state};
 
 /// Run the instill command.
 ///
-/// Validates the soul file, then outputs the user's preference (quoted),
-/// the shared soul-writing guidelines, and an instruction to edit the soul
-/// file.
+/// Validates `state.toml` epochs and soul readability, then outputs the user's
+/// preference (quoted), the shared soul-writing guidelines, and an instruction
+/// to edit the soul file.
 pub fn run(state_dir: &Path, out: &mut impl Write, text: &str) -> Result<()> {
-    match validate_soul(state_dir) {
-        SoulStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
-        SoulStatus::Compatible { .. } => {}
+    match validate_state(state_dir) {
+        ValidationStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
+        ValidationStatus::Compatible { .. } => {}
     }
 
     writeln!(out, "The user wants you to remember:\n")?;
@@ -44,7 +44,7 @@ pub fn run(state_dir: &Path, out: &mut impl Write, text: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_support::{setup_state_dir, write_soul_with_epochs};
+    use crate::commands::test_support::{setup_state_dir, write_state_with_epochs};
     use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
     use std::fs;
 
@@ -95,7 +95,7 @@ mod tests {
     #[test]
     fn hard_epoch_mismatch_new_soul_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
+        write_state_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
 
         let mut out = Vec::new();
         let err = run(tmp.path(), &mut out, "test").unwrap_err();
@@ -108,7 +108,7 @@ mod tests {
     #[test]
     fn hard_epoch_mismatch_old_soul_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(
+        write_state_with_epochs(
             tmp.path(),
             SETUP_SOFT_EPOCH,
             SETUP_HARD_EPOCH.saturating_sub(1),
@@ -120,13 +120,14 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_frontmatter_errors() {
+    fn corrupt_state_errors() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path()).unwrap();
-        fs::write(paths::soul_path(tmp.path()), "not frontmatter").unwrap();
+        fs::write(paths::soul_path(tmp.path()), "body\n").unwrap();
+        fs::write(paths::state_path(tmp.path()), "not = valid = toml").unwrap();
 
         let mut out = Vec::new();
         let err = run(tmp.path(), &mut out, "test").unwrap_err();
-        assert!(err.to_string().contains("invalid YAML"));
+        assert!(err.to_string().contains("state file"));
     }
 }

@@ -57,14 +57,16 @@ gets the migration instructions, and restructures your soul while preserving all
 ## Viewing the soul
 
 Run `/leiter-soul` to see the current contents of your soul file. The agent displays the learned preferences verbatim,
-without the internal frontmatter.
+with no hidden metadata stripped out.
 
 ## The soul file
 
 The soul lives at `~/.leiter/soul.md`. It is a markdown file you can read and edit directly — there is nothing magic
 about it. The agent edits it with the same tools it uses for any other file.
 
-The file has YAML frontmatter (between the `---` delimiters at the top) followed by markdown content containing your
-learned preferences. The frontmatter is managed by the CLI — do not edit it, as corrupting it will break leiter. The
-body below the frontmatter is yours — the agent writes to it through instill and distillation, and you can also edit it
-directly if you want to reorganize, remove entries, or add things by hand. Changes take effect on the next session.
+The file is pure markdown. CLI-managed metadata lives in `~/.leiter/state.toml` instead: epochs, `soul_version`,
+`last_distilled`, and distillation watermarks. The agent writes the soul through instill and distillation, and you can
+also edit it directly if you want to reorganize, remove entries, or add things by hand. Changes take effect on the next
+session.
+
+`last_distilled` is updated only by `leiter soul mark-distilled`. Do not edit `state.toml` by hand.

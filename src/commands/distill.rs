@@ -1,6 +1,6 @@
 //! `leiter soul distill` — output new session logs for the agent to distill.
 //!
-//! Reads the `last_distilled` timestamp from the soul frontmatter, scans the
+//! Reads the `last_distilled` timestamp from `state.toml`, scans the
 //! logs directory for files with timestamps >= that value, and outputs them
 //! chronologically. The inclusive comparison ensures a log written in the same
 //! second as the distillation timestamp is not lost.
@@ -42,17 +42,18 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use tracing::{debug, warn};
 
-use crate::codex::{CodexMeta, DistilledCodexSession, collect_changed_sessions};
+use crate::codex::{DistilledCodexSession, collect_changed_sessions};
 use crate::config::LeiterConfig;
 use crate::log_filename::collect_log_entries;
 use crate::paths;
-use crate::soul_validation::{SoulStatus, validate_soul};
+use crate::state::LeiterState;
 use crate::templates::{DISTILL_DATA_PREAMBLE, SOUL_WRITING_GUIDELINES};
+use crate::validation::{ValidationStatus, validate_state};
 
 /// Run the distill command.
 ///
-/// Validates the soul file, then outputs all session logs whose filename
-/// timestamps are >= `last_distilled` from the soul frontmatter, sorted
+/// Validates `state.toml` epochs and soul readability, then outputs all
+/// session logs whose filename timestamps are >= `last_distilled` from state, sorted
 /// chronologically. Then deletes obsolete logs (timestamps strictly before
 /// `last_distilled`). With `dry_run`, reports what would be deleted instead.
 pub fn run(state_dir: &Path, out: &mut impl Write, dry_run: bool) -> Result<()> {
@@ -83,9 +84,9 @@ fn distill_with_inputs(
 ) -> Result<()> {
     let logs_dir = paths::logs_dir(state_dir);
 
-    let fm = match validate_soul(state_dir) {
-        SoulStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
-        SoulStatus::Compatible { frontmatter, .. } => frontmatter,
+    let mut state = match validate_state(state_dir) {
+        ValidationStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
+        ValidationStatus::Compatible { state, .. } => state,
     };
 
     let entries = collect_log_entries(&logs_dir)
@@ -95,14 +96,15 @@ fn distill_with_inputs(
     let mut obsolete = Vec::new();
 
     for entry in entries {
-        if entry.timestamp >= fm.last_distilled {
+        if entry.timestamp >= state.last_distilled {
             logs.push(entry);
         } else {
             obsolete.push(entry);
         }
     }
 
-    let codex_sessions = collect_codex_sessions(state_dir, codex_home, codex_enabled, dry_run);
+    let codex_sessions =
+        collect_codex_sessions(state_dir, &mut state, codex_home, codex_enabled, dry_run);
 
     let has_claude_logs = !logs.is_empty();
     let has_codex_logs = !codex_sessions.is_empty();
@@ -186,6 +188,7 @@ fn resolve_codex_home(codex_enabled: bool) -> Option<std::path::PathBuf> {
 /// not need to escape this helper because they are never emitted to the LLM.
 fn collect_codex_sessions(
     state_dir: &Path,
+    state: &mut LeiterState,
     codex_home: Option<&Path>,
     codex_enabled: bool,
     dry_run: bool,
@@ -194,29 +197,16 @@ fn collect_codex_sessions(
         return Vec::new();
     }
 
-    let codex_meta_path = paths::codex_meta_path(state_dir);
-    let mut codex_meta = match CodexMeta::load(&codex_meta_path) {
-        Ok(meta) => Some(meta),
-        Err(err) => {
-            warn!("Codex metadata unavailable, skipping Codex distillation: {err}");
-            None
-        }
-    };
-
     let mut codex_sessions = Vec::new();
-    if let Some(meta) = codex_meta.as_mut()
-        && let Some(codex_home) = codex_home
-    {
-        codex_sessions = collect_changed_sessions(codex_home, &meta.committed);
+    if let Some(codex_home) = codex_home {
+        codex_sessions = collect_changed_sessions(codex_home, &state.codex.committed);
         if !dry_run {
-            meta.pending = codex_sessions
+            state.codex.pending = codex_sessions
                 .iter()
                 .map(|session| (session.session_id.clone(), session.watermark.clone()))
                 .collect();
-            let should_persist =
-                codex_meta_path.exists() || !meta.pending.is_empty() || !meta.committed.is_empty();
-            if should_persist && let Err(err) = meta.save(&codex_meta_path) {
-                warn!("failed to update Codex metadata: {err}");
+            if let Err(err) = state.save(&paths::state_path(state_dir)) {
+                warn!("failed to update leiter state with Codex pending watermarks: {err}");
             }
         }
     }
@@ -378,11 +368,12 @@ fn filter_session_log(content: &str, out: &mut impl Write) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codex::CodexMeta;
-    use crate::commands::test_support::{bytes_to_string, setup_state_dir, write_soul_with_epochs};
+    use crate::commands::test_support::{
+        bytes_to_string, setup_state_dir, update_state, write_state_with_epochs,
+    };
     use crate::config::LeiterConfig;
-    use crate::frontmatter::{parse_soul, serialize_soul};
     use crate::log_filename::generate_log_filename;
+    use crate::state::LeiterState;
     use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
     use chrono::{TimeZone, Utc};
     use std::path::PathBuf;
@@ -431,11 +422,7 @@ mod tests {
 
     fn set_last_distilled(state_dir: &Path, year: i32, month: u32, day: u32, hour: u32) {
         let ts = Utc.with_ymd_and_hms(year, month, day, hour, 0, 0).unwrap();
-        let soul_path = paths::soul_path(state_dir);
-        let content = fs::read_to_string(&soul_path).unwrap();
-        let (mut fm, body) = parse_soul(&content).unwrap();
-        fm.last_distilled = ts;
-        fs::write(&soul_path, serialize_soul(&fm, body)).unwrap();
+        update_state(state_dir, |state| state.last_distilled = ts);
     }
 
     #[test]
@@ -969,7 +956,7 @@ mod tests {
     fn soft_epoch_mismatch_succeeds() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
-        write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH + 1, SETUP_HARD_EPOCH);
+        write_state_with_epochs(tmp.path(), SETUP_SOFT_EPOCH + 1, SETUP_HARD_EPOCH);
         write_log(tmp.path(), 2026, 1, 1, 0, "sess1", "log content");
 
         let mut out = Vec::new();
@@ -979,10 +966,10 @@ mod tests {
     }
 
     #[test]
-    fn hard_epoch_mismatch_new_soul_errors() {
+    fn hard_epoch_mismatch_new_state_errors() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
-        write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
+        write_state_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
 
         let mut out = Vec::new();
         let err = run(tmp.path(), &mut out, false).unwrap_err();
@@ -993,10 +980,10 @@ mod tests {
     }
 
     #[test]
-    fn hard_epoch_mismatch_old_soul_errors() {
+    fn hard_epoch_mismatch_old_state_errors() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
-        write_soul_with_epochs(
+        write_state_with_epochs(
             tmp.path(),
             SETUP_SOFT_EPOCH,
             SETUP_HARD_EPOCH.saturating_sub(1),
@@ -1008,17 +995,18 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_frontmatter_errors() {
+    fn corrupt_state_errors() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
-        fs::write(paths::soul_path(tmp.path()), "not frontmatter").unwrap();
+        fs::write(paths::soul_path(tmp.path()), "body\n").unwrap();
+        fs::write(paths::state_path(tmp.path()), "not = valid = toml").unwrap();
 
         let mut out = Vec::new();
         let codex_home = tempfile::tempdir().unwrap();
         let result =
             distill_with_inputs(tmp.path(), Some(codex_home.path()), false, &mut out, false);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid YAML"));
+        assert!(result.unwrap_err().to_string().contains("state file"));
     }
 
     fn write_codex_rollout(codex_home: &Path, rel: &str, lines: &[Value]) -> PathBuf {
@@ -1129,11 +1117,10 @@ mod tests {
         let first = run_distill_with_codex_home(tmp.path(), codex_home.path(), false);
         assert!(first.contains("hello once"));
 
-        let meta_path = paths::codex_meta_path(tmp.path());
-        let mut meta = CodexMeta::load(&meta_path).unwrap();
-        meta.committed.extend(meta.pending.clone());
-        meta.pending.clear();
-        meta.save(&meta_path).unwrap();
+        update_state(tmp.path(), |state| {
+            let pending = std::mem::take(&mut state.codex.pending);
+            state.codex.committed.extend(pending);
+        });
 
         let second = run_distill_with_codex_home(tmp.path(), codex_home.path(), false);
         assert!(!second.contains("hello once"));
@@ -1163,11 +1150,10 @@ mod tests {
         );
 
         run_distill_with_codex_home(tmp.path(), codex_home.path(), false);
-        let meta_path = paths::codex_meta_path(tmp.path());
-        let mut meta = CodexMeta::load(&meta_path).unwrap();
-        meta.committed.extend(meta.pending.clone());
-        meta.pending.clear();
-        meta.save(&meta_path).unwrap();
+        update_state(tmp.path(), |state| {
+            let pending = std::mem::take(&mut state.codex.pending);
+            state.codex.committed.extend(pending);
+        });
 
         write_codex_rollout(
             codex_home.path(),
@@ -1202,7 +1188,7 @@ mod tests {
     }
 
     #[test]
-    fn dry_run_does_not_create_codex_metadata() {
+    fn dry_run_does_not_stage_codex_pending() {
         let tmp = setup_state_dir();
         set_codex_enabled(tmp.path(), true);
         let codex_home = tempfile::tempdir().unwrap();
@@ -1213,11 +1199,13 @@ mod tests {
         );
 
         let _ = run_distill_with_codex_home(tmp.path(), codex_home.path(), true);
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(state.codex.pending.is_empty());
         assert!(!paths::codex_meta_path(tmp.path()).exists());
     }
 
     #[test]
-    fn invalid_codex_meta_warns_and_skips_codex() {
+    fn legacy_codex_meta_file_is_ignored() {
         let tmp = setup_state_dir();
         set_codex_enabled(tmp.path(), true);
         let codex_home = tempfile::tempdir().unwrap();
@@ -1240,8 +1228,7 @@ mod tests {
         fs::write(paths::codex_meta_path(tmp.path()), "version = 999\n").unwrap();
 
         let output = run_distill_with_codex_home(tmp.path(), codex_home.path(), false);
-        assert!(!output.contains("should skip"));
-        assert!(output.contains("No new session logs to process"));
+        assert!(output.contains("should skip"));
     }
 
     #[test]
@@ -1312,5 +1299,7 @@ mod tests {
         assert!(!output.contains("should stay hidden"));
         assert!(output.contains("No new session logs to process"));
         assert!(!paths::codex_meta_path(tmp.path()).exists());
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(state.codex.pending.is_empty());
     }
 }

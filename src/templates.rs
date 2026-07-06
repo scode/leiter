@@ -99,8 +99,8 @@ pub const SOUL_WRITING_GUIDELINES: &str = "\
 
 Follow these rules when adding or updating entries in the soul file.
 
-**Frontmatter:** Never modify the YAML front matter (the block between `---` \
-delimiters at the top of the file). Only edit the markdown body below it.
+**State:** Only edit the soul markdown. Never edit `state.toml`; leiter \
+commands update timestamps, versions, and watermarks.
 
 **Format:** Use concise bullets, one preference per bullet. Be specific and \
 actionable — avoid vague statements.
@@ -205,8 +205,8 @@ If an entry fits multiple sections, place it in the most specific one.
 \"improve\" entries during migration — the meaning must be identical.
 5. If an existing section has no equivalent in the new template, keep the \
 entries and place them in the closest matching new section.
-6. After rewriting, update `soul_version` in the frontmatter to the current \
-version.
+6. After rewriting, run `leiter soul mark-upgraded` to record the current \
+`soul_version` in `state.toml`.
 7. Do not add new entries or remove the section description placeholders \
 from empty sections.
 "
@@ -376,9 +376,9 @@ user_invocable: true
 
 All `leiter` commands below refer to the installed binary in PATH. Do NOT use `cargo run` or any other way to invoke it.
 
-Spawn a **sub-agent** (via the Agent tool) to handle distillation. The sub-agent should: run `leiter soul distill`, read through the output, and update the soul with new learnings — but NOT update `last_distilled` (the main agent handles that). When the sub-agent finishes, it must end with a concise summary of what it added, modified, or removed in the soul (or state that no changes were needed). This summary is the sub-agent's return value.
+Spawn a **sub-agent** (via the Agent tool) to handle distillation. The sub-agent should: run `leiter soul distill`, read through the output, and update the soul with new learnings — but NOT update `last_distilled` (the main agent handles that with `leiter soul mark-distilled`). When the sub-agent finishes, it must end with a concise summary of what it added, modified, or removed in the soul (or state that no changes were needed). This summary is the sub-agent's return value.
 
-After the sub-agent completes successfully, ALWAYS run `leiter soul mark-distilled` yourself (in the main context) to record the timestamp — even if the sub-agent found no new preferences to add. Marking distilled is what prevents the same logs from being re-processed on every session start. Never manually edit `last_distilled` in the frontmatter — only `leiter soul mark-distilled` should touch it.
+After the sub-agent completes successfully, ALWAYS run `leiter soul mark-distilled` yourself (in the main context) to record the timestamp — even if the sub-agent found no new preferences to add. Marking distilled is what prevents the same logs from being re-processed on every session start. Never manually edit `state.toml`; only leiter commands should touch it.
 
 After `mark-distilled` succeeds, relay the sub-agent's summary to the user verbatim so they can see what distillation changed.
 
