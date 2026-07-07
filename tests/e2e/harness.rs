@@ -6,6 +6,7 @@ pub struct RemoteHost {
     ssh_dest: String,
     target_triple: String,
     control_path: PathBuf,
+    settings_snapshot_path: String,
     // Held for RAII cleanup — the directory is removed on drop, which must
     // happen after the control socket file inside it is closed.
     _control_dir: tempfile::TempDir,
@@ -63,8 +64,18 @@ impl RemoteHost {
             ssh_dest,
             target_triple,
             control_path,
+            settings_snapshot_path: String::new(),
             _control_dir: control_dir,
         })
+    }
+
+    /// Return the remote path used for the setup-time settings snapshot.
+    ///
+    /// The path is created under the remote home rather than `/tmp` so the
+    /// snapshot is private to the test account and can be removed immediately
+    /// after the install immutability assertion consumes it.
+    pub fn settings_snapshot_path(&self) -> &str {
+        &self.settings_snapshot_path
     }
 
     fn ssh_control_args(&self) -> [String; 2] {
@@ -135,13 +146,13 @@ impl RemoteHost {
         output.trim() == "yes"
     }
 
-    /// Run a `claude -p` prompt on the remote host with a timeout.
+    /// Run a `claude -p --model opus` prompt on the remote host with a timeout.
     ///
     /// Always logs full stdout and stderr for debuggability.
     pub fn claude_prompt(&self, prompt: &str, max_turns: u32) -> Output {
         let escaped = prompt.replace('\'', "'\\''");
         let cmd = format!(
-            "timeout 180 claude -p --max-turns {max_turns} --dangerously-skip-permissions '{escaped}'"
+            "timeout 180 claude -p --model opus --max-turns {max_turns} --dangerously-skip-permissions '{escaped}'"
         );
         let output = self.run(&cmd);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -155,7 +166,7 @@ impl RemoteHost {
         output
     }
 
-    /// Run a `claude -p` prompt, assert it succeeds, return stdout.
+    /// Run a `claude -p --model opus` prompt, assert it succeeds, return stdout.
     pub fn claude_prompt_ok(&self, prompt: &str, max_turns: u32) -> String {
         let output = self.claude_prompt(prompt, max_turns);
         assert!(
@@ -171,8 +182,9 @@ impl RemoteHost {
     /// interactive SSH session so the user can complete the login flow.
     fn ensure_claude_auth(&self) {
         info!("probing claude auth");
-        let probe =
-            self.run("timeout 30 claude -p --max-turns 1 --dangerously-skip-permissions 'say ok'");
+        let probe = self.run(
+            "timeout 30 claude -p --model opus --max-turns 1 --dangerously-skip-permissions 'say ok'",
+        );
         if probe.status.success() {
             info!("claude is authenticated");
             return;
@@ -195,7 +207,7 @@ impl RemoteHost {
                 "-o",
                 "ConnectTimeout=10",
                 &self.ssh_dest,
-                "export PATH=\"$HOME/.local/bin:$PATH\" && claude",
+                "export PATH=\"$HOME/.local/bin:$PATH\" && claude --model opus",
             ])
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
@@ -209,8 +221,9 @@ impl RemoteHost {
         );
 
         info!("re-probing claude auth");
-        let retry =
-            self.run("timeout 30 claude -p --max-turns 1 --dangerously-skip-permissions 'say ok'");
+        let retry = self.run(
+            "timeout 30 claude -p --model opus --max-turns 1 --dangerously-skip-permissions 'say ok'",
+        );
         assert!(
             retry.status.success(),
             "Claude is still not authenticated after interactive session.\nstderr: {}",
@@ -240,7 +253,7 @@ impl RemoteHost {
     }
 
     /// Clean leiter state and deploy a fresh binary to the remote host.
-    pub fn setup(&self) {
+    pub fn setup(&mut self) {
         let binary_path = self.build_binary();
 
         self.run_ok("mkdir -p ~/.local/bin");
@@ -267,6 +280,7 @@ impl RemoteHost {
 
         info!("cleaning prior leiter state");
         self.run("rm -rf ~/.leiter");
+        self.run("rm -rf ~/.claude/skills/leiter");
         self.run("rm -rf ~/.claude/skills/leiter-*");
 
         // Strip leiter hooks from settings.json if present
@@ -300,6 +314,14 @@ json.dump(s, open(sys.argv[1], 'w'), indent=2)
 print()
 " ~/.claude/settings.json; fi"#,
         );
+        let settings_snapshot_path = self
+            .run_ok("mktemp ~/.leiter-e2e-settings.XXXXXX")
+            .trim()
+            .to_string();
+        self.run_ok(&format!(
+            "chmod 600 {path} && if [ -f ~/.claude/settings.json ]; then cp ~/.claude/settings.json {path}; else rm -f {path}; fi",
+            path = settings_snapshot_path,
+        ));
 
         info!("running leiter claude install");
         let install_output = self.run("~/.local/bin/leiter claude install");
@@ -314,6 +336,7 @@ print()
         let skills_listing =
             self.run_ok("ls -la ~/.claude/skills/ 2>&1 || echo 'skills dir missing'");
         info!(skills = %skills_listing, "post-install skills directory");
+        self.settings_snapshot_path = settings_snapshot_path;
         info!("setup complete");
     }
 }

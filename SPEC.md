@@ -745,6 +745,11 @@ target's recorded `block_hash`, and the recorded `soul_hash` against the current
 **Output (stdout):** One line per target reporting its outcome — synced, already current, or refused (hand-edited, rerun
 with `--force`).
 
+**Exit code:** non-zero when any target was refused, zero otherwise. The instill flow and the consolidated skill tell
+agents to run `leiter sync` as a routine final step, so whether a refusal constitutes failure is contractual: it does,
+loudly, and the remedy is in the refusal line. `leiter codex install` shares this posture — a refused `AGENTS.md` write
+exits non-zero after `codex = true` has already been persisted, pointing at `leiter sync --force`.
+
 ### `leiter distill`
 
 The primary distillation mechanism: leiter scans the session stores, hands the new transcripts to a headless agent that
