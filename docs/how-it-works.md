@@ -33,10 +33,9 @@ Here is what happens during a typical session, from start to finish:
 │  /leiter-instill (or "instill X") ──► /leiter-instill skill   │
 │                           ──► agent edits soul.md            │
 │                                                              │
-│  /leiter-distill (or "distill") ──► /leiter-distill skill     │
-│                        ──► sub-agent processes logs           │
-│                        ──► sub-agent edits soul.md           │
-│                        ──► agent marks distillation timestamp │
+│  "distill" or `leiter distill` ──► headless agent processes logs │
+│                        ──► headless agent edits soul.md       │
+│                        ──► leiter commits distillation state  │
 │                                                              │
 │  /leiter-soul ──► leiter soul show ──► agent displays        │
 │                                        soul verbatim         │
@@ -83,15 +82,12 @@ See [usage.md](usage.md) for details on the soul file format and how to customiz
 
 ## Distillation
 
-Distillation is the process of extracting patterns from session transcripts and instilling them into the soul. It runs
-in a sub-agent (a separate context window) to keep the raw transcript data out of your main session.
+Distillation is the process of extracting patterns from session transcripts and instilling them into the soul. Say
+"distill" in a session, run `leiter distill` yourself, or run it from cron. Leiter starts a headless agent, feeds it the
+new transcripts, lets it edit the soul file, and then commits the distillation timestamp itself after the agent
+succeeds.
 
-The sub-agent runs `leiter soul distill`, which outputs all Claude session logs recorded since the last distillation.
-The sub-agent reads through the output, identifies new preferences or patterns not already in the soul, and edits the
-soul file. After the sub-agent finishes, the main agent runs `leiter soul mark-distilled` to record the distillation
-timestamp.
-
-Log cleanup is tied to the distillation timestamp. The `last_distilled` timestamp is only advanced after the sub-agent
-successfully finishes — if distillation fails partway through, the timestamp stays put and the same logs are reprocessed
-next time. As a consequence, logs processed in a given distillation run persist on disk until the _next_ successful
+Log cleanup is tied to the distillation timestamp. The `last_distilled` timestamp is only advanced after a successful
+headless run — if distillation fails partway through, the timestamp stays put and the same logs are reprocessed next
+time. As a consequence, logs processed in a given distillation run persist on disk until the _next_ successful
 distillation, at which point they fall behind the updated timestamp and are cleaned up.

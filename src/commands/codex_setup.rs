@@ -148,9 +148,12 @@ mod tests {
         let codex_tmp = tempfile::tempdir().unwrap();
         let mut out = Vec::new();
         install(tmp.path(), codex_tmp.path(), None, &mut out).unwrap();
-        LeiterConfig { codex: false }
-            .save(&paths::leiter_config_path(tmp.path()))
-            .unwrap();
+        LeiterConfig {
+            codex: false,
+            ..Default::default()
+        }
+        .save(&paths::leiter_config_path(tmp.path()))
+        .unwrap();
 
         let mut uninstall_out = Vec::new();
         uninstall(tmp.path(), codex_tmp.path(), &mut uninstall_out).unwrap();

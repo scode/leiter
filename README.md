@@ -23,8 +23,8 @@ Here is an example of it learning:
 - That's it — your soul is delivered through a managed block in `~/.claude/CLAUDE.md`, so it loads in every new session
   with no hook required. If you also want the optional session-logging and distillation-nudge hooks, start a Claude Code
   session and run `leiter claude agent-setup-instructions`, then follow the instructions.
-- If you did not enable auto-distillation, remember to run `/leiter-distill` every now and then (once a day or so) to
-  apply learnings from past sessions.
+- If you did not enable auto-distillation, say "distill" in a session or run `leiter distill` every now and then (once a
+  day or so) to apply learnings from past sessions.
 
 For more details, including if you cannot or do not want to use Homebrew, see [docs/setup.md](docs/setup.md) for the
 full setup guide.
@@ -48,8 +48,8 @@ Here's the TLDR of the mechanics:
   automatic or manual.
   - If you enabled auto-distillation when running `leiter claude agent-setup-instructions`, leiter will periodically
     launch automatic distillation in a background agent after the first turn in a session.
-  - Otherwise, or in addition to automatic distillation, you can run `/leiter-distill` at any time to trigger immediate
-    distillation.
+  - Otherwise, or in addition to automatic distillation, you can say "distill" in a session or run `leiter distill` at
+    any time to trigger immediate distillation.
     - NOTE: The current session is only included once Claude Code has written a transcript for it on disk. If you do not
       see it in distillation output yet, first `/clear` or exit Claude and resume the session.
 

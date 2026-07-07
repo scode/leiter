@@ -76,6 +76,14 @@ pub enum Command {
         #[arg(long)]
         force: bool,
     },
+    /// Distill session transcripts through a headless agent
+    Distill {
+        /// Print the composed prompt without invoking an agent or writing state
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Report distillation and managed-block status
+    Status,
     /// Soul management commands
     Soul {
         #[command(subcommand)]
@@ -304,6 +312,17 @@ fn main() -> Result<()> {
         }
         Command::Sync { force } => {
             commands::sync::run(&state_dir, *force, &mut std::io::stdout(), None, None)?;
+        }
+        Command::Distill { dry_run } => {
+            commands::distill_headless::run(
+                &state_dir,
+                &mut std::io::stdout(),
+                &mut std::io::stderr(),
+                *dry_run,
+            )?;
+        }
+        Command::Status => {
+            commands::status::run(&state_dir, &mut std::io::stdout())?;
         }
     }
 

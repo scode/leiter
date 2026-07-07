@@ -15,12 +15,82 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Result, bail};
-use chrono::{SubsecRound, Utc};
+use chrono::{DateTime, SubsecRound, Utc};
 
 use crate::config::load_config_best_effort;
 use crate::paths;
 use crate::sync::{SyncHomes, resync_and_warn};
 use crate::validation::{ValidationStatus, validate_state};
+
+/// State produced by committing a successful distillation run.
+pub struct DistillCommit {
+    /// State after pending watermarks have been promoted and saved.
+    pub state: crate::state::LeiterState,
+    /// Soul body loaded from the same validation pass as the committed state.
+    pub soul: String,
+    /// The timestamp written to `last_distilled`.
+    pub last_distilled: DateTime<Utc>,
+}
+
+/// Promote staged distillation watermarks and persist the new cutoff once.
+///
+/// This is the sole implementation of the distillation commit transition. The
+/// lower-level `leiter soul mark-distilled` command and the headless
+/// `leiter distill` path both rely on it so the scan-start cutoff, Claude
+/// always-on promotion, Codex gate, and atomic save cannot drift apart.
+///
+/// `expected_scan_started`, when present, is an ownership check for unattended
+/// headless runs. A newer distill may have restaged pending watermarks while an
+/// older agent was still running; in that case the older run must not promote
+/// state it no longer owns.
+pub fn commit_staged_distillation(
+    state_dir: &Path,
+    codex_enabled: bool,
+    expected_scan_started: Option<DateTime<Utc>>,
+) -> Result<DistillCommit> {
+    let (mut state, soul) = match validate_state(state_dir) {
+        ValidationStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
+        ValidationStatus::Compatible { state, soul, .. } => (state, soul),
+    };
+
+    if let Some(expected) = expected_scan_started
+        && state.pending_scan_started_utc != Some(expected)
+    {
+        bail!("concurrent distill superseded this run; nothing committed");
+    }
+
+    if !state.claude.pending.is_empty() {
+        let pending = std::mem::take(&mut state.claude.pending);
+        state.claude.committed.extend(pending);
+    }
+    // Fall back to the wall clock only when nothing was staged (a mark run
+    // without a preceding non-dry-run distill).
+    state.last_distilled = state
+        .pending_scan_started_utc
+        .take()
+        .unwrap_or_else(|| Utc::now().trunc_subsecs(0));
+    if codex_enabled && !state.codex.pending.is_empty() {
+        let pending = std::mem::take(&mut state.codex.pending);
+        state.codex.committed.extend(pending);
+    }
+
+    state.save(&paths::state_path(state_dir))?;
+    let last_distilled = state.last_distilled;
+
+    Ok(DistillCommit {
+        state,
+        soul,
+        last_distilled,
+    })
+}
+
+/// Format the confirmation line shared by both distillation commit surfaces.
+pub fn confirmation_line(last_distilled: DateTime<Utc>) -> String {
+    format!(
+        "last_distilled set to {}",
+        last_distilled.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    )
+}
 
 /// Run the mark-distilled command.
 ///
@@ -37,36 +107,14 @@ pub fn run(
     claude_home_override: Option<&Path>,
     codex_home_override: Option<&Path>,
 ) -> Result<()> {
-    let (mut state, soul) = match validate_state(state_dir) {
-        ValidationStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
-        ValidationStatus::Compatible { state, soul, .. } => (state, soul),
-    };
-
     let config = load_config_best_effort(state_dir);
-    if !state.claude.pending.is_empty() {
-        let pending = std::mem::take(&mut state.claude.pending);
-        state.claude.committed.extend(pending);
-    }
-    // Fall back to the wall clock only when nothing was staged (a mark run
-    // without a preceding non-dry-run distill).
-    state.last_distilled = state
-        .pending_scan_started_utc
-        .take()
-        .unwrap_or_else(|| Utc::now().trunc_subsecs(0));
-    if config.codex && !state.codex.pending.is_empty() {
-        let pending = std::mem::take(&mut state.codex.pending);
-        state.codex.committed.extend(pending);
-    }
+    let DistillCommit {
+        mut state,
+        soul,
+        last_distilled,
+    } = commit_staged_distillation(state_dir, config.codex, None)?;
 
-    state.save(&paths::state_path(state_dir))?;
-
-    writeln!(
-        out,
-        "last_distilled set to {}",
-        state
-            .last_distilled
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-    )?;
+    writeln!(out, "{}", confirmation_line(last_distilled))?;
 
     if let Some(claude_home) = paths::resolve_claude_home(claude_home_override) {
         let codex_home = paths::resolve_codex_home(codex_home_override, config.codex);
@@ -106,7 +154,10 @@ mod tests {
     }
 
     fn set_codex_enabled(state_dir: &Path, enabled: bool) {
-        let config = LeiterConfig { codex: enabled };
+        let config = LeiterConfig {
+            codex: enabled,
+            ..Default::default()
+        };
         config.save(&paths::leiter_config_path(state_dir)).unwrap();
     }
 
