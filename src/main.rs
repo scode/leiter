@@ -5,9 +5,12 @@ mod commands;
 mod config;
 mod errors;
 mod frontmatter;
+mod fs_atomic;
 mod log_filename;
+mod managed_block;
 mod paths;
 mod state;
+mod sync;
 mod templates;
 mod validation;
 
@@ -51,9 +54,27 @@ pub enum Command {
         /// Override Claude Code home directory (default: ~/.claude/)
         #[arg(long)]
         claude_home: Option<std::path::PathBuf>,
+        /// Override Codex home directory used when Codex support is enabled
+        #[arg(long)]
+        codex_home: Option<std::path::PathBuf>,
 
         #[command(subcommand)]
         command: ClaudeCommand,
+    },
+    /// Codex-specific agent commands
+    Codex {
+        /// Override Codex home directory (default: ~/.codex/)
+        #[arg(long)]
+        codex_home: Option<std::path::PathBuf>,
+
+        #[command(subcommand)]
+        command: CodexCommand,
+    },
+    /// Re-materialize managed soul-delivery blocks
+    Sync {
+        /// Overwrite hand-edited managed blocks
+        #[arg(long)]
+        force: bool,
     },
     /// Soul management commands
     Soul {
@@ -72,6 +93,14 @@ pub enum ClaudeCommand {
     AgentSetupInstructions,
     /// Output hook removal instructions for the agent
     AgentTeardownInstructions,
+}
+
+#[derive(Subcommand)]
+pub enum CodexCommand {
+    /// Enable Codex support and write AGENTS.md
+    Install,
+    /// Remove AGENTS.md block and disable Codex support
+    Uninstall,
 }
 
 #[derive(Subcommand)]
@@ -164,7 +193,7 @@ fn main() -> Result<()> {
     match &cli.command {
         Command::Config { command } => match command {
             ConfigCommand::Set { key, value } => {
-                commands::config::set(&state_dir, &mut std::io::stdout(), key, value)?;
+                commands::config::set(&state_dir, &mut std::io::stdout(), key, value, None, None)?;
             }
         },
         Command::Hook { command } => match command {
@@ -202,23 +231,33 @@ fn main() -> Result<()> {
                 commands::soul_upgrade::run(&state_dir, &mut std::io::stdout())?;
             }
             SoulCommand::MarkDistilled => {
-                commands::mark_distilled::run(&state_dir, &mut std::io::stdout())?;
+                commands::mark_distilled::run(&state_dir, &mut std::io::stdout(), None, None)?;
             }
             SoulCommand::MarkUpgraded => {
-                commands::mark_upgraded::run(&state_dir, &mut std::io::stdout())?;
+                commands::mark_upgraded::run(&state_dir, &mut std::io::stdout(), None, None)?;
             }
         },
         Command::Claude {
             claude_home,
+            codex_home,
             command,
         } => {
             let claude_home = match claude_home {
                 Some(p) => p.clone(),
                 None => paths::default_claude_home()?,
             };
+            let codex_home = match codex_home {
+                Some(p) => p.clone(),
+                None => paths::default_codex_home()?,
+            };
             match command {
                 ClaudeCommand::Install => {
-                    commands::agent_setup::run(&state_dir, &claude_home)?;
+                    commands::agent_setup::run(
+                        &state_dir,
+                        &claude_home,
+                        &codex_home,
+                        &mut std::io::stdout(),
+                    )?;
                 }
                 ClaudeCommand::Uninstall => {
                     commands::agent_uninstall::run(&state_dir, &claude_home)?;
@@ -236,6 +275,35 @@ fn main() -> Result<()> {
                     )?;
                 }
             }
+        }
+        Command::Codex {
+            codex_home,
+            command,
+        } => {
+            let codex_home = match codex_home {
+                Some(p) => p.clone(),
+                None => paths::default_codex_home()?,
+            };
+            match command {
+                CodexCommand::Install => {
+                    commands::codex_setup::install(
+                        &state_dir,
+                        &codex_home,
+                        None,
+                        &mut std::io::stdout(),
+                    )?;
+                }
+                CodexCommand::Uninstall => {
+                    commands::codex_setup::uninstall(
+                        &state_dir,
+                        &codex_home,
+                        &mut std::io::stdout(),
+                    )?;
+                }
+            }
+        }
+        Command::Sync { force } => {
+            commands::sync::run(&state_dir, *force, &mut std::io::stdout(), None, None)?;
         }
     }
 

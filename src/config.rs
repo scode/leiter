@@ -1,17 +1,82 @@
 //! Persistent user configuration stored under `~/.leiter/leiter.toml`.
 
-use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use tracing::warn;
+
+use crate::fs_atomic::write_atomic;
 
 /// User-visible leiter settings.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+///
+/// Only the current `codex` key is ever serialized, so persisting a config
+/// always rewrites the file into the modern shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub struct LeiterConfig {
-    /// Experimental gate for Codex rollout distillation.
-    #[serde(default)]
-    pub enable_codex_experimental: bool,
+    /// Gate for Codex rollout distillation and AGENTS.md soul delivery.
+    pub codex: bool,
+}
+
+impl<'de> Deserialize<'de> for LeiterConfig {
+    /// Accept the legacy `enable_codex_experimental` alias without tripping
+    /// serde's duplicate-field rejection.
+    ///
+    /// A plain `#[serde(alias = ...)]` treats the modern and legacy keys as the
+    /// same field, so a `leiter.toml` carrying *both* fails to parse — and
+    /// every `load_config_best_effort` caller then silently downgrades to
+    /// defaults, quietly disabling Codex for a user who has it on. Deserializing
+    /// through a raw two-`Option` struct lets both keys coexist: the modern
+    /// `codex` wins when they disagree (with a warning naming the ignored legacy
+    /// key), and the legacy key is still honored when it is the only one
+    /// present. Saving always writes just `codex`, so the collision heals itself
+    /// the next time leiter persists the config.
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            #[serde(default)]
+            codex: Option<bool>,
+            #[serde(default)]
+            enable_codex_experimental: Option<bool>,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        let codex = match (raw.codex, raw.enable_codex_experimental) {
+            (Some(codex), Some(_legacy)) => {
+                warn!(
+                    "leiter.toml sets both `codex` and the legacy `enable_codex_experimental`; \
+                     honoring `codex` and ignoring `enable_codex_experimental`"
+                );
+                codex
+            }
+            (Some(codex), None) => codex,
+            (None, Some(legacy)) => legacy,
+            (None, None) => false,
+        };
+        Ok(Self { codex })
+    }
+}
+
+/// Load `leiter.toml`, warning and falling back to defaults on any failure.
+///
+/// State-mutating commands that only consult `codex` share this instead of
+/// propagating the load error: SPEC.md specifies warn-and-default for the
+/// config-load step of `config set`, `distill`, `mark-distilled`, and friends,
+/// so a malformed or unreadable `leiter.toml` must never block a soul or state
+/// operation. Kept here (rather than duplicated per command) so the warning
+/// text and the default stay in one place.
+pub fn load_config_best_effort(state_dir: &Path) -> LeiterConfig {
+    let path = crate::paths::leiter_config_path(state_dir);
+    match LeiterConfig::load(&path) {
+        Ok(config) => config,
+        Err(err) => {
+            warn!("failed to load leiter config, using defaults: {err}");
+            LeiterConfig::default()
+        }
+    }
 }
 
 impl LeiterConfig {
@@ -20,7 +85,7 @@ impl LeiterConfig {
             return Ok(Self::default());
         }
 
-        let raw = fs::read_to_string(path)
+        let raw = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
         toml::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))
     }
@@ -32,11 +97,11 @@ impl LeiterConfig {
                 path.display()
             )
         })?;
-        fs::create_dir_all(parent)
+        std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
 
         let serialized = toml::to_string_pretty(self).context("failed to serialize config")?;
-        fs::write(path, serialized).with_context(|| format!("failed to write {}", path.display()))
+        write_atomic(path, serialized.as_bytes())
     }
 }
 
@@ -48,7 +113,7 @@ mod tests {
     fn missing_file_uses_defaults() {
         let tmp = tempfile::tempdir().unwrap();
         let config = LeiterConfig::load(&tmp.path().join("leiter.toml")).unwrap();
-        assert!(!config.enable_codex_experimental);
+        assert!(!config.codex);
     }
 
     #[test]
@@ -56,12 +121,45 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("leiter.toml");
 
-        let config = LeiterConfig {
-            enable_codex_experimental: true,
-        };
+        let config = LeiterConfig { codex: true };
         config.save(&path).unwrap();
 
         let loaded = LeiterConfig::load(&path).unwrap();
         assert_eq!(loaded, config);
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("codex = true")
+        );
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("enable_codex_experimental")
+        );
+    }
+
+    #[test]
+    fn legacy_codex_key_is_accepted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("leiter.toml");
+        std::fs::write(&path, "enable_codex_experimental = true\n").unwrap();
+
+        let loaded = LeiterConfig::load(&path).unwrap();
+        assert!(loaded.codex);
+    }
+
+    /// A file carrying both keys must parse (serde's duplicate-field rejection
+    /// used to swallow it), with the modern `codex` value winning. Both
+    /// disagreement directions are covered so neither is silently inverted.
+    #[test]
+    fn both_keys_present_codex_wins_over_legacy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("leiter.toml");
+
+        std::fs::write(&path, "codex = true\nenable_codex_experimental = false\n").unwrap();
+        assert!(LeiterConfig::load(&path).unwrap().codex);
+
+        std::fs::write(&path, "codex = false\nenable_codex_experimental = true\n").unwrap();
+        assert!(!LeiterConfig::load(&path).unwrap().codex);
     }
 }

@@ -37,6 +37,10 @@ pub fn run(state_dir: &Path, out: &mut impl Write, text: &str) -> Result<()> {
         "Now read `{}` and edit the appropriate section following the guidelines above.",
         paths::soul_path(state_dir).display()
     )?;
+    writeln!(
+        out,
+        "Final step: after editing the soul file, run `leiter sync` so the managed soul-delivery blocks pick up the change."
+    )?;
 
     Ok(())
 }
@@ -74,6 +78,14 @@ mod tests {
         let output = run_instill(tmp.path(), "test preference");
         assert!(output.contains("soul.md"));
         assert!(output.contains("edit the appropriate section"));
+    }
+
+    #[test]
+    fn output_contains_sync_final_step() {
+        let tmp = setup_state_dir();
+        let output = run_instill(tmp.path(), "test preference");
+        assert!(output.contains("Final step"));
+        assert!(output.contains("leiter sync"));
     }
 
     #[test]

@@ -57,7 +57,14 @@ mod tests {
 
     fn setup_and_context(state_dir: &Path) -> String {
         let claude_tmp = tempfile::tempdir().unwrap();
-        agent_setup::run(state_dir, claude_tmp.path()).unwrap();
+        let codex_tmp = tempfile::tempdir().unwrap();
+        agent_setup::run(
+            state_dir,
+            claude_tmp.path(),
+            codex_tmp.path(),
+            &mut Vec::new(),
+        )
+        .unwrap();
         run_context(state_dir)
     }
 
@@ -95,7 +102,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let claude_tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        agent_setup::run(dir, claude_tmp.path()).unwrap();
+        let codex_tmp = tempfile::tempdir().unwrap();
+        agent_setup::run(dir, claude_tmp.path(), codex_tmp.path(), &mut Vec::new()).unwrap();
 
         let soul_content = fs::read_to_string(paths::soul_path(dir)).unwrap();
         let output = run_context(dir);

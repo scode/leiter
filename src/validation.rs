@@ -13,6 +13,12 @@ use crate::state::{LeiterState, StateLoadError};
 use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
 
 /// Result of validating `state.toml` and `soul.md` against the current binary.
+///
+/// This enum is returned at command boundaries, not stored in collections or
+/// moved through hot paths. Keeping the successful state inline avoids making
+/// every caller unpack a `Box<LeiterState>` for a size optimization that does
+/// not matter in leiter's CLI workload.
+#[allow(clippy::large_enum_variant)]
 pub enum ValidationStatus {
     /// State and soul are compatible. May include a soft epoch nudge.
     Compatible {

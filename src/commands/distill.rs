@@ -37,7 +37,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use chrono::SubsecRound;
@@ -49,7 +49,7 @@ use crate::claude_sessions::{
 };
 use crate::claude_transcript::filter_session_log;
 use crate::codex::{DistilledCodexSession, collect_changed_sessions};
-use crate::config::LeiterConfig;
+use crate::config::load_config_best_effort;
 use crate::log_filename::{ParsedLogEntry, collect_log_entries};
 use crate::paths;
 use crate::state::LeiterState;
@@ -70,15 +70,23 @@ pub fn run(
     codex_home_override: Option<&Path>,
 ) -> Result<()> {
     let config = load_config_best_effort(state_dir);
-    let claude_home = resolve_claude_home(claude_home_override);
-    let codex_home = resolve_codex_home(codex_home_override, config.enable_codex_experimental);
+    // Opportunistic resync writes managed blocks, and the home flags scope
+    // the SESSION SCAN only (SPEC: Opportunistic re-sync). Reusing an
+    // override as a block-write destination would let a testing/scanning
+    // flag create a managed block inside an arbitrary scanned directory and
+    // re-record hashes against it, orphaning the real one — so any override
+    // disables the resync side effect for this run.
+    let resync_after_staging = claude_home_override.is_none() && codex_home_override.is_none();
+    let claude_home = paths::resolve_claude_home(claude_home_override);
+    let codex_home = paths::resolve_codex_home(codex_home_override, config.codex);
     distill_with_inputs(
         state_dir,
         claude_home.as_deref(),
         codex_home.as_deref(),
-        config.enable_codex_experimental,
+        config.codex,
         out,
         dry_run,
+        resync_after_staging,
     )
 }
 
@@ -88,7 +96,9 @@ pub fn run(
 /// `run` uses this after reading config and resolving the default Codex home.
 /// Unit tests call the same function directly so they exercise the production
 /// distill algorithm while still injecting a temp Codex home path and gate
-/// state.
+/// state. `resync_after_staging` is threaded separately from the homes so
+/// tests can exercise the resync against injected homes even though
+/// production only enables it for default-home runs.
 fn distill_with_inputs(
     state_dir: &Path,
     claude_home: Option<&Path>,
@@ -96,6 +106,7 @@ fn distill_with_inputs(
     codex_enabled: bool,
     out: &mut impl Write,
     dry_run: bool,
+    resync_after_staging: bool,
 ) -> Result<()> {
     let logs_dir = paths::logs_dir(state_dir);
     // Captured before any scanning so mark-distilled can adopt it as the next
@@ -207,50 +218,43 @@ fn distill_with_inputs(
         }
     }
 
+    if !dry_run && resync_after_staging {
+        let latest = match crate::validation::validate_state(state_dir) {
+            ValidationStatus::Compatible { state, soul, .. } => Some((state, soul)),
+            ValidationStatus::Incompatible(reason) => {
+                warn!(
+                    "skipping opportunistic sync after distill staging: {}",
+                    reason.user_message()
+                );
+                None
+            }
+        };
+        if let Some((mut state, soul)) = latest
+            && let Some(claude_home) = claude_home
+        {
+            match crate::sync::opportunistic_resync(
+                state_dir,
+                &mut state,
+                &soul,
+                crate::sync::SyncHomes {
+                    claude_home: Some(claude_home),
+                    codex_home,
+                },
+                codex_enabled,
+            ) {
+                Ok(outcomes) => {
+                    for outcome in outcomes {
+                        if outcome.is_refused() {
+                            warn!("{}", outcome.line());
+                        }
+                    }
+                }
+                Err(err) => warn!("opportunistic sync after distill staging failed: {err}"),
+            }
+        }
+    }
+
     Ok(())
-}
-
-/// Resolve the Claude home used by the external session scan.
-///
-/// A caller-provided path wins and is not validated here; discovery itself is
-/// best-effort and treats missing directories as an empty scan. Without an
-/// override, failure to locate the user's home directory disables only the
-/// external Claude scan and leaves legacy logs usable.
-fn resolve_claude_home(override_path: Option<&Path>) -> Option<PathBuf> {
-    if let Some(path) = override_path {
-        return Some(path.to_path_buf());
-    }
-
-    match paths::default_claude_home() {
-        Ok(claude_home) => Some(claude_home),
-        Err(err) => {
-            warn!("Claude home unavailable, skipping external Claude session scan: {err}");
-            None
-        }
-    }
-}
-
-/// Resolve the Codex home only when the Codex gate is enabled.
-///
-/// The disabled gate must not even look at the default Codex directory. When
-/// enabled, explicit test injection wins; otherwise a missing home directory
-/// is logged and treated as "no Codex sessions" rather than a distill error.
-fn resolve_codex_home(override_path: Option<&Path>, codex_enabled: bool) -> Option<PathBuf> {
-    if !codex_enabled {
-        return None;
-    }
-
-    if let Some(path) = override_path {
-        return Some(path.to_path_buf());
-    }
-
-    match paths::default_codex_home() {
-        Ok(codex_home) => Some(codex_home),
-        Err(err) => {
-            warn!("Codex home unavailable, skipping Codex distillation: {err}");
-            None
-        }
-    }
 }
 
 /// Best-effort external Claude collection for one `leiter soul distill` run.
@@ -403,17 +407,6 @@ fn emission_sort_label(emission: &ClaudeEmission) -> &str {
     }
 }
 
-fn load_config_best_effort(state_dir: &Path) -> LeiterConfig {
-    let config_path = paths::leiter_config_path(state_dir);
-    match LeiterConfig::load(&config_path) {
-        Ok(config) => config,
-        Err(err) => {
-            warn!("failed to load leiter config, using defaults: {err}");
-            LeiterConfig::default()
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,6 +431,7 @@ mod tests {
             false,
             &mut out,
             false,
+            false,
         )
         .unwrap();
         bytes_to_string(out)
@@ -453,6 +447,7 @@ mod tests {
             false,
             &mut out,
             true,
+            false,
         )
         .unwrap();
         bytes_to_string(out)
@@ -468,6 +463,7 @@ mod tests {
             true,
             &mut out,
             dry_run,
+            false,
         )
         .unwrap();
         bytes_to_string(out)
@@ -475,14 +471,21 @@ mod tests {
 
     fn run_distill_with_claude_home(state_dir: &Path, claude_home: &Path, dry_run: bool) -> String {
         let mut out = Vec::new();
-        distill_with_inputs(state_dir, Some(claude_home), None, false, &mut out, dry_run).unwrap();
+        distill_with_inputs(
+            state_dir,
+            Some(claude_home),
+            None,
+            false,
+            &mut out,
+            dry_run,
+            false,
+        )
+        .unwrap();
         bytes_to_string(out)
     }
 
     fn set_codex_enabled(state_dir: &Path, enabled: bool) {
-        let config = LeiterConfig {
-            enable_codex_experimental: enabled,
-        };
+        let config = LeiterConfig { codex: enabled };
         config.save(&paths::leiter_config_path(state_dir)).unwrap();
     }
 
@@ -774,7 +777,7 @@ mod tests {
 
         let first = run_distill_with_claude_home(tmp.path(), claude_home.path(), false);
         assert!(first.contains("first external"));
-        crate::commands::mark_distilled::run(tmp.path(), &mut Vec::new()).unwrap();
+        crate::commands::mark_distilled::run(tmp.path(), &mut Vec::new(), None, None).unwrap();
 
         write_claude_session(
             claude_home.path(),
@@ -1014,7 +1017,7 @@ mod tests {
         });
         let before = Utc::now() - chrono::Duration::seconds(1);
         let mut out = Vec::new();
-        distill_with_inputs(tmp.path(), None, None, false, &mut out, false).unwrap();
+        distill_with_inputs(tmp.path(), None, None, false, &mut out, false, false).unwrap();
         let after = Utc::now() + chrono::Duration::seconds(1);
 
         let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
@@ -1036,7 +1039,7 @@ mod tests {
             );
         });
         let mut dry_out = Vec::new();
-        distill_with_inputs(tmp.path(), None, None, false, &mut dry_out, true).unwrap();
+        distill_with_inputs(tmp.path(), None, None, false, &mut dry_out, true, false).unwrap();
 
         let dry_state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
         assert!(dry_state.claude.pending.contains_key("stale"));
@@ -1054,6 +1057,7 @@ mod tests {
             false,
             &mut out,
             false,
+            false,
         )
         .unwrap();
         let staged = LeiterState::load(&paths::state_path(tmp.path()))
@@ -1061,7 +1065,7 @@ mod tests {
             .pending_scan_started_utc
             .unwrap();
 
-        crate::commands::mark_distilled::run(tmp.path(), &mut Vec::new()).unwrap();
+        crate::commands::mark_distilled::run(tmp.path(), &mut Vec::new(), None, None).unwrap();
 
         let updated = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
         assert_eq!(updated.last_distilled, staged);
@@ -1077,6 +1081,82 @@ mod tests {
         let claude_home = tempfile::tempdir().unwrap();
         let result = run(tmp.path(), &mut out, false, Some(claude_home.path()), None);
         assert!(result.is_err());
+    }
+
+    /// (C4a) On the non-dry-run staging path with resync enabled, distill heals
+    /// a stale recorded block in the injected Claude home — the same backstop
+    /// the other state-mutating commands provide. `setup_state_dir` installs a
+    /// block into `tmp.claude` with recorded hashes, so staling the soul gives
+    /// the resync something to heal.
+    #[test]
+    fn resync_after_staging_heals_stale_block() {
+        let tmp = setup_state_dir();
+        fs::write(paths::soul_path(tmp.path()), "new soul body\n").unwrap();
+
+        let mut out = Vec::new();
+        distill_with_inputs(
+            tmp.path(),
+            Some(tmp.claude.path()),
+            None,
+            false,
+            &mut out,
+            false,
+            true,
+        )
+        .unwrap();
+
+        let healed = fs::read_to_string(paths::claude_md_path(tmp.claude.path())).unwrap();
+        assert!(healed.contains("new soul body"));
+    }
+
+    /// (C4b) A dry-run distill must never write a block, even with the resync
+    /// flag on: read-only surfaces report on-disk state, they do not repair it.
+    #[test]
+    fn dry_run_never_touches_blocks() {
+        let tmp = setup_state_dir();
+        let before = fs::read_to_string(paths::claude_md_path(tmp.claude.path())).unwrap();
+        fs::write(paths::soul_path(tmp.path()), "new soul body\n").unwrap();
+
+        let mut out = Vec::new();
+        distill_with_inputs(
+            tmp.path(),
+            Some(tmp.claude.path()),
+            None,
+            false,
+            &mut out,
+            true,
+            true,
+        )
+        .unwrap();
+
+        let after = fs::read_to_string(paths::claude_md_path(tmp.claude.path())).unwrap();
+        assert_eq!(after, before, "dry-run must not rewrite the block");
+        assert!(!after.contains("new soul body"));
+    }
+
+    /// (C4c) The production override path passes `resync_after_staging = false`
+    /// (any `--claude-home`/`--codex-home` override disables the side effect), so
+    /// a stale block is left untouched.
+    #[test]
+    fn resync_disabled_leaves_stale_block_untouched() {
+        let tmp = setup_state_dir();
+        let before = fs::read_to_string(paths::claude_md_path(tmp.claude.path())).unwrap();
+        fs::write(paths::soul_path(tmp.path()), "new soul body\n").unwrap();
+
+        let mut out = Vec::new();
+        distill_with_inputs(
+            tmp.path(),
+            Some(tmp.claude.path()),
+            None,
+            false,
+            &mut out,
+            false,
+            false,
+        )
+        .unwrap();
+
+        let after = fs::read_to_string(paths::claude_md_path(tmp.claude.path())).unwrap();
+        assert_eq!(after, before);
     }
 
     // --- filter_session_log unit tests ---
@@ -1497,6 +1577,7 @@ mod tests {
             false,
             &mut out,
             false,
+            false,
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("state file"));
@@ -1793,6 +1874,7 @@ mod tests {
             Some(codex_home.path()),
             false,
             &mut out,
+            false,
             false,
         )
         .unwrap();

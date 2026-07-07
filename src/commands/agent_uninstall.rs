@@ -1,8 +1,8 @@
 //! `leiter claude uninstall` — removes leiter plugin files from `~/.claude/`.
 //!
 //! For each known skill, checks for the sentinel marker in its SKILL.md and
-//! removes that skill's directory only if the sentinel is present. Does NOT
-//! touch `~/.leiter/` or `~/.claude/settings.json`.
+//! removes that skill's directory only if the sentinel is present. Also removes
+//! the managed `CLAUDE.md` block without touching `~/.leiter/`.
 
 use std::fs;
 use std::io::Write;
@@ -11,8 +11,9 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use tracing::{info, warn};
 
+use crate::managed_block::{RemoveOutcome, remove_managed_block};
 use crate::paths;
-use crate::templates::{PLUGIN_SENTINEL, SKILL_CONTENTS};
+use crate::templates::{LEGACY_SKILL_DIRS, PLUGIN_SENTINEL, SKILL_CONTENTS};
 use crate::validation::{ValidationStatus, validate_state};
 
 /// Run the `leiter claude uninstall` command.
@@ -32,7 +33,7 @@ pub fn run(state_dir: &Path, claude_home: &Path) -> Result<()> {
     // Each skill is checked and removed independently. The sentinel check
     // and the removal must use the same `skill_dir` to guarantee we only
     // delete directories whose SKILL.md we verified.
-    for (name, _) in SKILL_CONTENTS {
+    for name in owned_skill_names() {
         let skill_dir = paths::skill_dir(claude_home, name);
         let skill_md = skill_dir.join("SKILL.md");
 
@@ -55,7 +56,17 @@ pub fn run(state_dir: &Path, claude_home: &Path) -> Result<()> {
         }
     }
 
-    if removed == 0 && failed.is_empty() {
+    // Remove the managed block BEFORE deciding whether leiter was installed at
+    // all. The block is independent evidence of an install: a rerun after a
+    // partial uninstall (skills already gone, but an earlier error left the
+    // block behind) must still finish the job. Ordering the removal ahead of
+    // the "nothing to uninstall" bail is what lets that rerun succeed.
+    let block_removed = matches!(
+        remove_managed_block(&paths::claude_md_path(claude_home))?,
+        RemoveOutcome::Removed
+    );
+
+    if removed == 0 && failed.is_empty() && !block_removed {
         bail!("no leiter skill files with sentinel found; nothing to uninstall");
     }
 
@@ -82,6 +93,13 @@ pub fn run(state_dir: &Path, claude_home: &Path) -> Result<()> {
     Ok(())
 }
 
+fn owned_skill_names() -> impl Iterator<Item = &'static str> {
+    SKILL_CONTENTS
+        .iter()
+        .map(|(name, _)| *name)
+        .chain(LEGACY_SKILL_DIRS.iter().copied())
+}
+
 /// Output the agent-teardown instructions (hook removal).
 ///
 /// Used by `leiter claude agent-teardown-instructions`.
@@ -106,7 +124,8 @@ mod tests {
     use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
 
     fn setup_plugin_files(claude_home: &Path, state_dir: &Path) {
-        agent_setup::run(state_dir, claude_home).unwrap();
+        let codex_tmp = tempfile::tempdir().unwrap();
+        agent_setup::run(state_dir, claude_home, codex_tmp.path(), &mut Vec::new()).unwrap();
     }
 
     fn run_uninstall(state_dir: &Path, claude_home: &Path) -> Result<()> {
@@ -142,6 +161,22 @@ mod tests {
     }
 
     #[test]
+    fn uninstall_removes_claude_block_and_preserves_unrelated_content() {
+        let state_tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        fs::write(paths::claude_md_path(claude_tmp.path()), "before\n").unwrap();
+        setup_plugin_files(claude_tmp.path(), state_tmp.path());
+        let claude_md = paths::claude_md_path(claude_tmp.path());
+        let with_after = format!("{}after\n", fs::read_to_string(&claude_md).unwrap());
+        fs::write(&claude_md, with_after).unwrap();
+
+        run_uninstall(state_tmp.path(), claude_tmp.path()).unwrap();
+
+        let updated = fs::read_to_string(&claude_md).unwrap();
+        assert_eq!(updated, "before\nafter\n");
+    }
+
+    #[test]
     fn uninstall_fails_without_soul() {
         let claude_tmp = tempfile::tempdir().unwrap();
         let state_tmp = tempfile::tempdir().unwrap();
@@ -162,9 +197,47 @@ mod tests {
                 fs::remove_dir_all(&skill_dir).unwrap();
             }
         }
+        // Also drop the managed block: with skills gone AND no block, nothing
+        // leiter-owned remains, so the command must report there is nothing to
+        // uninstall.
+        fs::remove_file(paths::claude_md_path(claude_tmp.path())).unwrap();
 
         let err = run_uninstall(state_tmp.path(), claude_tmp.path()).unwrap_err();
         assert!(err.to_string().contains("nothing to uninstall"));
+    }
+
+    /// A rerun after a partial uninstall — skills already gone, but the managed
+    /// block still on disk from an earlier failed run — must still remove the
+    /// block instead of bailing with "nothing to uninstall".
+    #[test]
+    fn uninstall_rerun_removes_leftover_block_after_skills_gone() {
+        let state_tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        setup_plugin_files(claude_tmp.path(), state_tmp.path());
+
+        // Simulate the partial-uninstall state: skills removed, block left.
+        for (name, _) in SKILL_CONTENTS {
+            let skill_dir = paths::skill_dir(claude_tmp.path(), name);
+            if skill_dir.exists() {
+                fs::remove_dir_all(&skill_dir).unwrap();
+            }
+        }
+        let claude_md = paths::claude_md_path(claude_tmp.path());
+        assert!(
+            fs::read_to_string(&claude_md)
+                .unwrap()
+                .contains("SCODE_LEITER_BEGIN"),
+            "precondition: managed block present"
+        );
+
+        run_uninstall(state_tmp.path(), claude_tmp.path()).unwrap();
+
+        assert!(
+            !fs::read_to_string(&claude_md)
+                .unwrap()
+                .contains("SCODE_LEITER_BEGIN"),
+            "rerun must remove the leftover managed block"
+        );
     }
 
     #[test]
@@ -173,21 +246,19 @@ mod tests {
         let state_tmp = tempfile::tempdir().unwrap();
         setup_plugin_files(claude_tmp.path(), state_tmp.path());
 
-        // Replace one skill's SKILL.md with content lacking the sentinel.
+        // A legacy-named directory without the sentinel is user content from
+        // leiter's perspective and must be left alone.
         let tampered = paths::skill_dir(claude_tmp.path(), "leiter-setup");
+        fs::create_dir_all(&tampered).unwrap();
         fs::write(tampered.join("SKILL.md"), "no sentinel here").unwrap();
 
         run_uninstall(state_tmp.path(), claude_tmp.path()).unwrap();
 
-        // The tampered dir should be left alone; all others removed.
         assert!(
             tampered.exists(),
             "dir without sentinel should be preserved"
         );
         for (name, _) in SKILL_CONTENTS {
-            if *name == "leiter-setup" {
-                continue;
-            }
             assert!(
                 !paths::skill_dir(claude_tmp.path(), name).exists(),
                 "skill dir {name} should be removed"
@@ -206,6 +277,9 @@ mod tests {
             let skill_dir = paths::skill_dir(claude_tmp.path(), name);
             fs::write(skill_dir.join("SKILL.md"), "no sentinel here").unwrap();
         }
+        // Drop the managed block too: no sentinel skill and no block means
+        // nothing leiter-owned remains to remove.
+        fs::remove_file(paths::claude_md_path(claude_tmp.path())).unwrap();
 
         let err = run_uninstall(state_tmp.path(), claude_tmp.path()).unwrap_err();
         assert!(err.to_string().contains("nothing to uninstall"));
@@ -217,10 +291,14 @@ mod tests {
         let claude_tmp = tempfile::tempdir().unwrap();
         setup_plugin_files(claude_tmp.path(), state_tmp.path());
 
-        // Remove some skill dirs before uninstall.
-        for (name, _) in &SKILL_CONTENTS[..2] {
-            fs::remove_dir_all(paths::skill_dir(claude_tmp.path(), name)).unwrap();
-        }
+        let legacy = paths::skill_dir(claude_tmp.path(), "leiter-distill");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(
+            legacy.join("SKILL.md"),
+            format!("<!-- {PLUGIN_SENTINEL} -->\n"),
+        )
+        .unwrap();
+        fs::remove_dir_all(&legacy).unwrap();
 
         run_uninstall(state_tmp.path(), claude_tmp.path()).unwrap();
     }
