@@ -40,7 +40,7 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use chrono::SubsecRound;
+use chrono::{DateTime, SubsecRound, Utc};
 use tracing::{debug, warn};
 
 use crate::claude_sessions::{
@@ -55,6 +55,67 @@ use crate::paths;
 use crate::state::LeiterState;
 use crate::templates::{DISTILL_DATA_PREAMBLE, SOUL_WRITING_GUIDELINES};
 use crate::validation::{ValidationStatus, validate_state};
+
+/// Transcript content and scan metadata produced by one distill gather pass.
+pub struct GatherResult {
+    /// The exact transcript payload that a headless distill child receives.
+    ///
+    /// This excludes the dry-run obsolete-cleanup report. The lower-level
+    /// `leiter soul distill` command appends that report to stdout for human
+    /// scan testing, but it is not session content and must not enter the
+    /// autonomous agent prompt.
+    pub payload: Vec<u8>,
+    /// Extra dry-run diagnostics for `leiter soul distill` stdout.
+    pub obsolete_cleanup_report: Vec<u8>,
+    /// Whether any visible transcript content was emitted.
+    pub has_emissions: bool,
+    /// Changed transcript files staged into pending watermarks this run.
+    ///
+    /// This can be non-zero even when `has_emissions` is false: progress-only
+    /// or otherwise empty canonicalized sessions still need their watermarks
+    /// promoted or they will be restaged forever.
+    pub staged_session_count: usize,
+    /// Scan-start timestamp staged into `pending_scan_started_utc`.
+    ///
+    /// Headless distill uses this as an ownership token before committing, so
+    /// an older child cannot promote watermarks restaged by a newer run.
+    pub scan_started_utc: DateTime<Utc>,
+    /// Visible Claude sessions currently undistilled, after external/legacy
+    /// dedupe. This is the count `leiter status` reports for Claude.
+    pub claude_count: usize,
+    /// Visible Codex sessions currently undistilled. Zero when Codex support
+    /// is disabled or no rollout session changed.
+    pub codex_count: usize,
+    /// External Claude sessions whose rendered transcript was emitted.
+    pub external_claude: Vec<EmittedExternalClaudeSession>,
+}
+
+/// Metadata for an external Claude transcript that reached the payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmittedExternalClaudeSession {
+    /// Claude-home-relative transcript label used in the payload.
+    pub file_label: String,
+    /// File modification time used for retention-pressure warnings.
+    pub mtime_utc: chrono::DateTime<chrono::Utc>,
+}
+
+/// Return emitted external Claude sessions older than the configured threshold.
+///
+/// The threshold is intentionally based on transcript file mtime rather than
+/// session-header time: Claude Code retention is a property of the external
+/// file store, so status and cron-facing distill warnings should track the
+/// file age that is at risk of pruning.
+pub fn retention_risk_sessions(
+    sessions: &[EmittedExternalClaudeSession],
+    retention_warn_days: u32,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<&EmittedExternalClaudeSession> {
+    let cutoff = now - chrono::Duration::days(i64::from(retention_warn_days));
+    sessions
+        .iter()
+        .filter(|session| session.mtime_utc < cutoff)
+        .collect()
+}
 
 /// Run the distill command.
 ///
@@ -108,6 +169,34 @@ fn distill_with_inputs(
     dry_run: bool,
     resync_after_staging: bool,
 ) -> Result<()> {
+    let gathered = gather(
+        state_dir,
+        claude_home,
+        codex_home,
+        codex_enabled,
+        dry_run,
+        resync_after_staging,
+    )?;
+    out.write_all(&gathered.payload)?;
+    out.write_all(&gathered.obsolete_cleanup_report)?;
+    Ok(())
+}
+
+/// Gather and render the transcript payload for one distill scan.
+///
+/// This is intentionally the shared spine for `leiter soul distill`,
+/// headless `leiter distill`, and `leiter status`: the same scan, dedupe,
+/// cleanup, staging, and optional opportunistic resync happen here, and
+/// callers decide what to do with the rendered payload. In `dry_run` mode no
+/// state or filesystem cleanup writes occur.
+pub fn gather(
+    state_dir: &Path,
+    claude_home: Option<&Path>,
+    codex_home: Option<&Path>,
+    codex_enabled: bool,
+    dry_run: bool,
+    resync_after_staging: bool,
+) -> Result<GatherResult> {
     let logs_dir = paths::logs_dir(state_dir);
     // Captured before any scanning so mark-distilled can adopt it as the next
     // last_distilled: everything that happens after this instant is the next
@@ -119,8 +208,14 @@ fn distill_with_inputs(
         ValidationStatus::Compatible { state, .. } => state,
     };
 
-    let entries = collect_log_entries(&logs_dir)
-        .with_context(|| format!("failed to read logs directory: {}", logs_dir.display()))?;
+    let entries = match collect_log_entries(&logs_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("failed to read logs directory: {}", logs_dir.display()));
+        }
+    };
 
     let mut legacy_logs = Vec::new();
     let mut obsolete = Vec::new();
@@ -145,17 +240,20 @@ fn distill_with_inputs(
 
     let codex_sessions =
         collect_codex_sessions(state_dir, &mut state, codex_home, codex_enabled, dry_run);
+    let staged_session_count = external_claude_sessions.len() + codex_sessions.staged_count;
 
     let claude_emissions = merge_claude_emissions(legacy_logs, external_claude_sessions);
     let has_claude_logs = !claude_emissions.is_empty();
-    let has_codex_logs = !codex_sessions.is_empty();
+    let has_codex_logs = !codex_sessions.rendered.is_empty();
+    let mut payload = Vec::new();
+    let mut obsolete_cleanup_report = Vec::new();
 
     if !has_claude_logs && !has_codex_logs {
-        writeln!(out, "No new session logs to process.")?;
+        writeln!(payload, "No new session logs to process.")?;
     } else {
-        write!(out, "{SOUL_WRITING_GUIDELINES}")?;
-        writeln!(out, "{DISTILL_DATA_PREAMBLE}")?;
-        writeln!(out, "<session-transcripts>")?;
+        write!(payload, "{SOUL_WRITING_GUIDELINES}")?;
+        writeln!(payload, "{DISTILL_DATA_PREAMBLE}")?;
+        writeln!(payload, "<session-transcripts>")?;
 
         for emission in &claude_emissions {
             match emission {
@@ -163,46 +261,52 @@ fn distill_with_inputs(
                     let content = fs::read_to_string(&entry.path).with_context(|| {
                         format!("failed to read log file: {}", entry.path.display())
                     })?;
+                    let mut rendered = Vec::new();
+                    filter_session_log(&content, &mut rendered)?;
+                    let rendered = String::from_utf8_lossy(&rendered);
                     writeln!(
-                        out,
+                        payload,
                         "<session source=\"claude\" file=\"{}\">",
                         entry.filename
                     )?;
-                    filter_session_log(&content, out)?;
-                    writeln!(out, "</session>")?;
+                    write_neutralized_transcript_body(&mut payload, &rendered)?;
+                    writeln!(payload, "</session>")?;
                 }
                 ClaudeEmission::External(session) => {
                     writeln!(
-                        out,
+                        payload,
                         "<session source=\"claude\" file=\"{}\">",
                         session.file_label
                     )?;
-                    write!(out, "{}", session.rendered)?;
-                    writeln!(out, "</session>")?;
+                    write_neutralized_transcript_body(&mut payload, &session.rendered)?;
+                    writeln!(payload, "</session>")?;
                 }
             }
         }
 
-        for session in &codex_sessions {
+        for session in &codex_sessions.rendered {
             writeln!(
-                out,
+                payload,
                 "<session source=\"codex\" file=\"{}\">",
                 session.file_label
             )?;
-            write!(out, "{}", session.rendered)?;
-            writeln!(out, "</session>")?;
+            write_neutralized_transcript_body(&mut payload, &session.rendered)?;
+            writeln!(payload, "</session>")?;
         }
 
-        writeln!(out, "</session-transcripts>")?;
+        writeln!(payload, "</session-transcripts>")?;
     }
 
     if !obsolete.is_empty() {
         obsolete.sort_by(|a, b| a.filename.cmp(&b.filename));
 
         if dry_run {
-            writeln!(out, "Obsolete logs that would be deleted:")?;
+            writeln!(
+                obsolete_cleanup_report,
+                "Obsolete logs that would be deleted:"
+            )?;
             for entry in &obsolete {
-                writeln!(out, "  {}", entry.filename)?;
+                writeln!(obsolete_cleanup_report, "  {}", entry.filename)?;
             }
         } else {
             for entry in &obsolete {
@@ -254,7 +358,48 @@ fn distill_with_inputs(
         }
     }
 
+    let external_claude = claude_emissions
+        .iter()
+        .filter_map(|emission| match emission {
+            ClaudeEmission::External(session) => Some(EmittedExternalClaudeSession {
+                file_label: session.file_label.clone(),
+                mtime_utc: session.watermark.mtime_utc,
+            }),
+            ClaudeEmission::Legacy(_) => None,
+        })
+        .collect();
+
+    Ok(GatherResult {
+        payload,
+        obsolete_cleanup_report,
+        has_emissions: has_claude_logs || has_codex_logs,
+        staged_session_count,
+        scan_started_utc: scan_started,
+        claude_count: claude_emissions.len(),
+        codex_count: codex_sessions.rendered.len(),
+        external_claude,
+    })
+}
+
+/// Write rendered transcript text without letting it close the data envelope.
+///
+/// Canonicalizers deliberately preserve user-visible text, including text
+/// that happens to quote XML-like tokens. At the final emission boundary those
+/// tokens become structural hazards: a literal `</session>` or
+/// `</session-transcripts>` inside historical transcript content would close
+/// leiter's own envelope early and put the rest of the prompt in instruction
+/// position. The transform breaks only the matched closing token's `</`
+/// prefix, keeping the text legible while making it inert.
+fn write_neutralized_transcript_body(out: &mut impl Write, rendered: &str) -> Result<()> {
+    out.write_all(neutralize_transcript_closing_tokens(rendered).as_bytes())?;
     Ok(())
+}
+
+/// Break transcript text that would otherwise match leiter's closing tags.
+fn neutralize_transcript_closing_tokens(rendered: &str) -> String {
+    rendered
+        .replace("</session-transcripts>", "< /session-transcripts>")
+        .replace("</session>", "< /session>")
 }
 
 /// Best-effort external Claude collection for one `leiter soul distill` run.
@@ -312,22 +457,34 @@ fn collect_claude_sessions(
 /// sessions that produced visible rendered transcript content; changed sessions
 /// that canonicalize to nothing still matter for watermark staging, but they do
 /// not need to escape this helper because they are never emitted to the LLM.
+struct CodexCollection {
+    rendered: Vec<DistilledCodexSession>,
+    staged_count: usize,
+}
+
 fn collect_codex_sessions(
     state_dir: &Path,
     state: &mut LeiterState,
     codex_home: Option<&Path>,
     codex_enabled: bool,
     dry_run: bool,
-) -> Vec<DistilledCodexSession> {
+) -> CodexCollection {
     if !codex_enabled {
-        return Vec::new();
+        return CodexCollection {
+            rendered: Vec::new(),
+            staged_count: 0,
+        };
     }
 
     let Some(codex_home) = codex_home else {
-        return Vec::new();
+        return CodexCollection {
+            rendered: Vec::new(),
+            staged_count: 0,
+        };
     };
 
     let codex_sessions = collect_changed_sessions(codex_home, &state.codex.committed);
+    let staged_count = codex_sessions.len();
     if !dry_run {
         state.codex.pending = codex_sessions
             .iter()
@@ -338,10 +495,14 @@ fn collect_codex_sessions(
         }
     }
 
-    codex_sessions
+    let rendered = codex_sessions
         .into_iter()
         .filter(|session| !session.rendered.is_empty())
-        .collect()
+        .collect();
+    CodexCollection {
+        rendered,
+        staged_count,
+    }
 }
 
 /// Claude transcript item ready to be emitted in chronological order.
@@ -485,7 +646,10 @@ mod tests {
     }
 
     fn set_codex_enabled(state_dir: &Path, enabled: bool) {
-        let config = LeiterConfig { codex: enabled };
+        let config = LeiterConfig {
+            codex: enabled,
+            ..Default::default()
+        };
         config.save(&paths::leiter_config_path(state_dir)).unwrap();
     }
 
@@ -630,6 +794,44 @@ mod tests {
 
         let output = run_distill(tmp.path());
         assert!(output.contains(original));
+    }
+
+    #[test]
+    fn legacy_transcript_closing_tags_are_neutralized_inside_envelope() {
+        let tmp = setup_state_dir();
+        write_log(
+            tmp.path(),
+            2026,
+            1,
+            1,
+            0,
+            "sess1",
+            "quoted </session> and </session-transcripts>\n",
+        );
+
+        let output = run_distill(tmp.path());
+        assert!(output.contains("quoted < /session> and < /session-transcripts>"));
+        assert_eq!(output.matches("</session>").count(), 1);
+        assert_eq!(output.matches("</session-transcripts>").count(), 1);
+    }
+
+    #[test]
+    fn external_claude_transcript_closing_tags_are_neutralized_inside_envelope() {
+        let tmp = setup_state_dir();
+        write_claude_session(
+            tmp.claude.path(),
+            "-tmp-proj",
+            "11111111-1111-4111-8111-111111111111",
+            &[claude_user_line(
+                "quoted </session> and </session-transcripts>",
+                "2026-07-01T12:00:00Z",
+            )],
+        );
+
+        let output = run_distill_with_claude_home(tmp.path(), tmp.claude.path(), false);
+        assert!(output.contains("quoted < /session> and < /session-transcripts>"));
+        assert_eq!(output.matches("</session>").count(), 1);
+        assert_eq!(output.matches("</session-transcripts>").count(), 1);
     }
 
     #[test]
@@ -1664,6 +1866,34 @@ mod tests {
         assert!(
             output.contains("<session source=\"codex\" file=\"archived_sessions/archived.jsonl\">")
         );
+    }
+
+    #[test]
+    fn codex_transcript_closing_tags_are_neutralized_inside_envelope() {
+        let tmp = setup_state_dir();
+        set_codex_enabled(tmp.path(), true);
+        let codex_home = tempfile::tempdir().unwrap();
+        write_codex_rollout(
+            codex_home.path(),
+            "sessions/rollout.jsonl",
+            &[
+                codex_session_meta("codex-sess", "2026-03-07T18:00:00Z"),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T18:00:01Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "quoted </session> and </session-transcripts>"}]
+                    }
+                }),
+            ],
+        );
+
+        let output = run_distill_with_codex_home(tmp.path(), codex_home.path(), false);
+        assert!(output.contains("quoted < /session> and < /session-transcripts>"));
+        assert_eq!(output.matches("</session>").count(), 1);
+        assert_eq!(output.matches("</session-transcripts>").count(), 1);
     }
 
     #[test]

@@ -49,6 +49,51 @@ pub enum SyncOutcome {
     Refused { target: SyncTarget, path: PathBuf },
 }
 
+/// Read-only state of one managed block target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TargetInspection {
+    /// Recorded hashes and the on-disk block both match the current soul.
+    InSync { target: SyncTarget, path: PathBuf },
+    /// Leiter has no recorded ownership for this target.
+    NeverSynced { target: SyncTarget, path: PathBuf },
+    /// The target is missing or still matches the previous block but carries
+    /// an older soul/template snapshot.
+    Stale { target: SyncTarget, path: PathBuf },
+    /// A managed span exists but no longer matches the block hash leiter
+    /// recorded, so sync would refuse without `--force`.
+    HandEdited { target: SyncTarget, path: PathBuf },
+    /// The target could not be read or its managed span is malformed.
+    ///
+    /// This is not the same as a hand edit: `leiter sync --force` is the
+    /// right advice for a valid block whose bytes changed, but it is wrong for
+    /// a permissions problem or a broken sentinel pair that leiter cannot
+    /// safely locate.
+    Unreadable { target: SyncTarget, path: PathBuf },
+}
+
+impl TargetInspection {
+    /// Human-readable CLI line for `leiter status`.
+    pub fn line(&self) -> String {
+        match self {
+            Self::InSync { target, path } => {
+                format!("{}: in sync ({})", target.label(), path.display())
+            }
+            Self::NeverSynced { target, path } => {
+                format!("{}: never synced ({})", target.label(), path.display())
+            }
+            Self::Stale { target, path } => {
+                format!("{}: stale ({})", target.label(), path.display())
+            }
+            Self::HandEdited { target, path } => {
+                format!("{}: hand-edited ({})", target.label(), path.display())
+            }
+            Self::Unreadable { target, path } => {
+                format!("{}: unreadable ({})", target.label(), path.display())
+            }
+        }
+    }
+}
+
 impl SyncOutcome {
     /// Whether this target refused to overwrite a hand-edited block.
     pub fn is_refused(&self) -> bool {
@@ -71,6 +116,49 @@ impl SyncOutcome {
             ),
         }
     }
+}
+
+/// Inspect one managed target without writing files or state.
+///
+/// This mirrors `sync_one`'s clobber and freshness decisions but deliberately
+/// refuses to adopt byte-identical unrecorded blocks. Status is a reporting
+/// surface, not a repair surface, so missing recorded ownership remains
+/// "never synced" until an install or explicit sync records hashes.
+pub fn inspect_target(
+    state_dir: &Path,
+    soul: &str,
+    target: SyncTarget,
+    path: &Path,
+    recorded: Option<&SyncHashes>,
+) -> TargetInspection {
+    let soul_path = paths::soul_path(state_dir);
+    let desired_block = compose_block(&soul_path, soul);
+    let desired_block_hash = sha256_hex(&desired_block);
+    let path = path.to_path_buf();
+
+    let Some(recorded) = recorded else {
+        return TargetInspection::NeverSynced { target, path };
+    };
+
+    let current_block = match read_current_block(&path) {
+        Ok(current_block) => current_block,
+        Err(_) => return TargetInspection::Unreadable { target, path },
+    };
+
+    let Some(current_block) = current_block else {
+        return TargetInspection::Stale { target, path };
+    };
+
+    let current_block_hash = sha256_hex(&current_block);
+    if current_block_hash == desired_block_hash {
+        return TargetInspection::InSync { target, path };
+    }
+
+    if current_block_hash != recorded.block_hash {
+        return TargetInspection::HandEdited { target, path };
+    }
+
+    TargetInspection::Stale { target, path }
 }
 
 /// Homes used to locate the managed prompt files.

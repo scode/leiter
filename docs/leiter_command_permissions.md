@@ -9,9 +9,9 @@ Claude Code has a permission system that prompts you before running shell comman
 to run a `leiter` CLI command, you'll get a confirmation dialog. Granting the `Bash(leiter:*)` permission tells Claude
 Code to allow any command matching `leiter *` to run without prompting.
 
-In practice, leiter needs to run CLI commands during normal operation — distilling session logs (`leiter soul distill`),
-recording preferences (`leiter soul instill ...`), marking logs as processed (`leiter soul mark-distilled`), and a few
-others. Without this permission, you'll be prompted to approve each of these individually, which gets tedious fast.
+In practice, leiter needs to run CLI commands during normal operation — distilling session logs (`leiter distill`),
+recording preferences (`leiter soul instill ...`), and a few others. Without this permission, you'll be prompted to
+approve each of these individually, which gets tedious fast.
 
 ## Why you'd want to grant it
 
@@ -31,12 +31,13 @@ while having a good understanding of what they'll do, provided you trust the too
 
 Here's what the leiter CLI can actually do:
 
-- **Read and write your soul file** (`leiter soul distill`, `leiter soul instill`, `leiter soul upgrade`) — this is
-  leiter's core function, so it's expected.
-- **Read session transcripts** (`leiter soul distill` reads saved logs from `~/.leiter/`, Claude Code transcripts under
+- **Read and write your soul file** (`leiter distill`, `leiter soul instill`, `leiter soul upgrade`) — this is leiter's
+  core function, so it's expected.
+- **Read session transcripts** (`leiter distill` reads saved logs from `~/.leiter/`, Claude Code transcripts under
   `<claude_home>/projects/`, and Codex rollouts under `<codex_home>/` when Codex distillation is enabled) — again, core
   function.
-- **Mark logs as processed** (`leiter soul mark-distilled`) — updates `last_distilled` in `~/.leiter/state.toml`.
+- **Mark logs as processed** (`leiter distill`, or the lower-level `leiter soul mark-distilled`) — updates
+  `last_distilled` in `~/.leiter/state.toml`.
 - **Manage Claude Code integration** (`leiter claude install`, `leiter claude uninstall`) — these modify skill files and
   could in principle be invoked by the agent, though in normal use you run these yourself from the terminal.
 - **Change leiter configuration** (`leiter config set`) — sets persistent config values.
@@ -44,9 +45,11 @@ Here's what the leiter CLI can actually do:
   commands are guaranteed to never become arbitrarily flexible — they will always do a bounded, predictable set of
   things that cannot be expanded through creative use of command-line arguments or environment variables.)
 
-The leiter binary does not make network requests and does not run other programs. It is a local-only tool that reads and
-writes a bounded set of known files: leiter state under `~/.leiter/`, Claude Code plugin files, Claude Code session
-transcripts under `<claude_home>/projects/`, and (when enabled) Codex rollout transcripts under `<codex_home>/`.
+The leiter binary does not make network requests. Most commands are local-only file operations, but `leiter distill`
+does run an agent CLI: by default `claude -p` with `Read`, `Edit`, and `Write` permissions scoped to the soul file, or
+the exact `agent_command` configured in `~/.leiter/leiter.toml` if you set one. Leiter itself reads and writes a bounded
+set of known files: leiter state under `~/.leiter/`, Claude Code plugin files, Claude Code session transcripts under
+`<claude_home>/projects/`, and (when enabled) Codex rollout transcripts under `<codex_home>/`.
 
 One risk vector worth mentioning: leiter respects a `LEITER_HOME` environment variable that overrides the default
 `~/.leiter` state directory. The agent could, accidentally or through a prompt injection attack, set this variable

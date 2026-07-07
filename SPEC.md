@@ -8,7 +8,10 @@ logs into a persistent "soul" — a set of agent instructions that shape future 
 
 The Claude agent does all the thinking. The `leiter` CLI is a thin helper that handles structured storage, timestamp
 management, and context injection. The agent reads files, writes summaries, edits the soul, and decides what to
-remember. The CLI never calls the Claude API.
+remember. Leiter never calls a model API directly. It does, however, orchestrate one: `leiter distill` invokes an agent
+CLI (`claude -p`) as a subprocess to do the soul-editing thinking. That is an intentional relaxation of the older "the
+CLI never touches a model" stance — leiter shells out to a harness that already owns authentication and model selection
+rather than talking to any API itself.
 
 ## Architecture
 
@@ -36,10 +39,10 @@ writing to the soul.
 │  "instill X" ──► leiter skill ──► leiter soul instill        │
 │                  ──► agent edits soul.md ──► leiter sync     │
 │                                                              │
-│  "distill" ──► leiter skill                                  │
-│                  ──► sub-agent: leiter soul distill          │
-│                  ──► sub-agent edits soul.md                 │
-│                  ──► agent: leiter soul mark-distilled       │
+│  "distill"/cron ──► leiter distill (headless)                │
+│                  ──► agent edits soul.md from transcripts    │
+│                  ──► leiter commits state + re-syncs blocks  │
+│                  (skill triggers it; cron runs it unattended)│
 │                                                              │
 │  "show soul" ──► leiter skill ──► leiter soul show           │
 │                  ──► agent displays verbatim                 │
@@ -103,8 +106,8 @@ is `~/.codex/`. The `leiter codex` subcommand accepts a `--codex-home <path>` fl
 - **`<claude_home>/skills/leiter/SKILL.md`** — the one consolidated leiter skill. It exists purely for auto-matching
   convenience; the underlying mechanism is always the CLI. Its description carries the trigger keywords (remember,
   learn, instill, always, never, distill, soul, upgrade) so Claude routes matching requests to it. Its body routes by
-  intent: instill → `leiter soul instill`; distill → the existing sub-agent flow (`leiter soul distill` in a sub-agent,
-  then `leiter soul mark-distilled` — a later revision repoints this at a standalone distill command); show →
+  intent: instill → `leiter soul instill`; distill → `leiter distill` (a single headless flow — the skill runs the
+  command directly, does not spawn a sub-agent, and never runs a mark step, since leiter commits its own state); show →
   `leiter soul
   show`, displayed verbatim in a fenced code block (keeping the existing fence-length instruction so
   backticks in the soul cannot break out of the fence); upgrade → `leiter soul upgrade` then
@@ -135,7 +138,7 @@ every `leiter sync`, unconditionally. For Codex it is `<codex_home>/AGENTS.md`, 
 The block opens with a short preamble and then inlines the soul body verbatim. The preamble states leiter's identity (a
 self-training system that learns across sessions), the resolved soul path (the state directory joined with `soul.md`),
 and how the agent should act on the user's language: instill on "remember"/"learn"/"always"/"never" (or similar) by
-running `leiter soul instill`; distill on request via the distillation flow; show the soul on request via
+running `leiter soul instill`; distill on request by running `leiter distill`; show the soul on request via
 `leiter soul show`; upgrade on request via `leiter soul upgrade`; and — the point that matters most for a delivery model
 built on a materialized copy — run `leiter sync` after any direct edit of the soul file, so the managed blocks are
 brought back in line. The soul body follows the preamble inside a backtick code fence whose length is computed at write
@@ -320,6 +323,9 @@ Logical shape:
 
 ```toml
 codex = false
+retention_warn_days = 21
+# agent_command is unset by default; when set it is an array of strings, e.g.
+# agent_command = ["claude", "-p", "--model", "opus", "--allowedTools", "Read(~/.leiter/soul.md),Edit(~/.leiter/soul.md),Write(~/.leiter/soul.md)"]
 ```
 
 `codex` defaults to `false` when the file is missing. When true, Codex support is active: it gates the Codex portions of
@@ -336,6 +342,17 @@ on this flag.
 The key `codex` replaces the older `enable_codex_experimental` with identical gating semantics. For backward
 compatibility, loading still accepts `enable_codex_experimental` as an alias (same meaning); saving always writes the
 new `codex` key, so a config loaded with the legacy name is rewritten to `codex` the next time leiter persists it.
+
+`retention_warn_days` defaults to `21` when absent. It sets the age threshold, in days, for the retention warning
+`leiter status` raises against undistilled external Claude sessions. The default sits deliberately below Claude Code's
+roughly 30-day session-store pruning window, so the warning gives lead time to distill a session before Claude Code
+deletes it out from under the scan.
+
+`agent_command` is unset by default; when unset, `leiter distill` uses its built-in `claude -p` command (see that
+command). When set, it is an array of strings that **replaces the entire agent command line**: the first element is the
+executable and the rest are its arguments. Leiter appends nothing to it — it only pipes the composed prompt on the
+child's stdin — so with `agent_command` set the user owns the full command line. Its two uses are the distill test seam
+(point it at a fake executable) and choosing the harness or model (e.g. adding `--model`, or swapping in `codex exec`).
 
 ### `~/.leiter/state.toml`
 
@@ -625,6 +642,132 @@ target's recorded `block_hash`, and the recorded `soul_hash` against the current
 **Output (stdout):** One line per target reporting its outcome — synced, already current, or refused (hand-edited, rerun
 with `--force`).
 
+### `leiter distill`
+
+The primary distillation mechanism: leiter scans the session stores, hands the new transcripts to a headless agent that
+edits the soul, and then commits its own bookkeeping. This is what the consolidated `leiter` skill's distill route runs,
+and — because it needs no interactive session — it is cron-able. The lower-level `leiter soul distill` and
+`leiter soul mark-distilled` remain for debugging and scan testing (see those commands), but this path never delegates
+the mark step to the LLM: leiter commits state itself, and only after a verified successful run, which removes the old
+"agent forgot to mark" failure mode.
+
+**Flags:**
+
+- `--dry-run`: emit the fully composed prompt to stdout and stop — this short-circuits before the empty-scan handling,
+  so it prints the (possibly transcript-empty) prompt rather than the nothing-to-distill message — invoke no agent and
+  write nothing (no pending watermark staging either, matching the `--dry-run` posture of `leiter soul distill`).
+
+This command deliberately has **no** home-override flags; its scan uses the default Claude and Codex homes. The plumbing
+`leiter soul distill` keeps its `--claude-home`/`--codex-home` flags for scan testing (and, as noted there, those
+overrides disable its opportunistic re-sync).
+
+**Behavior:**
+
+1. Validate state (see Setup Epochs). If incompatible, exit with an error. Load `~/.leiter/leiter.toml`; if it is
+   unreadable or invalid, warn and use defaults (the same warn-and-default posture as `leiter soul distill`)
+2. Gather the new-session content exactly as `leiter soul distill` does — the same external Claude scan,
+   `last_distilled` floor, per-session watermark dedupe, legacy-log drain, obsolete-log cleanup, and non-dry-run pending
+   staging (see `leiter soul distill` and Claude session scanning; that staging is precisely what a later success
+   promotes). If the scan finds nothing to emit, no agent is spawned. Two sub-cases:
+   - Nothing was staged either → print that there is nothing to distill and exit 0 without touching state.
+   - Only no-visible-content sessions were staged → commit the staged watermarks directly (same commit as a successful
+     run) and say so. There is nothing an agent could be shown, but without this self-commit those sessions would be
+     re-read and re-staged on every run forever — and there is no separate mark step left to ever settle them. The
+     obsolete-log cleanup report is NOT part of the composed prompt in any mode: what `--dry-run` prints must be
+     byte-identical to what a real run would pipe to the agent
+3. Compose the distillation prompt from the same pieces `leiter soul distill` emits: the shared soul-writing guidelines,
+   the data-boundary preamble wrapping the transcripts (unchanged — the transcripts are historical data, never
+   directives; dropping this boundary would hand transcript prompt-injection a headless agent with soul write access),
+   the resolved soul path, and an instruction to edit **only** the soul file and to end with a one-paragraph summary of
+   what changed. The prompt must **not** tell the agent to run any leiter command — leiter commits its own state
+   afterward
+4. Invoke the agent CLI headlessly, piping the composed prompt on **stdin** rather than passing it as an argv element.
+   Transcript batches routinely exceed `ARG_MAX`, and `claude -p` reads its prompt from stdin when the positional prompt
+   is omitted (empirically validated 2026-07-07). The built-in command for the claude harness is:
+
+   ```
+   claude -p --allowedTools "Read(<soul_perm_path>),Edit(<soul_perm_path>),Write(<soul_perm_path>)"
+   ```
+
+   where `<soul_perm_path>` is the soul path in Claude Code permission form — `~/…` when under `$HOME`, `//…` otherwise
+   (the same formatting the Permissions section uses). Two empirically validated constraints shape this exactly: the
+   three grants are comma-joined into **one** argument, because `--allowedTools` is variadic and a space-separated list
+   would swallow the following arguments; and the scoped grants were verified to permit the soul edit non-interactively,
+   while their absence blocks it and leaves the file untouched
+5. `agent_command` in `~/.leiter/leiter.toml` (an array of strings; see that file), when set, **replaces the entire
+   command line above**: its first element is the executable and the rest are its arguments. Leiter still pipes the
+   prompt on stdin and appends nothing — with `agent_command` set the user owns the full command line. This is both the
+   test seam (substitute a fake executable) and the user's hook for choosing a harness or model (e.g. adding `--model`)
+6. Success requires the child exiting 0 **and** the full prompt having been delivered on its stdin. A child that exits 0
+   after closing stdin early received a truncated prompt — committing watermarks for transcripts the agent never saw
+   would silently lose learning, so that case fails like any other:
+   - **On success:** first verify this run still owns the staged state — the staged `pending_scan_started_utc` must
+     equal the scan-start this run staged. A mismatch means a concurrent `leiter distill` (cron overlap) restaged after
+     this run's scan; committing would promote watermarks for sessions this run's agent never processed, so the
+     superseded run aborts without committing and exits non-zero, deferring to the newer run. (Concurrent runs' agents
+     may still both edit the soul — that lost-update is accepted and is the user's cron cadence to manage; state
+     integrity is what leiter guarantees.) Then commit state exactly as `leiter soul mark-distilled` would — set
+     `last_distilled` to the staged `pending_scan_started_utc`, promote `[claude.pending]` into `[claude.committed]`
+     always and `[codex.pending]` when `codex = true`, in a single atomic write — then opportunistically re-sync any
+     stale managed block (see Opportunistic re-sync; refusal warnings go to stderr, never stdout). Then print the
+     agent's stdout (its one-paragraph summary) followed by a confirmation line naming the new `last_distilled`, and
+     relay the agent's stderr to leiter's stderr (a successful run's diagnostics matter to cron users too). Finally, if
+     the legacy `~/.leiter/logs/` directory is now empty after obsolete-log cleanup, remove the directory itself. This
+     last step is new: the per-file obsolete cleanup only ever removed files, never the directory. A failing `rmdir` is
+     a warning, not a command failure
+   - **On non-zero exit, spawn failure** (e.g. the agent binary is missing from `PATH`)**, or truncated stdin
+     delivery:** print the agent's stderr and stdout, commit **nothing**, and exit non-zero. The pending watermarks
+     staged during the scan are left staged; that is harmless because they are never promoted without a successful run,
+     and the next `leiter distill` restages from current reality Relayed child output (both streams, all paths) is
+     stripped of C0 control characters other than newline and tab before it reaches leiter's own streams: the summary is
+     LLM-generated from transcript-derived content, and terminal escape sequences must not ride it into the user's
+     terminal or cron mail
+7. Retention cadence warning: when any external Claude session emitted this run has a file mtime older than
+   `retention_warn_days` (see `~/.leiter/leiter.toml`), log a warning (stderr) that distillation is running close to
+   Claude Code's retention pruning and should run more often. This is the cron-facing twin of the `leiter status`
+   retention warning — a user driving distillation from cron never sees status output, and stderr is what cron mails
+
+**Output (stdout):** On success, the agent's summary followed by the new-`last_distilled` confirmation line. On an empty
+scan, the "nothing to distill" message. Under `--dry-run`, the full composed prompt. Diagnostics and warnings go to
+stderr as usual.
+
+### `leiter status`
+
+A read-only report of leiter's distillation and soul-delivery health. It **never writes anything** — not the state file,
+and not even the opportunistic re-sync that other state-mutating commands perform (see the read-only exemption under
+Opportunistic re-sync). Reporting block staleness while silently healing it would make its own output unfalsifiable.
+
+Like `leiter distill`, this command has no home-override flags; its scan uses the default Claude and Codex homes.
+
+**Behavior:**
+
+1. Validate state (see Setup Epochs). An incompatible state (missing soul, corrupt or unsupported-version `state.toml`,
+   or a hard epoch mismatch) is an error, as for every other non-`session-end` command. Load `~/.leiter/leiter.toml`;
+   warn and use defaults if it is unreadable or invalid
+2. Run the same external Claude scan and legacy-log dedupe as `leiter soul distill`, but emit and stage nothing, to
+   count the sessions a distill would currently process (discovered-and-would-emit external sessions plus legacy logs,
+   after dedupe)
+3. When `codex = true`, run the Codex scan the same read-only way to count undistilled Codex sessions
+4. For each managed block target (`CLAUDE.md`, plus `AGENTS.md` when `codex = true`), compare the recorded `soul_hash`
+   against the current soul body (stale copy?) and the on-disk block against the recorded `block_hash` (hand-edited
+   inside the managed span?)
+5. Compute the retention warning: whether any undistilled external Claude session's transcript file has an mtime older
+   than `retention_warn_days` days (see `~/.leiter/leiter.toml`; default 21)
+
+**Output (stdout):** A human-readable report of the undistilled Claude session count, the undistilled Codex count when
+Codex is enabled, per-target managed-block state, and — when triggered — the retention warning naming the at-risk
+sessions. The per-target block states are: **in sync**, **stale** (recorded soul hash behind the current soul, or the
+block missing from the file), **hand-edited** (block present but not matching the recorded hash), **never synced** (no
+recorded hashes for the target), and **unreadable** (the target file could not be read or its sentinel structure is
+malformed). Unreadable is deliberately distinct from hand-edited: "hand-edited" implies `leiter sync --force` is the
+remedy, which is wrong advice for a permissions problem or a mangled sentinel pair.
+
+**Exit status:** `leiter status` always exits 0 once state validates. The conditions it reports — staleness, hand edits,
+pending sessions, retention pressure — are informational, not failures: it is a status report, not a health check. (An
+incompatible `state.toml`, from step 1, is the one non-zero path, since status cannot report on a state it cannot
+verify.) A scan-side read failure (e.g. an unreadable legacy log file) does not abort the report: status prints what it
+could determine, notes the failure as a warning line, and still exits 0.
+
 ### `leiter claude agent-setup-instructions`
 
 Outputs natural language instructions for the agent to configure Claude Code hooks in `~/.claude/settings.json`. This is
@@ -726,22 +869,29 @@ and are ignored):
 4. Generate the final filename using the current UTC timestamp: `~/.leiter/logs/<YYYYMMDDTHHMMSSZ>-<session_id>.jsonl`
 5. Atomically rename the temporary file to the final path
 
+A missing `~/.leiter/logs/` directory is recreated, not an error. A successful `leiter distill` removes the logs
+directory once it drains empty, and this hook stays configured through the transitional revisions — the two would
+otherwise interact as "first drained distill permanently breaks every later session save". The hook's charter is that
+losing session data is worse than anything else it could do, so it makes the directory it needs.
+
 **Output:** None. A confirmation message with the saved file path is logged to stderr (via `tracing`). The SessionEnd
 hook fires after the session terminates, so no agent is present to read stdout.
 
 **No-op case:** If the transcript file does not exist (e.g., Claude Code does not write a transcript for zero-turn
 sessions), log a debug message and exit successfully. No log file is created.
 
-**Errors:** If `~/.leiter/logs/` does not exist, the transcript file exists but cannot be read, the write fails, or the
-atomic rename fails, print an error to stderr and exit with a non-zero code. Clean up the temporary file on any error.
+**Errors:** If the transcript file exists but cannot be read, the write fails, or the atomic rename fails, print an
+error to stderr and exit with a non-zero code. Clean up the temporary file on any error.
 
 ### `leiter soul distill`
 
-Outputs session logs that haven't been processed since the last distillation. In this revision it draws from two Claude
-sources that coexist: the legacy `~/.leiter/logs/` files copied by the SessionEnd hook, and the external scan of Claude
-Code's own session store (see Claude session scanning). Both stay active — the hook still runs — and their output is
-deduplicated by session id so a session present in both places is emitted once. A later revision removes the hook and
-with it the legacy path.
+Lower-level distillation plumbing, exposed for debugging and scan testing; `leiter distill` is the primary mechanism
+most users and the consolidated skill invoke (see `leiter distill`), and it reuses this command's scan, staging, and
+prompt composition rather than duplicating them. Outputs session logs that haven't been processed since the last
+distillation. In this revision it draws from two Claude sources that coexist: the legacy `~/.leiter/logs/` files copied
+by the SessionEnd hook, and the external scan of Claude Code's own session store (see Claude session scanning). Both
+stay active — the hook still runs — and their output is deduplicated by session id so a session present in both places
+is emitted once. A later revision removes the hook and with it the legacy path.
 
 **Flags:**
 
@@ -822,6 +972,12 @@ with it the legacy path.
   content of all new session transcripts wrapped in `<session-transcripts>` /
   `<session source="claude|codex" file="...">` XML-like tags
 - If no new logs: a message indicating there are no new session logs to process
+
+The envelope's closing tokens are neutralized inside transcript bodies: any literal `</session>` or
+`</session-transcripts>` occurring in rendered transcript content is broken (`</` becomes `< /`) before emission, the
+same defense the managed-block writer applies to its sentinels. Without this, a transcript containing a forged closing
+tag would place everything after it outside the data boundary — text that reads as prompt rather than quoted data, which
+matters most on the headless `leiter distill` path where the consumer is an autonomous agent holding soul write access.
 
 **Log pre-processing:** JSONL session logs are pre-processed to extract user-visible content — user messages, assistant
 text responses, and tool action summaries — filtering out tool results, progress events, thinking blocks, and other
@@ -910,12 +1066,14 @@ If there are no obsolete logs, nothing is printed about cleanup. Codex rollout f
 
 ### `leiter soul mark-distilled`
 
-Commits the last distill run's cutoff: `last_distilled` advances to the scan-start time that run staged in
-`pending_scan_started_utc`, not to the mark-time wall clock. The distinction closes a loss window — a session created
-after distill's scan but before the mark would sit below a mark-time floor forever (no committed watermark, mtime too
-old), and the same window would delete hook-copied logs as obsolete without ever distilling them. A scan-start cutoff
-guarantees everything born after the scan is the next run's responsibility. This is the only way `last_distilled` should
-be updated — the agent must never edit it manually. This command never writes `soul.md`.
+Lower-level plumbing paired with `leiter soul distill`; the headless `leiter distill` path performs this same commit
+itself on a successful run and never delegates it to the LLM (see `leiter distill`). Commits the last distill run's
+cutoff: `last_distilled` advances to the scan-start time that run staged in `pending_scan_started_utc`, not to the
+mark-time wall clock. The distinction closes a loss window — a session created after distill's scan but before the mark
+would sit below a mark-time floor forever (no committed watermark, mtime too old), and the same window would delete
+hook-copied logs as obsolete without ever distilling them. A scan-start cutoff guarantees everything born after the scan
+is the next run's responsibility. This is the only way `last_distilled` should be updated — the agent must never edit it
+manually. This command never writes `soul.md`.
 
 **Behavior:**
 
@@ -1189,16 +1347,19 @@ soul file path. Empty `permissions.allow` arrays and empty `permissions` objects
 
 ### Distillation
 
-1. User says "distill" or similar — the agent auto-matches the consolidated `leiter` skill (its distill route)
-2. The skill spawns a sub-agent to handle distillation (keeps session log output out of the main context)
-3. Sub-agent runs `leiter soul distill`, reads the output, updates the soul with new learnings, and returns a concise
-   summary of what it added, modified, or removed
-4. After the sub-agent completes successfully, the main agent always runs `leiter soul mark-distilled` — even if the
-   sub-agent found no new preferences to add. This advances `last_distilled` and commits the external Claude scan's
-   `pending` watermarks so unchanged sessions are not re-processed; when Codex support is enabled it also commits the
-   Codex `pending` watermarks. `mark-distilled` also opportunistically re-syncs the managed blocks, so a soul edited
-   during distillation reaches future sessions
-5. Main agent relays the sub-agent's summary to the user so they can see what distillation changed
+1. The user asks to distill (the agent auto-matches the consolidated `leiter` skill's distill route), or a cron job runs
+   `leiter distill` unattended — it is the same command either way
+2. `leiter distill` scans both harnesses' session stores, drains any legacy `~/.leiter/logs/`, and composes a prompt of
+   the soul-writing guidelines plus the new transcripts (inside the data-boundary preamble) plus the resolved soul path
+3. It invokes a headless agent (`claude -p` by default, or the configured `agent_command`) with tool permissions scoped
+   to the soul file. The agent edits the soul and prints a one-paragraph summary of what changed
+4. On a successful (zero-exit) run, leiter commits its own bookkeeping — advancing `last_distilled`, promoting the
+   Claude (and, when enabled, Codex) `pending` watermarks, and opportunistically re-syncing the managed blocks so the
+   edited soul reaches future sessions — then removes the now-empty legacy logs directory if the drain emptied it. The
+   agent never runs `leiter soul mark-distilled` in this flow
+5. The user sees the agent's summary followed by the new `last_distilled`. Because the command is non-interactive, it
+   can run from cron or a systemd timer on whatever cadence keeps sessions distilled inside Claude Code's retention
+   window
 
 ## Non-Goals (For Now)
 

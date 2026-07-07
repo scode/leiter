@@ -10,12 +10,30 @@ use crate::fs_atomic::write_atomic;
 
 /// User-visible leiter settings.
 ///
-/// Only the current `codex` key is ever serialized, so persisting a config
-/// always rewrites the file into the modern shape.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+/// Saving rewrites legacy aliases into the current shape. `agent_command` is
+/// omitted when unset so the default distill agent stays implicit, while the
+/// retention threshold is always materialized with its effective value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LeiterConfig {
     /// Gate for Codex rollout distillation and AGENTS.md soul delivery.
     pub codex: bool,
+    /// Whole command line used by `leiter distill` instead of the built-in
+    /// Claude invocation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_command: Option<Vec<String>>,
+    /// Age threshold, in days, for warning about undistilled Claude sessions
+    /// that are nearing Claude Code's external transcript retention window.
+    pub retention_warn_days: u32,
+}
+
+impl Default for LeiterConfig {
+    fn default() -> Self {
+        Self {
+            codex: false,
+            agent_command: None,
+            retention_warn_days: default_retention_warn_days(),
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for LeiterConfig {
@@ -41,6 +59,10 @@ impl<'de> Deserialize<'de> for LeiterConfig {
             codex: Option<bool>,
             #[serde(default)]
             enable_codex_experimental: Option<bool>,
+            #[serde(default)]
+            agent_command: Option<Vec<String>>,
+            #[serde(default = "default_retention_warn_days")]
+            retention_warn_days: u32,
         }
 
         let raw = Raw::deserialize(deserializer)?;
@@ -56,8 +78,16 @@ impl<'de> Deserialize<'de> for LeiterConfig {
             (None, Some(legacy)) => legacy,
             (None, None) => false,
         };
-        Ok(Self { codex })
+        Ok(Self {
+            codex,
+            agent_command: raw.agent_command,
+            retention_warn_days: raw.retention_warn_days,
+        })
     }
+}
+
+fn default_retention_warn_days() -> u32 {
+    21
 }
 
 /// Load `leiter.toml`, warning and falling back to defaults on any failure.
@@ -114,6 +144,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let config = LeiterConfig::load(&tmp.path().join("leiter.toml")).unwrap();
         assert!(!config.codex);
+        assert_eq!(config.agent_command, None);
+        assert_eq!(config.retention_warn_days, 21);
     }
 
     #[test]
@@ -121,7 +153,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("leiter.toml");
 
-        let config = LeiterConfig { codex: true };
+        let config = LeiterConfig {
+            codex: true,
+            ..Default::default()
+        };
         config.save(&path).unwrap();
 
         let loaded = LeiterConfig::load(&path).unwrap();
@@ -136,6 +171,25 @@ mod tests {
                 .unwrap()
                 .contains("enable_codex_experimental")
         );
+    }
+
+    #[test]
+    fn agent_command_and_retention_days_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("leiter.toml");
+
+        let config = LeiterConfig {
+            codex: false,
+            agent_command: Some(vec!["/tmp/fake-agent".to_string(), "--flag".to_string()]),
+            retention_warn_days: 14,
+        };
+        config.save(&path).unwrap();
+
+        let loaded = LeiterConfig::load(&path).unwrap();
+        assert_eq!(loaded, config);
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("retention_warn_days = 14"));
+        assert!(raw.contains("agent_command = ["));
     }
 
     #[test]

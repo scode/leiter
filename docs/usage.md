@@ -33,9 +33,9 @@ tend to ask for specific kinds of code review.
 
 ### Manual distillation
 
-Run `/leiter-distill` in a Claude Code session. This spawns a sub-agent to read through your recent transcripts, in a
-separate context to keep raw transcript data out of your main session. You can also just say "distill" or similar
-natural language — the agent auto-matches the skill.
+Say "distill" or similar natural language in a Claude Code session, or run `leiter distill` yourself (from a shell or
+cron). Leiter starts a headless agent to read through recent transcripts, update the soul, and commit its own
+distillation bookkeeping after the agent succeeds.
 
 ### Automatic distillation
 
@@ -69,4 +69,5 @@ The file is pure markdown. CLI-managed metadata lives in `~/.leiter/state.toml` 
 also edit it directly if you want to reorganize, remove entries, or add things by hand. Changes take effect on the next
 session.
 
-`last_distilled` is updated only by `leiter soul mark-distilled`. Do not edit `state.toml` by hand.
+`last_distilled` is updated by `leiter distill` after a verified successful run, and by the lower-level
+`leiter soul mark-distilled` plumbing command. Do not edit `state.toml` by hand.

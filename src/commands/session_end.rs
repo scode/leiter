@@ -2,11 +2,14 @@
 //!
 //! Reads the SessionEnd hook JSON from stdin (which includes `session_id` and
 //! `transcript_path`), then copies the transcript to the leiter logs directory.
+//! The logs directory is recreated if a previous distill drained and removed
+//! it; the hook stays installed across that transition and must keep saving
+//! later sessions.
 
 use std::io::{Read, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::Deserialize;
 use tracing::{debug, info};
@@ -23,9 +26,8 @@ struct SessionEndInput {
 pub fn run(state_dir: &Path, input: &mut impl Read) -> Result<()> {
     let logs_dir = paths::logs_dir(state_dir);
 
-    if !logs_dir.is_dir() {
-        bail!("logs directory does not exist: {}", logs_dir.display());
-    }
+    std::fs::create_dir_all(&logs_dir)
+        .with_context(|| format!("failed to create logs directory: {}", logs_dir.display()))?;
 
     let mut raw = String::new();
     input
@@ -124,7 +126,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_logs_dir_errors() {
+    fn missing_logs_dir_is_recreated() {
         let tmp = tempfile::tempdir().unwrap();
         let transcript_file = tempfile::NamedTempFile::new().unwrap();
         fs::write(transcript_file.path(), b"data").unwrap();
@@ -134,14 +136,12 @@ mod tests {
             "transcript_path": transcript_file.path().to_str().unwrap(),
         });
         let mut input = Cursor::new(json.to_string().into_bytes());
-        let result = run(tmp.path(), &mut input);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("logs directory does not exist")
-        );
+        run(tmp.path(), &mut input).unwrap();
+
+        let entries: Vec<_> = fs::read_dir(paths::logs_dir(tmp.path())).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+        let content = fs::read_to_string(entries[0].as_ref().unwrap().path()).unwrap();
+        assert_eq!(content, "data");
     }
 
     /// Claude Code doesn't write a transcript file for zero-turn sessions

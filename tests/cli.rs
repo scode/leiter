@@ -99,6 +99,39 @@ fn parses_soul_distill() {
 }
 
 #[test]
+fn parses_top_level_distill_dry_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    leiter(tmp.path())
+        .args(["claude", &claude_home_flag(claude_tmp.path()), "install"])
+        .assert()
+        .success();
+
+    leiter(tmp.path())
+        .args(["distill", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Soul file:"))
+        .stdout(predicate::str::contains("No new session logs to process"));
+}
+
+#[test]
+fn parses_status() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    leiter(tmp.path())
+        .args(["claude", &claude_home_flag(claude_tmp.path()), "install"])
+        .assert()
+        .success();
+
+    leiter(tmp.path())
+        .args(["status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Claude undistilled sessions:"));
+}
+
+#[test]
 fn parses_hook_nudge() {
     let tmp = tempfile::tempdir().unwrap();
     leiter(tmp.path())

@@ -582,9 +582,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let claude_tmp = tempfile::tempdir().unwrap();
         let codex_tmp = tempfile::tempdir().unwrap();
-        LeiterConfig { codex: true }
-            .save(&paths::leiter_config_path(tmp.path()))
-            .unwrap();
+        LeiterConfig {
+            codex: true,
+            ..Default::default()
+        }
+        .save(&paths::leiter_config_path(tmp.path()))
+        .unwrap();
 
         let mut out = Vec::new();
         run(tmp.path(), claude_tmp.path(), codex_tmp.path(), &mut out).unwrap();
@@ -628,9 +631,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let claude_tmp = tempfile::tempdir().unwrap();
         let codex_tmp = tempfile::tempdir().unwrap();
-        LeiterConfig { codex: true }
-            .save(&paths::leiter_config_path(tmp.path()))
-            .unwrap();
+        LeiterConfig {
+            codex: true,
+            ..Default::default()
+        }
+        .save(&paths::leiter_config_path(tmp.path()))
+        .unwrap();
 
         run(
             tmp.path(),
