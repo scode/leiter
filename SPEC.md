@@ -1117,6 +1117,36 @@ in full. Emitting the whole session on any change is what handles a session dist
 Code materializes a resumed session as a **new** transcript file that duplicates the prior history, so re-emitting in
 full keeps the LLM's view complete rather than stitching deltas.
 
+**Self-session exclusion:** the headless `leiter distill` child is itself an agent session, and its transcript —
+containing the full distill prompt, i.e. every transcript emitted that cycle — lands in a session store like any other.
+Without an exclusion, the next scan emits that transcript, whose embedded payload contains the previous cycle's payload,
+and so on: prompt size accumulates without bound across cycles until the agent rejects the prompt outright and
+distillation is permanently wedged (observed live: a few cycles reached several million tokens). The rule: the headless
+prompt begins with a fixed sentinel line, and a session is classified as leiter's own child exactly when the **first
+user message of its transcript begins with that sentinel** — the position occupied by the prompt leiter piped in, and a
+position that no injected tool output, fetched web page, quoted document, or soul-synced block content can ever occupy.
+Detection is deliberately positional, NOT substring-anywhere: a sentinel appearing later in a transcript (pasted, echoed
+by a tool, embedded in an emitted payload, or leaked into the soul and thence into every session via the managed block)
+is inert, because content-based matching would hand prompt injection a silent suppress-this-session-from-learning
+primitive and, via the soul-sync channel, a global learning shutdown. The remaining false-positive is exactly one shape:
+a session whose very first prompt characters are the sentinel, which cannot happen by accident.
+
+Child classification applies to every source the scan can emit from, because the child's transcript lands wherever
+`agent_command` points: the external Claude scan (default `claude -p` children), the Codex rollout scan (a `codex exec`
+`agent_command` writes the child into the Codex session store; the check runs against the rollout's first user-role
+input), and the legacy `~/.leiter/logs/` rendering (a still-hooked migrating box's SessionEnd tombstone copies the
+child's raw transcript into logs, and an unaccounted copy would otherwise re-emit the very payload whose size wedged the
+previous run). A classified child in a watermarked store is recorded as processed **without emission** — its content is
+synthetic (leiter's own prompt plus the agent's summary), so nothing is lost; a classified child among the legacy logs
+is simply not rendered, and the ordinary drain lifecycle deletes it. Excluded session ids are named in a log line, not
+silently dropped.
+
+`leiter distill --dry-run` replaces **every** occurrence of the sentinel in its printed output (the first line and any
+payload-borne straggler), so a session that merely inspected the prompt cannot classify as a child even in principle.
+The interactive `leiter soul distill` payload deliberately carries no sentinel: the session that ran it also contains
+organic content worth learning, and its one-time payload re-feed is bounded because the recursive compounding only ever
+happens through headless child transcripts, which the exclusion stops in every channel.
+
 The `last_distilled` floor guards the first scan-enabled distill from re-ingesting history the soul already learned.
 Sessions distilled through the old hook-copied-logs flow are still sitting in the Claude home within Claude Code's
 retention window, so without a floor the first external scan would re-emit all of them. The rule: a discovered session

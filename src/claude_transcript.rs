@@ -13,6 +13,37 @@ use std::io::Write;
 use anyhow::Result;
 use serde_json::Value;
 
+use crate::templates::DISTILL_PROMPT_SENTINEL;
+
+const DISTILL_CHILD_SCAN_LIMIT: usize = 32;
+
+/// Classify Claude-format JSONL transcripts by leiter's sentinel-first prompt contract.
+///
+/// This deliberately inspects only the first user message, and only whether
+/// that message begins with the headless distill sentinel. Later appearances
+/// are ordinary transcript content: they may be pasted by a user, quoted by an
+/// assistant, or carried inside an earlier distill payload, and must not be
+/// allowed to suppress the whole session from learning.
+pub(crate) fn is_distill_child_transcript(content: &str) -> bool {
+    for line in content.lines().take(DISTILL_CHILD_SCAN_LIMIT) {
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+
+        if val.get("type").and_then(Value::as_str) != Some("user") {
+            continue;
+        }
+
+        return val
+            .get("message")
+            .and_then(|message| message.get("content"))
+            .and_then(first_message_text)
+            .is_some_and(|text| text.starts_with(DISTILL_PROMPT_SENTINEL));
+    }
+
+    false
+}
+
 /// Render a Claude JSONL transcript into the stable text form used for soul distillation.
 ///
 /// This is the in-memory companion to [`filter_session_log`]. Callers that need
@@ -105,6 +136,27 @@ fn extract_text(content_val: &Value) -> Option<String> {
     }
 }
 
+/// Extract the first text unit from a message content field.
+///
+/// This is narrower than [`extract_text`] on purpose. Distill-child detection
+/// is a positional classifier for the prompt leiter piped into stdin, so only
+/// the first string or first text block can carry the sentinel contract. Text
+/// blocks later in the array are treated the same as later transcript turns:
+/// visible content, but not provenance.
+fn first_message_text(content_val: &Value) -> Option<&str> {
+    if let Some(s) = content_val.as_str() {
+        return Some(s);
+    }
+
+    content_val.as_array()?.iter().find_map(|block| {
+        if block.get("type").and_then(Value::as_str) == Some("text") {
+            block.get("text").and_then(Value::as_str)
+        } else {
+            None
+        }
+    })
+}
+
 /// Build a one-line summary for a Claude `tool_use` content block.
 ///
 /// Distillation needs to know that the assistant used a tool and roughly what
@@ -154,4 +206,72 @@ fn extract_tool_summaries(content_val: &Value, out: &mut impl Write) -> Result<(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line(value: Value) -> String {
+        serde_json::to_string(&value).unwrap()
+    }
+
+    fn user(content: Value) -> String {
+        line(serde_json::json!({"type": "user", "message": {"content": content}}))
+    }
+
+    fn assistant(text: &str) -> String {
+        line(serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": text}]}
+        }))
+    }
+
+    #[test]
+    fn sentinel_at_start_of_first_user_message_classifies_child() {
+        let transcript = user(Value::String(format!("{DISTILL_PROMPT_SENTINEL}\npayload")));
+        assert!(is_distill_child_transcript(&transcript));
+    }
+
+    #[test]
+    fn sentinel_at_start_of_first_user_text_block_classifies_child() {
+        let transcript = user(serde_json::json!([
+            {"type": "thinking", "text": "ignored"},
+            {"type": "text", "text": format!("{DISTILL_PROMPT_SENTINEL}\npayload")}
+        ]));
+        assert!(is_distill_child_transcript(&transcript));
+    }
+
+    #[test]
+    fn sentinel_later_in_user_transcript_is_inert() {
+        let transcript = [
+            user(Value::String("organic first prompt".to_string())),
+            user(Value::String(format!(
+                "later pasted {DISTILL_PROMPT_SENTINEL}"
+            ))),
+        ]
+        .join("\n");
+
+        assert!(!is_distill_child_transcript(&transcript));
+    }
+
+    #[test]
+    fn assistant_quoting_sentinel_is_inert() {
+        let transcript = [
+            assistant(&format!("quoted {DISTILL_PROMPT_SENTINEL}")),
+            user(Value::String("organic first prompt".to_string())),
+        ]
+        .join("\n");
+
+        assert!(!is_distill_child_transcript(&transcript));
+    }
+
+    #[test]
+    fn sentinel_not_at_start_of_first_user_message_is_inert() {
+        let transcript = user(Value::String(format!(
+            "prefix before {DISTILL_PROMPT_SENTINEL}"
+        )));
+
+        assert!(!is_distill_child_transcript(&transcript));
+    }
 }

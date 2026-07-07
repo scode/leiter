@@ -15,6 +15,9 @@ use serde_json::Value;
 use tracing::warn;
 
 use crate::state::SessionWatermark;
+use crate::templates::DISTILL_PROMPT_SENTINEL;
+
+const DISTILL_CHILD_SCAN_LIMIT: usize = 32;
 
 /// Canonicalized Codex session content that is ready to include in
 /// `leiter soul distill` output.
@@ -33,6 +36,13 @@ pub struct DistilledCodexSession {
     pub sort_timestamp: DateTime<Utc>,
     /// User-visible transcript text after Codex-specific canonicalization.
     pub rendered: String,
+    /// Whether positional sentinel classification marks this as leiter's own child.
+    ///
+    /// This is not provenance metadata. It means the rollout's first user-role
+    /// input begins with leiter's headless distill sentinel. A sentinel later
+    /// in the rollout is ordinary transcript content and must not suppress
+    /// learning for the session.
+    pub is_distill_child: bool,
     /// File-state snapshot to stage or commit after distillation.
     pub watermark: SessionWatermark,
 }
@@ -327,6 +337,7 @@ fn parse_changed_session(candidate: CodexCandidate) -> Result<Option<DistilledCo
             candidate.path.display()
         )
     })?;
+    let is_distill_child = is_distill_child_rollout(&content);
 
     let mut rendered_items = Vec::new();
     let mut latest_event_timestamp_utc = None;
@@ -347,8 +358,10 @@ fn parse_changed_session(candidate: CodexCandidate) -> Result<Option<DistilledCo
             });
         }
 
-        for item in canonicalize_line(&val) {
-            push_unique(&mut rendered_items, item);
+        if !is_distill_child {
+            for item in canonicalize_line(&val) {
+                push_unique(&mut rendered_items, item);
+            }
         }
     }
 
@@ -373,8 +386,44 @@ fn parse_changed_session(candidate: CodexCandidate) -> Result<Option<DistilledCo
             .session_timestamp_utc
             .unwrap_or(candidate.mtime_utc),
         rendered,
+        is_distill_child,
         watermark,
     }))
+}
+
+/// Classify Codex rollouts by the same sentinel-first contract as Claude transcripts.
+///
+/// Codex stores user input as `response_item` message payloads rather than
+/// top-level user records. The classifier stops at the first user-role message
+/// in the bounded header region and checks only the first string/text content
+/// unit. Later sentinel appearances are data, not a reason to hide the
+/// session from future learning.
+fn is_distill_child_rollout(content: &str) -> bool {
+    for line in content.lines().take(DISTILL_CHILD_SCAN_LIMIT) {
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+
+        let payload = match val.get("type").and_then(Value::as_str) {
+            Some("response_item") => val.get("payload"),
+            _ => None,
+        };
+        let Some(payload) = payload else {
+            continue;
+        };
+        if payload.get("type").and_then(Value::as_str) != Some("message")
+            || payload.get("role").and_then(Value::as_str) != Some("user")
+        {
+            continue;
+        }
+
+        return payload
+            .get("content")
+            .and_then(first_message_text)
+            .is_some_and(|text| text.starts_with(DISTILL_PROMPT_SENTINEL));
+    }
+
+    false
 }
 
 /// Append a canonicalized transcript line unless it is empty or an immediate
@@ -514,6 +563,27 @@ fn extract_message_text(payload: &Value) -> Vec<String> {
     } else {
         vec![parts.join("\n\n")]
     }
+}
+
+/// Extract the first text-bearing content unit from a Codex message payload.
+///
+/// This helper is intentionally narrower than [`extract_message_text`]:
+/// sentinel classification is bound to the first prompt bytes, not to any text
+/// that appears later in a multipart message.
+fn first_message_text(content: &Value) -> Option<&str> {
+    if let Some(s) = content.as_str() {
+        return Some(s);
+    }
+
+    content
+        .as_array()?
+        .iter()
+        .find_map(|block| match block.get("type").and_then(Value::as_str) {
+            Some("input_text" | "output_text" | "text" | "summary_text") => {
+                block.get("text").and_then(Value::as_str)
+            }
+            _ => None,
+        })
 }
 
 /// Build a compact one-line summary for a Codex function call payload.
@@ -681,6 +751,97 @@ mod tests {
         assert!(rendered.contains("[assistant tool]: exec_command(cargo test)"));
         assert!(rendered.contains("[assistant]: Inspecting files"));
         assert!(rendered.contains("[assistant]: done"));
+    }
+
+    #[test]
+    fn distill_child_rollout_has_empty_rendered_content_but_is_returned() {
+        let home = tempfile::tempdir().unwrap();
+        write_rollout(
+            home.path(),
+            "sessions/2026/03/07/child.jsonl",
+            &[
+                session_meta("sess", "2026-03-07T18:00:00Z"),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T18:00:01Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": format!("{DISTILL_PROMPT_SENTINEL}\nchild payload")}]
+                    }
+                }),
+            ],
+        );
+
+        let sessions = collect_changed_sessions(home.path(), &BTreeMap::new());
+
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].is_distill_child);
+        assert!(sessions[0].rendered.is_empty());
+    }
+
+    #[test]
+    fn sentinel_later_in_codex_rollout_is_inert() {
+        let home = tempfile::tempdir().unwrap();
+        write_rollout(
+            home.path(),
+            "sessions/2026/03/07/organic.jsonl",
+            &[
+                session_meta("sess", "2026-03-07T18:00:00Z"),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T18:00:01Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "organic first prompt"}]
+                    }
+                }),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T18:00:02Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": format!("later {DISTILL_PROMPT_SENTINEL}")}]
+                    }
+                }),
+            ],
+        );
+
+        let sessions = collect_changed_sessions(home.path(), &BTreeMap::new());
+
+        assert_eq!(sessions.len(), 1);
+        assert!(!sessions[0].is_distill_child);
+        assert!(sessions[0].rendered.contains("organic first prompt"));
+        assert!(sessions[0].rendered.contains(DISTILL_PROMPT_SENTINEL));
+    }
+
+    #[test]
+    fn sentinel_not_at_start_of_first_codex_user_input_is_inert() {
+        let home = tempfile::tempdir().unwrap();
+        write_rollout(
+            home.path(),
+            "sessions/2026/03/07/organic.jsonl",
+            &[
+                session_meta("sess", "2026-03-07T18:00:00Z"),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T18:00:01Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": format!("prefix {DISTILL_PROMPT_SENTINEL}")}]
+                    }
+                }),
+            ],
+        );
+
+        let sessions = collect_changed_sessions(home.path(), &BTreeMap::new());
+
+        assert_eq!(sessions.len(), 1);
+        assert!(!sessions[0].is_distill_child);
+        assert!(sessions[0].rendered.contains(DISTILL_PROMPT_SENTINEL));
     }
 
     #[test]
