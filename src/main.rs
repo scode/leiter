@@ -1,3 +1,5 @@
+mod claude_sessions;
+mod claude_transcript;
 mod codex;
 mod commands;
 mod config;
@@ -84,6 +86,12 @@ pub enum SoulCommand {
         /// Report obsolete files without deleting them
         #[arg(long)]
         dry_run: bool,
+        /// Override Claude home scanned for external sessions
+        #[arg(long)]
+        claude_home: Option<std::path::PathBuf>,
+        /// Override Codex home scanned for rollout sessions
+        #[arg(long)]
+        codex_home: Option<std::path::PathBuf>,
     },
     /// Output soul contents wrapped in XML boundary tags
     Show,
@@ -177,8 +185,18 @@ fn main() -> Result<()> {
             SoulCommand::Instill { text } => {
                 commands::instill::run(&state_dir, &mut std::io::stdout(), text)?;
             }
-            SoulCommand::Distill { dry_run } => {
-                commands::distill::run(&state_dir, &mut std::io::stdout(), *dry_run)?;
+            SoulCommand::Distill {
+                dry_run,
+                claude_home,
+                codex_home,
+            } => {
+                commands::distill::run(
+                    &state_dir,
+                    &mut std::io::stdout(),
+                    *dry_run,
+                    claude_home.as_deref(),
+                    codex_home.as_deref(),
+                )?;
             }
             SoulCommand::Upgrade => {
                 commands::soul_upgrade::run(&state_dir, &mut std::io::stdout())?;

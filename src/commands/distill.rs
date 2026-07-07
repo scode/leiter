@@ -34,17 +34,23 @@
 //! changes. If parsing or field access fails, we include the raw line rather
 //! than silently dropping it.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use serde_json::Value;
+use chrono::SubsecRound;
 use tracing::{debug, warn};
 
+use crate::claude_sessions::{
+    ClaudeScanOutcome, DistilledClaudeSession,
+    collect_changed_sessions as collect_claude_changed_sessions,
+};
+use crate::claude_transcript::filter_session_log;
 use crate::codex::{DistilledCodexSession, collect_changed_sessions};
 use crate::config::LeiterConfig;
-use crate::log_filename::collect_log_entries;
+use crate::log_filename::{ParsedLogEntry, collect_log_entries};
 use crate::paths;
 use crate::state::LeiterState;
 use crate::templates::{DISTILL_DATA_PREAMBLE, SOUL_WRITING_GUIDELINES};
@@ -56,11 +62,19 @@ use crate::validation::{ValidationStatus, validate_state};
 /// session logs whose filename timestamps are >= `last_distilled` from state, sorted
 /// chronologically. Then deletes obsolete logs (timestamps strictly before
 /// `last_distilled`). With `dry_run`, reports what would be deleted instead.
-pub fn run(state_dir: &Path, out: &mut impl Write, dry_run: bool) -> Result<()> {
+pub fn run(
+    state_dir: &Path,
+    out: &mut impl Write,
+    dry_run: bool,
+    claude_home_override: Option<&Path>,
+    codex_home_override: Option<&Path>,
+) -> Result<()> {
     let config = load_config_best_effort(state_dir);
-    let codex_home = resolve_codex_home(config.enable_codex_experimental);
+    let claude_home = resolve_claude_home(claude_home_override);
+    let codex_home = resolve_codex_home(codex_home_override, config.enable_codex_experimental);
     distill_with_inputs(
         state_dir,
+        claude_home.as_deref(),
         codex_home.as_deref(),
         config.enable_codex_experimental,
         out,
@@ -77,12 +91,17 @@ pub fn run(state_dir: &Path, out: &mut impl Write, dry_run: bool) -> Result<()> 
 /// state.
 fn distill_with_inputs(
     state_dir: &Path,
+    claude_home: Option<&Path>,
     codex_home: Option<&Path>,
     codex_enabled: bool,
     out: &mut impl Write,
     dry_run: bool,
 ) -> Result<()> {
     let logs_dir = paths::logs_dir(state_dir);
+    // Captured before any scanning so mark-distilled can adopt it as the next
+    // last_distilled: everything that happens after this instant is the next
+    // run's responsibility, including sessions born mid-distill.
+    let scan_started = chrono::Utc::now().trunc_subsecs(0);
 
     let mut state = match validate_state(state_dir) {
         ValidationStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
@@ -92,39 +111,65 @@ fn distill_with_inputs(
     let entries = collect_log_entries(&logs_dir)
         .with_context(|| format!("failed to read logs directory: {}", logs_dir.display()))?;
 
-    let mut logs = Vec::new();
+    let mut legacy_logs = Vec::new();
     let mut obsolete = Vec::new();
 
     for entry in entries {
         if entry.timestamp >= state.last_distilled {
-            logs.push(entry);
+            legacy_logs.push(entry);
         } else {
             obsolete.push(entry);
         }
     }
 
+    let claude_scan =
+        collect_claude_sessions(state_dir, &mut state, claude_home, scan_started, dry_run);
+    // Suppress legacy copies of every session the external store accounts
+    // for — both sessions emitted this run and sessions whose committed
+    // watermark says they were already distilled (the idle-exit case: the
+    // SessionEnd hook copies a log after mark-distilled committed the
+    // session). Floor-skipped ids are deliberately not in this set.
+    legacy_logs.retain(|entry| !claude_scan.accounted_ids.contains(&entry.session_id));
+    let external_claude_sessions = claude_scan.changed;
+
     let codex_sessions =
         collect_codex_sessions(state_dir, &mut state, codex_home, codex_enabled, dry_run);
 
-    let has_claude_logs = !logs.is_empty();
+    let claude_emissions = merge_claude_emissions(legacy_logs, external_claude_sessions);
+    let has_claude_logs = !claude_emissions.is_empty();
     let has_codex_logs = !codex_sessions.is_empty();
 
     if !has_claude_logs && !has_codex_logs {
         writeln!(out, "No new session logs to process.")?;
     } else {
-        logs.sort_by_key(|entry| entry.timestamp);
-
         write!(out, "{SOUL_WRITING_GUIDELINES}")?;
         writeln!(out, "{DISTILL_DATA_PREAMBLE}")?;
         writeln!(out, "<session-transcripts>")?;
 
-        for entry in &logs {
-            let content = fs::read_to_string(&entry.path)
-                .with_context(|| format!("failed to read log file: {}", entry.path.display()))?;
-            let filename = &entry.filename;
-            writeln!(out, "<session source=\"claude\" file=\"{filename}\">")?;
-            filter_session_log(&content, out)?;
-            writeln!(out, "</session>")?;
+        for emission in &claude_emissions {
+            match emission {
+                ClaudeEmission::Legacy(entry) => {
+                    let content = fs::read_to_string(&entry.path).with_context(|| {
+                        format!("failed to read log file: {}", entry.path.display())
+                    })?;
+                    writeln!(
+                        out,
+                        "<session source=\"claude\" file=\"{}\">",
+                        entry.filename
+                    )?;
+                    filter_session_log(&content, out)?;
+                    writeln!(out, "</session>")?;
+                }
+                ClaudeEmission::External(session) => {
+                    writeln!(
+                        out,
+                        "<session source=\"claude\" file=\"{}\">",
+                        session.file_label
+                    )?;
+                    write!(out, "{}", session.rendered)?;
+                    writeln!(out, "</session>")?;
+                }
+            }
         }
 
         for session in &codex_sessions {
@@ -165,9 +210,38 @@ fn distill_with_inputs(
     Ok(())
 }
 
-fn resolve_codex_home(codex_enabled: bool) -> Option<std::path::PathBuf> {
+/// Resolve the Claude home used by the external session scan.
+///
+/// A caller-provided path wins and is not validated here; discovery itself is
+/// best-effort and treats missing directories as an empty scan. Without an
+/// override, failure to locate the user's home directory disables only the
+/// external Claude scan and leaves legacy logs usable.
+fn resolve_claude_home(override_path: Option<&Path>) -> Option<PathBuf> {
+    if let Some(path) = override_path {
+        return Some(path.to_path_buf());
+    }
+
+    match paths::default_claude_home() {
+        Ok(claude_home) => Some(claude_home),
+        Err(err) => {
+            warn!("Claude home unavailable, skipping external Claude session scan: {err}");
+            None
+        }
+    }
+}
+
+/// Resolve the Codex home only when the Codex gate is enabled.
+///
+/// The disabled gate must not even look at the default Codex directory. When
+/// enabled, explicit test injection wins; otherwise a missing home directory
+/// is logged and treated as "no Codex sessions" rather than a distill error.
+fn resolve_codex_home(override_path: Option<&Path>, codex_enabled: bool) -> Option<PathBuf> {
     if !codex_enabled {
         return None;
+    }
+
+    if let Some(path) = override_path {
+        return Some(path.to_path_buf());
     }
 
     match paths::default_codex_home() {
@@ -177,6 +251,54 @@ fn resolve_codex_home(codex_enabled: bool) -> Option<std::path::PathBuf> {
             None
         }
     }
+}
+
+/// Best-effort external Claude collection for one `leiter soul distill` run.
+///
+/// The scanner is always active. When it finds changed sessions, every changed
+/// watermark is staged on non-dry-run, including sessions that render to no
+/// visible content. Emission filters happen later so staging stays tied to the
+/// exact file states this distill run observed.
+///
+/// The pending map is replaced even when the Claude home cannot be resolved
+/// and the scan is skipped: pending means "exactly what this run showed the
+/// LLM", and a run that scanned nothing showed nothing — leaving a stale
+/// pending map behind would let the next mark-distilled commit watermarks for
+/// sessions this cycle never emitted. The staged scan-start time is what
+/// mark-distilled later adopts as `last_distilled` (see that command's docs
+/// for the loss-window rationale).
+fn collect_claude_sessions(
+    state_dir: &Path,
+    state: &mut LeiterState,
+    claude_home: Option<&Path>,
+    scan_started: chrono::DateTime<chrono::Utc>,
+    dry_run: bool,
+) -> ClaudeScanOutcome {
+    let outcome = match claude_home {
+        Some(claude_home) => collect_claude_changed_sessions(
+            claude_home,
+            &state.claude.committed,
+            state.last_distilled,
+        ),
+        None => ClaudeScanOutcome {
+            changed: Vec::new(),
+            accounted_ids: BTreeSet::new(),
+        },
+    };
+
+    if !dry_run {
+        state.claude.pending = outcome
+            .changed
+            .iter()
+            .map(|session| (session.session_id.clone(), session.watermark.clone()))
+            .collect();
+        state.pending_scan_started_utc = Some(scan_started);
+        if let Err(err) = state.save(&paths::state_path(state_dir)) {
+            warn!("failed to update leiter state with Claude pending watermarks: {err}");
+        }
+    }
+
+    outcome
 }
 
 /// Best-effort Codex collection for one `leiter soul distill` run.
@@ -197,17 +319,18 @@ fn collect_codex_sessions(
         return Vec::new();
     }
 
-    let mut codex_sessions = Vec::new();
-    if let Some(codex_home) = codex_home {
-        codex_sessions = collect_changed_sessions(codex_home, &state.codex.committed);
-        if !dry_run {
-            state.codex.pending = codex_sessions
-                .iter()
-                .map(|session| (session.session_id.clone(), session.watermark.clone()))
-                .collect();
-            if let Err(err) = state.save(&paths::state_path(state_dir)) {
-                warn!("failed to update leiter state with Codex pending watermarks: {err}");
-            }
+    let Some(codex_home) = codex_home else {
+        return Vec::new();
+    };
+
+    let codex_sessions = collect_changed_sessions(codex_home, &state.codex.committed);
+    if !dry_run {
+        state.codex.pending = codex_sessions
+            .iter()
+            .map(|session| (session.session_id.clone(), session.watermark.clone()))
+            .collect();
+        if let Err(err) = state.save(&paths::state_path(state_dir)) {
+            warn!("failed to update leiter state with Codex pending watermarks: {err}");
         }
     }
 
@@ -215,6 +338,69 @@ fn collect_codex_sessions(
         .into_iter()
         .filter(|session| !session.rendered.is_empty())
         .collect()
+}
+
+/// Claude transcript item ready to be emitted in chronological order.
+///
+/// Legacy hook logs and external Claude sessions have different label and
+/// rendering paths, but they share one ordering stream. Keeping them in this
+/// enum makes the merge explicit without flattening away the source-specific
+/// read behavior.
+enum ClaudeEmission {
+    /// Hook-copied log from `<state_dir>/logs/`.
+    Legacy(ParsedLogEntry),
+    /// Directly scanned Claude Code project transcript.
+    External(DistilledClaudeSession),
+}
+
+/// Merge legacy and external Claude sessions into one chronological stream.
+///
+/// Empty external sessions are excluded from emission here, after their
+/// watermarks have already been staged. Legacy logs use filename timestamps;
+/// external sessions use the scanner's bounded header timestamp with mtime
+/// fallback.
+fn merge_claude_emissions(
+    legacy_logs: Vec<ParsedLogEntry>,
+    external_sessions: Vec<DistilledClaudeSession>,
+) -> Vec<ClaudeEmission> {
+    let mut emissions = Vec::new();
+    for entry in legacy_logs {
+        emissions.push(ClaudeEmission::Legacy(entry));
+    }
+    for session in external_sessions {
+        if !session.rendered.is_empty() {
+            emissions.push(ClaudeEmission::External(session));
+        }
+    }
+
+    emissions.sort_by(|a, b| {
+        emission_sort_timestamp(a)
+            .cmp(&emission_sort_timestamp(b))
+            .then_with(|| emission_sort_label(a).cmp(emission_sort_label(b)))
+    });
+    emissions
+}
+
+/// Return the timestamp key for one Claude emission.
+///
+/// This keeps the sort contract in one place: filename time for legacy logs,
+/// scanner-derived session time for external transcripts.
+fn emission_sort_timestamp(emission: &ClaudeEmission) -> chrono::DateTime<chrono::Utc> {
+    match emission {
+        ClaudeEmission::Legacy(entry) => entry.timestamp,
+        ClaudeEmission::External(session) => session.sort_timestamp,
+    }
+}
+
+/// Return a deterministic tie-break label for one Claude emission.
+///
+/// The exact label is not semantically meaningful; it only keeps output stable
+/// when two sessions share the same sort timestamp.
+fn emission_sort_label(emission: &ClaudeEmission) -> &str {
+    match emission {
+        ClaudeEmission::Legacy(entry) => &entry.filename,
+        ClaudeEmission::External(session) => &session.session_id,
+    }
 }
 
 fn load_config_best_effort(state_dir: &Path) -> LeiterConfig {
@@ -228,143 +414,6 @@ fn load_config_best_effort(state_dir: &Path) -> LeiterConfig {
     }
 }
 
-/// Extract concatenated text from a `message.content` value that may be either
-/// a plain string or an array of content blocks (with `type: "text"` entries).
-/// Returns `None` if no text could be extracted.
-fn extract_text(content_val: &Value) -> Option<String> {
-    if let Some(s) = content_val.as_str() {
-        return Some(s.to_string());
-    }
-    let blocks = content_val.as_array()?;
-    let parts: Vec<&str> = blocks
-        .iter()
-        .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
-        .filter_map(|b| b.get("text").and_then(Value::as_str))
-        .collect();
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("\n\n"))
-    }
-}
-
-/// Build a one-line summary for a `tool_use` content block.
-///
-/// Format: `ToolName(key_param)` — the key parameter is chosen heuristically
-/// from `input.file_path`, `input.command` (truncated to ~120 chars),
-/// `input.pattern`, or omitted if none match.
-fn extract_tool_summary(block: &Value) -> Option<String> {
-    let name = block.get("name")?.as_str()?;
-    let input = block.get("input");
-
-    let param = input.and_then(|inp| {
-        if let Some(fp) = inp.get("file_path").and_then(Value::as_str) {
-            return Some(fp.to_string());
-        }
-        if let Some(cmd) = inp.get("command").and_then(Value::as_str) {
-            let truncated: String = cmd.chars().take(120).collect();
-            if truncated.len() < cmd.len() {
-                return Some(format!("{truncated}..."));
-            }
-            return Some(truncated);
-        }
-        if let Some(pat) = inp.get("pattern").and_then(Value::as_str) {
-            return Some(pat.to_string());
-        }
-        None
-    });
-
-    match param {
-        Some(p) => Some(format!("{name}({p})")),
-        None => Some(name.to_string()),
-    }
-}
-
-/// Extract `[assistant tool]:` summary lines from `message.content` blocks.
-fn extract_tool_summaries(content_val: &Value, out: &mut impl Write) -> Result<()> {
-    if let Some(blocks) = content_val.as_array() {
-        for block in blocks {
-            if block.get("type").and_then(Value::as_str) == Some("tool_use")
-                && let Some(summary) = extract_tool_summary(block)
-            {
-                writeln!(out, "[assistant tool]: {summary}")?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Pre-process a JSONL session log to extract user-visible content.
-///
-/// For each line:
-/// 1. If JSON parse fails → include raw line (format may have changed).
-/// 2. If `type` field is missing or not a string → include raw line.
-/// 3. Known noise types ("progress", "file-history-snapshot", "system") → drop.
-/// 4. `type: "user"`: drop if `toolUseResult` key exists (tool output);
-///    otherwise extract text from `message.content` → emit as `[user]: <text>`.
-/// 5. `type: "assistant"`: emit `[assistant]: <text>` for text blocks and
-///    `[assistant tool]: Name(param)` for tool_use blocks. Drop only if
-///    neither text nor tool_use blocks are present.
-/// 6. Unknown type → include raw line (new type we don't know about).
-fn filter_session_log(content: &str, out: &mut impl Write) -> Result<()> {
-    for line in content.lines() {
-        let Ok(val) = serde_json::from_str::<Value>(line) else {
-            writeln!(out, "{line}")?;
-            continue;
-        };
-
-        let Some(obj) = val.as_object() else {
-            writeln!(out, "{line}")?;
-            continue;
-        };
-
-        let Some(type_val) = obj.get("type").and_then(Value::as_str) else {
-            writeln!(out, "{line}")?;
-            continue;
-        };
-
-        match type_val {
-            "progress" | "file-history-snapshot" | "system" => continue,
-
-            "user" => {
-                if obj.contains_key("toolUseResult") {
-                    continue;
-                }
-                let content_val = obj.get("message").and_then(|m| m.get("content"));
-                match content_val.and_then(extract_text) {
-                    Some(text) => writeln!(out, "[user]: {text}")?,
-                    None => writeln!(out, "{line}")?,
-                }
-            }
-
-            "assistant" => {
-                let content_val = obj.get("message").and_then(|m| m.get("content"));
-                let has_text = content_val.and_then(extract_text);
-                let has_tools = content_val.and_then(Value::as_array).is_some_and(|blocks| {
-                    blocks
-                        .iter()
-                        .any(|b| b.get("type").and_then(Value::as_str) == Some("tool_use"))
-                });
-
-                if has_text.is_none() && !has_tools {
-                    continue;
-                }
-
-                if let Some(text) = has_text {
-                    writeln!(out, "[assistant]: {text}")?;
-                }
-                if let Some(cv) = content_val {
-                    extract_tool_summaries(cv, out)?;
-                }
-            }
-
-            _ => writeln!(out, "{line}")?,
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,28 +422,60 @@ mod tests {
     };
     use crate::config::LeiterConfig;
     use crate::log_filename::generate_log_filename;
-    use crate::state::LeiterState;
+    use crate::state::{LeiterState, SessionWatermark};
     use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
-    use chrono::{TimeZone, Utc};
+    use chrono::{DateTime, TimeZone, Utc};
+    use serde_json::Value;
     use std::path::PathBuf;
 
     fn run_distill(state_dir: &Path) -> String {
-        let codex_home = tempfile::tempdir().unwrap();
+        let claude_home = tempfile::tempdir().unwrap();
         let mut out = Vec::new();
-        distill_with_inputs(state_dir, Some(codex_home.path()), false, &mut out, false).unwrap();
+        distill_with_inputs(
+            state_dir,
+            Some(claude_home.path()),
+            None,
+            false,
+            &mut out,
+            false,
+        )
+        .unwrap();
         bytes_to_string(out)
     }
 
     fn run_distill_dry(state_dir: &Path) -> String {
-        let codex_home = tempfile::tempdir().unwrap();
+        let claude_home = tempfile::tempdir().unwrap();
         let mut out = Vec::new();
-        distill_with_inputs(state_dir, Some(codex_home.path()), false, &mut out, true).unwrap();
+        distill_with_inputs(
+            state_dir,
+            Some(claude_home.path()),
+            None,
+            false,
+            &mut out,
+            true,
+        )
+        .unwrap();
         bytes_to_string(out)
     }
 
     fn run_distill_with_codex_home(state_dir: &Path, codex_home: &Path, dry_run: bool) -> String {
+        let claude_home = tempfile::tempdir().unwrap();
         let mut out = Vec::new();
-        distill_with_inputs(state_dir, Some(codex_home), true, &mut out, dry_run).unwrap();
+        distill_with_inputs(
+            state_dir,
+            Some(claude_home.path()),
+            Some(codex_home),
+            true,
+            &mut out,
+            dry_run,
+        )
+        .unwrap();
+        bytes_to_string(out)
+    }
+
+    fn run_distill_with_claude_home(state_dir: &Path, claude_home: &Path, dry_run: bool) -> String {
+        let mut out = Vec::new();
+        distill_with_inputs(state_dir, Some(claude_home), None, false, &mut out, dry_run).unwrap();
         bytes_to_string(out)
     }
 
@@ -420,9 +501,59 @@ mod tests {
         fs::write(path, content).unwrap();
     }
 
+    fn write_claude_session(
+        claude_home: &Path,
+        slug: &str,
+        session_id: &str,
+        lines: &[Value],
+    ) -> PathBuf {
+        let path = claude_home
+            .join("projects")
+            .join(slug)
+            .join(format!("{session_id}.jsonl"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut rendered = String::new();
+        for line in lines {
+            rendered.push_str(&serde_json::to_string(line).unwrap());
+            rendered.push('\n');
+        }
+        fs::write(&path, rendered).unwrap();
+        path
+    }
+
+    fn claude_user_line(text: &str, ts: &str) -> Value {
+        serde_json::json!({
+            "timestamp": ts,
+            "type": "user",
+            "message": {"content": text}
+        })
+    }
+
+    fn claude_progress_line() -> Value {
+        serde_json::json!({"type": "progress", "data": {"type": "agent_progress"}})
+    }
+
     fn set_last_distilled(state_dir: &Path, year: i32, month: u32, day: u32, hour: u32) {
         let ts = Utc.with_ymd_and_hms(year, month, day, hour, 0, 0).unwrap();
         update_state(state_dir, |state| state.last_distilled = ts);
+    }
+
+    fn ts(year: i32, month: u32, day: u32, hour: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(year, month, day, hour, 0, 0).unwrap()
+    }
+
+    fn watermark_for_path(
+        path: &Path,
+        session_timestamp_utc: Option<DateTime<Utc>>,
+    ) -> SessionWatermark {
+        let metadata = fs::metadata(path).unwrap();
+        SessionWatermark {
+            path: path.display().to_string(),
+            size_bytes: metadata.len(),
+            mtime_utc: DateTime::<Utc>::from(metadata.modified().unwrap()),
+            session_timestamp_utc,
+            latest_event_timestamp_utc: None,
+        }
     }
 
     #[test]
@@ -586,12 +717,365 @@ mod tests {
     }
 
     #[test]
+    fn external_claude_session_is_emitted_and_staged() {
+        let tmp = setup_state_dir();
+        let claude_home = tempfile::tempdir().unwrap();
+        let session_id = "0198fb08-e6e4-7a41-8b3f-2fc8a9ee215d";
+        write_claude_session(
+            claude_home.path(),
+            "proj",
+            session_id,
+            &[claude_user_line("external hello", "2026-07-01T12:00:00Z")],
+        );
+        set_last_distilled(tmp.path(), 2026, 1, 1, 0);
+
+        let output = run_distill_with_claude_home(tmp.path(), claude_home.path(), false);
+
+        assert!(output.contains("external hello"));
+        assert!(output.contains(&format!(
+            "<session source=\"claude\" file=\"projects/proj/{session_id}.jsonl\">"
+        )));
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(state.claude.pending.contains_key(session_id));
+    }
+
+    #[test]
+    fn external_claude_dry_run_does_not_stage_pending() {
+        let tmp = setup_state_dir();
+        let claude_home = tempfile::tempdir().unwrap();
+        let session_id = "0198fb08-e6e4-7a41-8b3f-2fc8a9ee215d";
+        write_claude_session(
+            claude_home.path(),
+            "proj",
+            session_id,
+            &[claude_user_line("dry hello", "2026-07-01T12:00:00Z")],
+        );
+        set_last_distilled(tmp.path(), 2026, 1, 1, 0);
+
+        let output = run_distill_with_claude_home(tmp.path(), claude_home.path(), true);
+
+        assert!(output.contains("dry hello"));
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(state.claude.pending.is_empty());
+    }
+
+    #[test]
+    fn external_claude_changed_session_reemits_after_mark_and_growth() {
+        let tmp = setup_state_dir();
+        let claude_home = tempfile::tempdir().unwrap();
+        let session_id = "0198fb08-e6e4-7a41-8b3f-2fc8a9ee215d";
+        write_claude_session(
+            claude_home.path(),
+            "proj",
+            session_id,
+            &[claude_user_line("first external", "2026-07-01T12:00:00Z")],
+        );
+        set_last_distilled(tmp.path(), 2026, 1, 1, 0);
+
+        let first = run_distill_with_claude_home(tmp.path(), claude_home.path(), false);
+        assert!(first.contains("first external"));
+        crate::commands::mark_distilled::run(tmp.path(), &mut Vec::new()).unwrap();
+
+        write_claude_session(
+            claude_home.path(),
+            "proj",
+            session_id,
+            &[
+                claude_user_line("first external", "2026-07-01T12:00:00Z"),
+                claude_user_line("second external", "2026-07-01T12:00:01Z"),
+            ],
+        );
+
+        let second = run_distill_with_claude_home(tmp.path(), claude_home.path(), false);
+        assert!(second.contains("first external"));
+        assert!(second.contains("second external"));
+    }
+
+    #[test]
+    fn external_claude_resumed_files_emit_as_independent_sessions() {
+        let tmp = setup_state_dir();
+        let claude_home = tempfile::tempdir().unwrap();
+        let first_id = "0198fb08-e6e4-7a41-8b3f-2fc8a9ee215d";
+        let second_id = "1198fb08-e6e4-7a41-8b3f-2fc8a9ee215d";
+        write_claude_session(
+            claude_home.path(),
+            "proj",
+            first_id,
+            &[claude_user_line("shared history", "2026-07-01T12:00:00Z")],
+        );
+        write_claude_session(
+            claude_home.path(),
+            "proj",
+            second_id,
+            &[
+                claude_user_line("shared history", "2026-07-01T12:00:00Z"),
+                claude_user_line("resumed tail", "2026-07-01T13:00:00Z"),
+            ],
+        );
+        set_last_distilled(tmp.path(), 2026, 1, 1, 0);
+
+        let output = run_distill_with_claude_home(tmp.path(), claude_home.path(), false);
+
+        assert_eq!(output.matches("<session source=\"claude\"").count(), 2);
+        assert!(output.contains(&format!("projects/proj/{first_id}.jsonl")));
+        assert!(output.contains(&format!("projects/proj/{second_id}.jsonl")));
+    }
+
+    #[test]
+    fn external_claude_dedupes_matching_legacy_log_only() {
+        let tmp = setup_state_dir();
+        let claude_home = tempfile::tempdir().unwrap();
+        let external_id = "0198fb08-e6e4-7a41-8b3f-2fc8a9ee215d";
+        write_claude_session(
+            claude_home.path(),
+            "proj",
+            external_id,
+            &[claude_user_line(
+                "external copy wins",
+                "2026-07-01T12:00:00Z",
+            )],
+        );
+        write_log(
+            tmp.path(),
+            2026,
+            7,
+            1,
+            12,
+            external_id,
+            "legacy duplicate loses",
+        );
+        write_log(tmp.path(), 2026, 7, 1, 13, "legacy-only", "legacy survives");
+        set_last_distilled(tmp.path(), 2026, 1, 1, 0);
+
+        let output = run_distill_with_claude_home(tmp.path(), claude_home.path(), false);
+
+        assert!(output.contains("external copy wins"));
+        assert!(output.contains("projects/proj/0198fb08-e6e4-7a41-8b3f-2fc8a9ee215d.jsonl"));
+        assert!(!output.contains("legacy duplicate loses"));
+        assert!(output.contains("legacy survives"));
+        assert!(output.contains("20260701T130000Z-legacy-only.jsonl"));
+    }
+
+    #[test]
+    fn external_claude_empty_content_is_staged_but_not_emitted() {
+        let tmp = setup_state_dir();
+        let claude_home = tempfile::tempdir().unwrap();
+        let session_id = "0198fb08-e6e4-7a41-8b3f-2fc8a9ee215d";
+        write_claude_session(
+            claude_home.path(),
+            "proj",
+            session_id,
+            &[claude_progress_line()],
+        );
+        set_last_distilled(tmp.path(), 2026, 1, 1, 0);
+
+        let output = run_distill_with_claude_home(tmp.path(), claude_home.path(), false);
+
+        assert!(output.contains("No new session logs to process"));
+        assert!(!output.contains(&format!("projects/proj/{session_id}.jsonl")));
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(state.claude.pending.contains_key(session_id));
+    }
+
+    #[test]
+    fn external_and_legacy_claude_sessions_interleave_chronologically() {
+        let tmp = setup_state_dir();
+        let claude_home = tempfile::tempdir().unwrap();
+        let early_id = "0198fb08-e6e4-7a41-8b3f-2fc8a9ee215d";
+        let late_id = "1198fb08-e6e4-7a41-8b3f-2fc8a9ee215d";
+        write_claude_session(
+            claude_home.path(),
+            "proj",
+            early_id,
+            &[claude_user_line("external T1", "2026-07-01T11:00:00Z")],
+        );
+        write_log(tmp.path(), 2026, 7, 1, 12, "legacy-t2", "legacy T2");
+        write_claude_session(
+            claude_home.path(),
+            "proj",
+            late_id,
+            &[claude_user_line("external T3", "2026-07-01T13:00:00Z")],
+        );
+        set_last_distilled(tmp.path(), 2026, 1, 1, 0);
+
+        let output = run_distill_with_claude_home(tmp.path(), claude_home.path(), false);
+        let early_pos = output.find("external T1").unwrap();
+        let legacy_pos = output.find("legacy T2").unwrap();
+        let late_pos = output.find("external T3").unwrap();
+
+        assert!(early_pos < legacy_pos);
+        assert!(legacy_pos < late_pos);
+    }
+
+    #[test]
+    fn committed_unchanged_external_session_suppresses_matching_legacy_log() {
+        let tmp = setup_state_dir();
+        let claude_home = tempfile::tempdir().unwrap();
+        let session_id = "0198fb08-e6e4-7a41-8b3f-2fc8a9ee215d";
+        let session_path = write_claude_session(
+            claude_home.path(),
+            "proj",
+            session_id,
+            &[claude_user_line(
+                "external already committed",
+                "2026-07-01T12:00:00Z",
+            )],
+        );
+        write_log(
+            tmp.path(),
+            2026,
+            7,
+            1,
+            12,
+            session_id,
+            "legacy duplicate should stay hidden",
+        );
+        set_last_distilled(tmp.path(), 2026, 1, 1, 0);
+        update_state(tmp.path(), |state| {
+            state.claude.committed.insert(
+                session_id.to_string(),
+                watermark_for_path(&session_path, Some(ts(2026, 7, 1, 12))),
+            );
+        });
+
+        let output = run_distill_with_claude_home(tmp.path(), claude_home.path(), false);
+
+        assert!(output.contains("No new session logs to process"));
+        assert!(!output.contains("external already committed"));
+        assert!(!output.contains("legacy duplicate should stay hidden"));
+    }
+
+    #[test]
+    fn empty_external_session_still_suppresses_matching_legacy_log() {
+        let tmp = setup_state_dir();
+        let claude_home = tempfile::tempdir().unwrap();
+        let session_id = "0198fb08-e6e4-7a41-8b3f-2fc8a9ee215d";
+        write_claude_session(
+            claude_home.path(),
+            "proj",
+            session_id,
+            &[claude_progress_line()],
+        );
+        write_log(
+            tmp.path(),
+            2026,
+            7,
+            1,
+            12,
+            session_id,
+            "legacy duplicate should be suppressed",
+        );
+        set_last_distilled(tmp.path(), 2026, 1, 1, 0);
+
+        let output = run_distill_with_claude_home(tmp.path(), claude_home.path(), false);
+
+        assert!(output.contains("No new session logs to process"));
+        assert!(!output.contains("legacy duplicate should be suppressed"));
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(state.claude.pending.contains_key(session_id));
+    }
+
+    #[test]
+    fn legacy_only_session_is_still_emitted_when_external_store_lacks_id() {
+        let tmp = setup_state_dir();
+        let claude_home = tempfile::tempdir().unwrap();
+        let external_id = "0198fb08-e6e4-7a41-8b3f-2fc8a9ee215d";
+        write_claude_session(
+            claude_home.path(),
+            "proj",
+            external_id,
+            &[claude_user_line("external present", "2026-07-01T12:00:00Z")],
+        );
+        write_log(tmp.path(), 2026, 7, 1, 13, "legacy-only", "legacy only");
+        set_last_distilled(tmp.path(), 2026, 1, 1, 0);
+
+        let output = run_distill_with_claude_home(tmp.path(), claude_home.path(), false);
+
+        assert!(output.contains("external present"));
+        assert!(output.contains("legacy only"));
+        assert!(output.contains("20260701T130000Z-legacy-only.jsonl"));
+    }
+
+    #[test]
+    fn unresolved_claude_home_clears_pending_on_non_dry_run_only() {
+        let tmp = setup_state_dir();
+        let stale_ts = ts(2026, 3, 7, 18);
+        update_state(tmp.path(), |state| {
+            state.claude.pending.insert(
+                "stale".to_string(),
+                SessionWatermark {
+                    path: "/tmp/stale.jsonl".to_string(),
+                    size_bytes: 12,
+                    mtime_utc: stale_ts,
+                    session_timestamp_utc: Some(stale_ts),
+                    latest_event_timestamp_utc: None,
+                },
+            );
+        });
+        let before = Utc::now() - chrono::Duration::seconds(1);
+        let mut out = Vec::new();
+        distill_with_inputs(tmp.path(), None, None, false, &mut out, false).unwrap();
+        let after = Utc::now() + chrono::Duration::seconds(1);
+
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(state.claude.pending.is_empty());
+        let scan_started = state.pending_scan_started_utc.unwrap();
+        assert!(scan_started >= before);
+        assert!(scan_started <= after);
+
+        update_state(tmp.path(), |state| {
+            state.claude.pending.insert(
+                "stale".to_string(),
+                SessionWatermark {
+                    path: "/tmp/stale.jsonl".to_string(),
+                    size_bytes: 12,
+                    mtime_utc: stale_ts,
+                    session_timestamp_utc: Some(stale_ts),
+                    latest_event_timestamp_utc: None,
+                },
+            );
+        });
+        let mut dry_out = Vec::new();
+        distill_with_inputs(tmp.path(), None, None, false, &mut dry_out, true).unwrap();
+
+        let dry_state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(dry_state.claude.pending.contains_key("stale"));
+    }
+
+    #[test]
+    fn mark_distilled_adopts_scan_start_staged_by_distill() {
+        let tmp = setup_state_dir();
+        let claude_home = tempfile::tempdir().unwrap();
+        let mut out = Vec::new();
+        distill_with_inputs(
+            tmp.path(),
+            Some(claude_home.path()),
+            None,
+            false,
+            &mut out,
+            false,
+        )
+        .unwrap();
+        let staged = LeiterState::load(&paths::state_path(tmp.path()))
+            .unwrap()
+            .pending_scan_started_utc
+            .unwrap();
+
+        crate::commands::mark_distilled::run(tmp.path(), &mut Vec::new()).unwrap();
+
+        let updated = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert_eq!(updated.last_distilled, staged);
+        assert!(updated.pending_scan_started_utc.is_none());
+    }
+
+    #[test]
     fn missing_soul_errors() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
 
         let mut out = Vec::new();
-        let result = run(tmp.path(), &mut out, false);
+        let claude_home = tempfile::tempdir().unwrap();
+        let result = run(tmp.path(), &mut out, false, Some(claude_home.path()), None);
         assert!(result.is_err());
     }
 
@@ -960,7 +1444,8 @@ mod tests {
         write_log(tmp.path(), 2026, 1, 1, 0, "sess1", "log content");
 
         let mut out = Vec::new();
-        run(tmp.path(), &mut out, false).unwrap();
+        let claude_home = tempfile::tempdir().unwrap();
+        run(tmp.path(), &mut out, false, Some(claude_home.path()), None).unwrap();
         let output = bytes_to_string(out);
         assert!(output.contains("log content"));
     }
@@ -972,7 +1457,8 @@ mod tests {
         write_state_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
 
         let mut out = Vec::new();
-        let err = run(tmp.path(), &mut out, false).unwrap_err();
+        let claude_home = tempfile::tempdir().unwrap();
+        let err = run(tmp.path(), &mut out, false, Some(claude_home.path()), None).unwrap_err();
         assert!(
             err.to_string()
                 .contains("binary is older than your soul file")
@@ -990,7 +1476,8 @@ mod tests {
         );
 
         let mut out = Vec::new();
-        let err = run(tmp.path(), &mut out, false).unwrap_err();
+        let claude_home = tempfile::tempdir().unwrap();
+        let err = run(tmp.path(), &mut out, false, Some(claude_home.path()), None).unwrap_err();
         assert!(err.to_string().contains("leiter claude install"));
     }
 
@@ -1003,8 +1490,14 @@ mod tests {
 
         let mut out = Vec::new();
         let codex_home = tempfile::tempdir().unwrap();
-        let result =
-            distill_with_inputs(tmp.path(), Some(codex_home.path()), false, &mut out, false);
+        let result = distill_with_inputs(
+            tmp.path(),
+            None,
+            Some(codex_home.path()),
+            false,
+            &mut out,
+            false,
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("state file"));
     }
@@ -1294,7 +1787,15 @@ mod tests {
         );
 
         let mut out = Vec::new();
-        distill_with_inputs(tmp.path(), Some(codex_home.path()), false, &mut out, false).unwrap();
+        distill_with_inputs(
+            tmp.path(),
+            None,
+            Some(codex_home.path()),
+            false,
+            &mut out,
+            false,
+        )
+        .unwrap();
         let output = bytes_to_string(out);
         assert!(!output.contains("should stay hidden"));
         assert!(output.contains("No new session logs to process"));

@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, SubsecRound, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::frontmatter::parse_soul;
@@ -59,11 +59,28 @@ pub struct LeiterState {
     /// session logs.
     #[serde(with = "toml_datetime_utc")]
     pub last_distilled: DateTime<Utc>,
+    /// Scan-start time staged by the most recent non-dry-run `distill`.
+    ///
+    /// `mark-distilled` consumes this as the new `last_distilled` instead of
+    /// stamping its own wall clock. The distinction closes a loss window: a
+    /// session created after distill's scan but before the mark would sit
+    /// below a mark-time floor forever (no watermark, mtime too old), whereas
+    /// a scan-start floor guarantees the next scan sees it. Absent when no
+    /// distill has staged anything since the last mark.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "toml_datetime_utc::option"
+    )]
+    pub pending_scan_started_utc: Option<DateTime<Utc>>,
+    /// External Claude session watermarks used by the always-on scanner.
+    ///
+    /// The hook-copied log path still uses `last_distilled`; this map belongs
+    /// only to the direct scan of Claude Code's own `projects/` store.
+    #[serde(default)]
+    pub claude: WatermarkSet,
     /// Codex rollout watermarks used only when experimental Codex distillation
     /// is enabled.
-    ///
-    /// The reusable [`WatermarkSet`] shape is intentionally not Codex-specific;
-    /// a later schema can add a parallel `claude` field with the same type.
     #[serde(default)]
     pub codex: WatermarkSet,
 }
@@ -180,16 +197,20 @@ impl std::error::Error for StateLoadError {}
 impl LeiterState {
     /// Construct the state written by a fresh `leiter claude install`.
     ///
-    /// The timestamp starts at the Unix epoch so the first distillation sees
-    /// all existing session logs. Epoch and template fields are stamped from
-    /// the current binary because setup has just been performed.
+    /// The timestamp is the install time, truncated to whole seconds to match
+    /// `mark-distilled`. That timestamp is also the floor for the external
+    /// Claude session scan: a fresh install should start learning from sessions
+    /// that happen after setup, not replay whatever Claude Code still retains
+    /// from before leiter existed.
     pub fn fresh() -> Self {
         Self {
             version: STATE_VERSION,
             soul_version: SOUL_TEMPLATE_VERSION,
             setup_soft_epoch: SETUP_SOFT_EPOCH,
             setup_hard_epoch: SETUP_HARD_EPOCH,
-            last_distilled: epoch(),
+            last_distilled: Utc::now().trunc_subsecs(0),
+            pending_scan_started_utc: None,
+            claude: WatermarkSet::default(),
             codex: WatermarkSet::default(),
         }
     }
@@ -294,6 +315,8 @@ pub fn migrate_legacy_layout(state_dir: &Path) -> Result<()> {
                     setup_soft_epoch: frontmatter.setup_soft_epoch,
                     setup_hard_epoch: frontmatter.setup_hard_epoch,
                     last_distilled: frontmatter.last_distilled,
+                    pending_scan_started_utc: None,
+                    claude: WatermarkSet::default(),
                     codex,
                 };
                 state.save(&state_path)?;
@@ -390,10 +413,6 @@ fn default_setup_epoch() -> u32 {
     1
 }
 
-fn epoch() -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap()
-}
-
 fn format_datetime(ts: DateTime<Utc>) -> String {
     ts.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
 }
@@ -467,6 +486,7 @@ mod toml_datetime_utc {
 mod tests {
     use super::*;
     use crate::frontmatter::{SoulFrontmatter, serialize_soul};
+    use chrono::TimeZone;
 
     fn sample_watermark() -> SessionWatermark {
         let ts = Utc.with_ymd_and_hms(2026, 3, 7, 18, 0, 0).unwrap();
@@ -501,6 +521,14 @@ mod tests {
         let path = paths::state_path(tmp.path());
         let mut state = LeiterState::fresh();
         state
+            .claude
+            .committed
+            .insert("claude-sess-1".to_string(), sample_watermark());
+        state
+            .claude
+            .pending
+            .insert("claude-sess-2".to_string(), sample_watermark());
+        state
             .codex
             .committed
             .insert("sess-1".to_string(), sample_watermark());
@@ -511,6 +539,11 @@ mod tests {
 
         state.save(&path).unwrap();
         let raw = fs::read_to_string(&path).unwrap();
+        assert!(
+            raw.contains("[claude.committed.claude-sess-1]"),
+            "raw: {raw}"
+        );
+        assert!(raw.contains("[claude.pending.claude-sess-2]"), "raw: {raw}");
         assert!(raw.contains("[codex.committed.sess-1]"), "raw: {raw}");
         assert!(raw.contains("[codex.pending.sess-2]"), "raw: {raw}");
         assert!(

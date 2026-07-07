@@ -6,6 +6,7 @@
 
 use assert_cmd::Command;
 use assert_cmd::cargo::cargo_bin_cmd;
+use chrono::{DateTime, Utc};
 use predicates::prelude::*;
 use std::fs;
 use std::path::Path;
@@ -21,13 +22,29 @@ fn claude_home_flag(claude_home: &Path) -> String {
     format!("--claude-home={}", claude_home.display())
 }
 
+fn codex_home_flag(codex_home: &Path) -> String {
+    format!("--codex-home={}", codex_home.display())
+}
+
+fn read_last_distilled(dir: &Path) -> DateTime<Utc> {
+    let state = fs::read_to_string(dir.join("state.toml")).unwrap();
+    let raw = state
+        .lines()
+        .find_map(|line| line.strip_prefix("last_distilled = "))
+        .expect("last_distilled line must exist");
+    DateTime::parse_from_rfc3339(raw)
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
 fn set_last_distilled(dir: &Path, timestamp: &str) {
     let state_path = dir.join("state.toml");
     let original = fs::read_to_string(&state_path).unwrap();
-    let updated = original.replace(
-        "last_distilled = 1970-01-01T00:00:00Z",
-        &format!("last_distilled = {timestamp}"),
-    );
+    let line = original
+        .lines()
+        .find(|line| line.starts_with("last_distilled = "))
+        .expect("last_distilled line must exist");
+    let updated = original.replacen(line, &format!("last_distilled = {timestamp}"), 1);
     assert_ne!(updated, original, "last_distilled replacement must match");
     fs::write(&state_path, updated).unwrap();
 }
@@ -257,12 +274,13 @@ fn claude_install_then_session_end_then_distill() {
 }
 
 #[test]
-fn distill_with_epoch_last_distilled_includes_all_logs() {
+fn distill_with_old_last_distilled_includes_all_logs() {
     let tmp = tempfile::tempdir().unwrap();
     let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
 
     install(dir, claude_tmp.path());
+    set_last_distilled(dir, "1970-01-01T00:00:00Z");
 
     let transcript1 = tmp.path().join("t1.jsonl");
     fs::write(&transcript1, "First log.\n").unwrap();
@@ -294,6 +312,81 @@ fn distill_with_epoch_last_distilled_includes_all_logs() {
         .success()
         .stdout(predicate::str::contains("First log."))
         .stdout(predicate::str::contains("Second log."));
+}
+
+#[test]
+fn distill_accepts_external_claude_home_flag() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let session_id = "0198fb08-e6e4-7a41-8b3f-2fc8a9ee215d";
+
+    install(dir, claude_tmp.path());
+    set_last_distilled(dir, "2026-01-01T00:00:00Z");
+
+    let session_path = claude_tmp
+        .path()
+        .join("projects")
+        .join("proj")
+        .join(format!("{session_id}.jsonl"));
+    fs::create_dir_all(session_path.parent().unwrap()).unwrap();
+    fs::write(
+        &session_path,
+        "{\"timestamp\":\"2026-07-01T12:00:00Z\",\"type\":\"user\",\"message\":{\"content\":\"external cli hello\"}}\n",
+    )
+    .unwrap();
+
+    leiter(dir)
+        .args(["soul", "distill", &claude_home_flag(claude_tmp.path())])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("external cli hello"))
+        .stdout(predicate::str::contains(format!(
+            "projects/proj/{session_id}.jsonl"
+        )));
+
+    let state = fs::read_to_string(dir.join("state.toml")).unwrap();
+    assert!(state.contains(&format!("[claude.pending.{session_id}]")));
+}
+
+#[test]
+fn distill_accepts_external_codex_home_flag() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    let codex_tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    install(dir, claude_tmp.path());
+    leiter(dir)
+        .args(["config", "set", "enable_codex_experimental", "true"])
+        .assert()
+        .success();
+
+    let rollout_path = codex_tmp
+        .path()
+        .join("sessions")
+        .join("2026")
+        .join("03")
+        .join("07")
+        .join("rollout.jsonl");
+    fs::create_dir_all(rollout_path.parent().unwrap()).unwrap();
+    fs::write(
+        &rollout_path,
+        concat!(
+            "{\"timestamp\":\"2026-03-07T18:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"codex-sess\",\"timestamp\":\"2026-03-07T18:00:00Z\"}}\n",
+            "{\"timestamp\":\"2026-03-07T18:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"codex override hello\"}]}}\n"
+        ),
+    )
+    .unwrap();
+
+    leiter(dir)
+        .args(["soul", "distill", &codex_home_flag(codex_tmp.path())])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("codex override hello"))
+        .stdout(predicate::str::contains(
+            "sessions/2026/03/07/rollout.jsonl",
+        ));
 }
 
 #[test]
@@ -359,6 +452,7 @@ fn nudge_outputs_message_when_stale_logs_exist() {
     let dir = tmp.path();
 
     install(dir, claude_tmp.path());
+    set_last_distilled(dir, "2026-01-01T00:00:00Z");
 
     let stale_filename = "20260101T000000Z-stale-sess.jsonl";
     let logs_dir = dir.join("logs");
@@ -501,6 +595,8 @@ fn mark_distilled_updates_timestamp() {
     let dir = tmp.path();
 
     install(dir, claude_tmp.path());
+    set_last_distilled(dir, "1970-01-01T00:00:00Z");
+    let before = read_last_distilled(dir);
 
     leiter(dir)
         .args(["soul", "mark-distilled"])
@@ -508,10 +604,10 @@ fn mark_distilled_updates_timestamp() {
         .success()
         .stdout(predicate::str::contains("last_distilled set to "));
 
-    let content = fs::read_to_string(dir.join("state.toml")).unwrap();
+    let after = read_last_distilled(dir);
     assert!(
-        !content.contains("last_distilled = 1970-01-01T00:00:00Z"),
-        "timestamp should have been updated from epoch"
+        after > before,
+        "mark-distilled should advance last_distilled"
     );
 }
 
@@ -537,6 +633,7 @@ fn auto_distill_with_stale_log_outputs_message() {
     let dir = tmp.path();
 
     install(dir, claude_tmp.path());
+    set_last_distilled(dir, "2026-01-01T00:00:00Z");
 
     let stale_filename = "20260101T000000Z-stale-sess.jsonl";
     let logs_dir = dir.join("logs");

@@ -1,8 +1,15 @@
-//! `leiter soul mark-distilled` — set `last_distilled` to the current time.
+//! `leiter soul mark-distilled` — commit the last distill run's cutoff.
 //!
 //! Deterministically updates `state.toml` so the agent never has to edit
-//! `last_distilled` by hand. When Codex distillation is enabled, the same
-//! atomic write also promotes pending Codex watermarks.
+//! `last_distilled` by hand. The same atomic write always promotes pending
+//! Claude watermarks and, when Codex distillation is enabled, pending Codex
+//! watermarks.
+//!
+//! `last_distilled` advances to the scan-start time the distill run staged,
+//! not to the mark-time wall clock. Sessions born between the scan and the
+//! mark would otherwise sit below the external scan's floor forever — no
+//! committed watermark, mtime older than a mark-time cutoff — and the same
+//! window would silently discard hook-copied logs as obsolete.
 
 use std::io::Write;
 use std::path::Path;
@@ -22,7 +29,16 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
     };
 
     let config = load_config_best_effort(state_dir);
-    state.last_distilled = Utc::now().trunc_subsecs(0);
+    if !state.claude.pending.is_empty() {
+        let pending = std::mem::take(&mut state.claude.pending);
+        state.claude.committed.extend(pending);
+    }
+    // Fall back to the wall clock only when nothing was staged (a mark run
+    // without a preceding non-dry-run distill).
+    state.last_distilled = state
+        .pending_scan_started_utc
+        .take()
+        .unwrap_or_else(|| Utc::now().trunc_subsecs(0));
     if config.enable_codex_experimental && !state.codex.pending.is_empty() {
         let pending = std::mem::take(&mut state.codex.pending);
         state.codex.committed.extend(pending);
@@ -207,6 +223,43 @@ mod tests {
         run_mark_distilled(tmp.path());
 
         let updated = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert_eq!(updated.codex.pending.len(), 1);
+        assert!(updated.codex.committed.is_empty());
+    }
+
+    #[test]
+    fn promotes_pending_claude_metadata_when_codex_gate_is_disabled() {
+        let tmp = setup_state_dir();
+        let ts = Utc.with_ymd_and_hms(2026, 3, 7, 18, 0, 0).unwrap();
+
+        let mut state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        state.claude.pending.insert(
+            "claude-sess".to_string(),
+            SessionWatermark {
+                path: "/tmp/claude.jsonl".to_string(),
+                size_bytes: 99,
+                mtime_utc: ts,
+                session_timestamp_utc: Some(ts),
+                latest_event_timestamp_utc: None,
+            },
+        );
+        state.codex.pending.insert(
+            "codex-sess".to_string(),
+            SessionWatermark {
+                path: "/tmp/codex.jsonl".to_string(),
+                size_bytes: 100,
+                mtime_utc: ts,
+                session_timestamp_utc: Some(ts),
+                latest_event_timestamp_utc: Some(ts),
+            },
+        );
+        state.save(&paths::state_path(tmp.path())).unwrap();
+
+        run_mark_distilled(tmp.path());
+
+        let updated = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(updated.claude.pending.is_empty());
+        assert!(updated.claude.committed.contains_key("claude-sess"));
         assert_eq!(updated.codex.pending.len(), 1);
         assert!(updated.codex.committed.is_empty());
     }

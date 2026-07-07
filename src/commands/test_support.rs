@@ -28,6 +28,11 @@ pub fn setup_state_dir() -> TestDirs {
     let state = tempfile::tempdir().expect("failed to create temporary state directory");
     let claude = tempfile::tempdir().expect("failed to create temporary claude home");
     agent_setup::run(state.path(), claude.path()).expect("failed to initialize test state");
+    // Most command tests synthesize historical log filenames. Keep the common
+    // fixture broad while the install tests cover the real fresh-state floor.
+    update_state(state.path(), |state| {
+        state.last_distilled = Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap();
+    });
     TestDirs { state, claude }
 }
 
@@ -40,9 +45,11 @@ pub fn write_state_with_epochs(state_dir: &Path, soft: u32, hard: u32) {
     let state = LeiterState {
         version: crate::state::STATE_VERSION,
         last_distilled: Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap(),
+        pending_scan_started_utc: None,
         soul_version: SOUL_TEMPLATE_VERSION,
         setup_soft_epoch: soft,
         setup_hard_epoch: hard,
+        claude: Default::default(),
         codex: Default::default(),
     };
     fs::create_dir_all(state_dir).unwrap();
