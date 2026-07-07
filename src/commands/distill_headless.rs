@@ -107,7 +107,7 @@ pub fn run_with_homes(
                 gathered.staged_session_count
             )?;
             writeln!(out, "{}", confirmation_line(last_distilled))?;
-            remove_empty_legacy_logs_dir(state_dir);
+            sweep_committed_legacy_logs(state_dir, last_distilled);
             return Ok(());
         }
         writeln!(out, "nothing to distill")?;
@@ -176,7 +176,7 @@ pub fn run_with_homes(
     out.write_all(&output.stdout)?;
     err.write_all(&output.stderr)?;
     writeln!(out, "{}", confirmation_line(last_distilled))?;
-    remove_empty_legacy_logs_dir(state_dir);
+    sweep_committed_legacy_logs(state_dir, last_distilled);
 
     Ok(())
 }
@@ -269,26 +269,63 @@ fn strip_relayed_c0_controls(bytes: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// Remove the legacy logs directory once file cleanup has drained it.
-fn remove_empty_legacy_logs_dir(state_dir: &Path) {
+/// Sweep committed legacy logs and remove the logs directory once drained.
+///
+/// The scan-time obsolete cleanup only deletes files already below
+/// `last_distilled` when the run started, so a legacy log emitted THIS run
+/// would otherwise survive until the next distill and the directory removal
+/// would take two cycles — but the migration flow promises the first
+/// post-migration distill drains and removes it. Running the sweep after the
+/// commit keeps it crash-safe: everything strictly below the just-committed
+/// cutoff is committed history (a same-second log survives to the next run —
+/// the cutoff is strict on purpose, mirroring the inclusive `>=` scan rule).
+/// One sub-second caveat: a hook copy stamped just before the scan but
+/// persisted just after the directory listing is swept un-emitted; the
+/// outcome is identical to pre-existing scan-time cleanup, which would have
+/// deleted the same file un-emitted on the next run.
+/// On a failed run the post-commit sweep never executes, so it deletes
+/// nothing beyond what scan-time cleanup already did. All sweep and rmdir
+/// failures are warnings, never command failures.
+fn sweep_committed_legacy_logs(state_dir: &Path, committed_cutoff: chrono::DateTime<chrono::Utc>) {
     let logs_dir = paths::logs_dir(state_dir);
-    let is_empty = match fs::read_dir(&logs_dir) {
-        Ok(mut entries) => entries.next().is_none(),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+    match crate::log_filename::collect_log_entries(&logs_dir) {
+        Ok(entries) => {
+            for entry in entries {
+                if entry.timestamp < committed_cutoff
+                    && let Err(err) = fs::remove_file(&entry.path)
+                {
+                    warn!(
+                        "failed to delete drained legacy log {}: {err}",
+                        entry.filename
+                    );
+                }
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
         Err(err) => {
             warn!(
                 "failed to inspect legacy logs directory {}: {err}",
                 logs_dir.display()
             );
-            false
+            return;
         }
-    };
+    }
 
-    if is_empty && let Err(err) = fs::remove_dir(&logs_dir) {
-        warn!(
-            "failed to remove empty legacy logs directory {}: {err}",
+    match fs::read_dir(&logs_dir) {
+        Ok(mut entries) => {
+            if entries.next().is_none()
+                && let Err(err) = fs::remove_dir(&logs_dir)
+            {
+                warn!(
+                    "failed to remove empty legacy logs directory {}: {err}",
+                    logs_dir.display()
+                );
+            }
+        }
+        Err(err) => warn!(
+            "failed to re-inspect legacy logs directory {}: {err}",
             logs_dir.display()
-        );
+        ),
     }
 }
 
@@ -562,6 +599,74 @@ mod tests {
         assert!(state.pending_scan_started_utc.is_none());
         assert!(state.claude.pending.is_empty());
         assert!(state.claude.committed.contains_key(SESSION_ID));
+    }
+
+    /// The empty-only self-commit path must sweep drained legacy logs too: a
+    /// suppressed duplicate legacy copy of a progress-only session would
+    /// otherwise linger (and keep the directory alive) even though its
+    /// content is fully accounted for by the committed watermark.
+    #[cfg(unix)]
+    #[test]
+    fn empty_only_commit_sweeps_suppressed_legacy_log() {
+        let tmp = setup_state_dir();
+        update_state(tmp.path(), |state| {
+            state.last_distilled = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
+        });
+        write_progress_only_claude_session(tmp.claude.path(), SESSION_ID);
+        let legacy = generate_log_filename(
+            Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
+            SESSION_ID,
+        );
+        fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
+        fs::write(paths::logs_dir(tmp.path()).join(&legacy), "{}").unwrap();
+
+        let script_dir = tempfile::tempdir().unwrap();
+        let script = script_dir.path().join("agent.sh");
+        write_script(&script, "#!/bin/sh\nexit 0\n");
+        let config = LeiterConfig {
+            agent_command: Some(vec![script.display().to_string()]),
+            ..Default::default()
+        };
+
+        let (result, out, _err) = run_capture(tmp.path(), &config, tmp.claude.path(), false);
+        result.unwrap();
+        assert!(out.contains("empty sessions marked processed"));
+        assert!(
+            !paths::logs_dir(tmp.path()).exists(),
+            "empty-only commit must sweep the suppressed legacy log and remove the directory"
+        );
+    }
+
+    /// The post-commit sweep's cutoff is strict: a legacy log stamped exactly
+    /// at the committed `last_distilled` survives to the next run, mirroring
+    /// the inclusive `>=` scan rule so nothing can be deleted before a run
+    /// that emits it has committed.
+    #[test]
+    fn sweep_preserves_logs_at_or_above_the_cutoff() {
+        let tmp = setup_state_dir();
+        let cutoff = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
+        let below = generate_log_filename(
+            Utc.with_ymd_and_hms(2026, 5, 31, 23, 0, 0).unwrap(),
+            "below",
+        );
+        let at = generate_log_filename(cutoff, "exactly-at");
+        let above =
+            generate_log_filename(Utc.with_ymd_and_hms(2026, 6, 1, 1, 0, 0).unwrap(), "above");
+        let logs_dir = paths::logs_dir(tmp.path());
+        fs::create_dir_all(&logs_dir).unwrap();
+        for name in [&below, &at, &above] {
+            fs::write(logs_dir.join(name), "{}").unwrap();
+        }
+
+        sweep_committed_legacy_logs(tmp.path(), cutoff);
+
+        assert!(!logs_dir.join(&below).exists());
+        assert!(
+            logs_dir.join(&at).exists(),
+            "strict cutoff: at-boundary log survives"
+        );
+        assert!(logs_dir.join(&above).exists());
+        assert!(logs_dir.exists(), "directory stays while logs remain");
     }
 
     #[cfg(unix)]
@@ -908,6 +1013,58 @@ mod tests {
             .0
             .unwrap();
         assert!(paths::logs_dir(tmp.path()).is_dir());
+    }
+
+    /// The migration flow promises the FIRST post-migration distill drains
+    /// the legacy logs and removes the directory. A log emitted this run is
+    /// above `last_distilled` at scan time (so scan-time cleanup skips it);
+    /// only the post-commit sweep — cutting at the newly committed
+    /// `last_distilled` — makes single-run drain true.
+    #[cfg(unix)]
+    #[test]
+    fn first_run_drains_legacy_log_emitted_this_run() {
+        let tmp = setup_state_dir();
+        update_state(tmp.path(), |state| {
+            state.last_distilled = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
+        });
+        // A legacy log ABOVE last_distilled: emitted by this run, not
+        // deletable by scan-time cleanup.
+        let fresh_log =
+            generate_log_filename(Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(), "fresh");
+        fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
+        fs::write(
+            paths::logs_dir(tmp.path()).join(&fresh_log),
+            serde_json::json!({"type": "user", "message": {"content": "legacy words"}}).to_string(),
+        )
+        .unwrap();
+
+        let script_dir = tempfile::tempdir().unwrap();
+        let script = script_dir.path().join("agent.sh");
+        let prompt_path = script_dir.path().join("prompt.txt");
+        let staged_path = script_dir.path().join("staged.txt");
+        write_script(
+            &script,
+            "#!/bin/sh\ncat > \"$1\"\nprintf '\\n- update\\n' >> \"$2\"\ngrep '^pending_scan_started_utc = ' \"$3\" > \"$4\"\nprintf 'summary\\n'\n",
+        );
+        let config = success_config(
+            &script,
+            &prompt_path,
+            &paths::soul_path(tmp.path()),
+            &paths::state_path(tmp.path()),
+            &staged_path,
+        );
+
+        let (result, _stdout, _stderr) = run_capture(tmp.path(), &config, tmp.claude.path(), false);
+        result.unwrap();
+        let prompt = fs::read_to_string(&prompt_path).unwrap();
+        assert!(
+            prompt.contains("legacy words"),
+            "the fresh legacy log must have been emitted to the agent this run"
+        );
+        assert!(
+            !paths::logs_dir(tmp.path()).exists(),
+            "single-run drain: emitted legacy log swept and directory removed after commit"
+        );
     }
 
     #[test]

@@ -258,9 +258,27 @@ pub fn gather(
         for emission in &claude_emissions {
             match emission {
                 ClaudeEmission::Legacy(entry) => {
-                    let content = fs::read_to_string(&entry.path).with_context(|| {
-                        format!("failed to read log file: {}", entry.path.display())
-                    })?;
+                    // A legacy log can vanish between our directory listing
+                    // and this read: a concurrent distill's post-commit sweep
+                    // deletes logs it has committed. That content is safe in
+                    // the other run's commit, so skip-with-warning — a hard
+                    // failure here would make overlapping cron runs spuriously
+                    // error on files that were handled, not lost.
+                    let content = match fs::read_to_string(&entry.path) {
+                        Ok(content) => content,
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                            warn!(
+                                "legacy log {} vanished mid-run (concurrent distill swept it); skipping",
+                                entry.filename
+                            );
+                            continue;
+                        }
+                        Err(err) => {
+                            return Err(err).with_context(|| {
+                                format!("failed to read log file: {}", entry.path.display())
+                            });
+                        }
+                    };
                     let mut rendered = Vec::new();
                     filter_session_log(&content, &mut rendered)?;
                     let rendered = String::from_utf8_lossy(&rendered);
