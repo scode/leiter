@@ -41,13 +41,13 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, SubsecRound, Utc};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::claude_sessions::{
     ClaudeScanOutcome, DistilledClaudeSession,
     collect_changed_sessions as collect_claude_changed_sessions,
 };
-use crate::claude_transcript::filter_session_log;
+use crate::claude_transcript::{filter_session_log, is_distill_child_transcript};
 use crate::codex::{DistilledCodexSession, collect_changed_sessions};
 use crate::config::load_config_best_effort;
 use crate::log_filename::{ParsedLogEntry, collect_log_entries};
@@ -69,11 +69,12 @@ pub struct GatherResult {
     pub obsolete_cleanup_report: Vec<u8>,
     /// Whether any visible transcript content was emitted.
     pub has_emissions: bool,
-    /// Changed transcript files staged into pending watermarks this run.
+    /// Transcript files processed without necessarily being emitted.
     ///
     /// This can be non-zero even when `has_emissions` is false: progress-only
-    /// or otherwise empty canonicalized sessions still need their watermarks
-    /// promoted or they will be restaged forever.
+    /// sessions, sentinel-classified child sessions, and suppressed legacy
+    /// child logs still need this run to commit so they stop feeding later
+    /// scans.
     pub staged_session_count: usize,
     /// Scan-start timestamp staged into `pending_scan_started_utc`.
     ///
@@ -236,11 +237,33 @@ pub fn gather(
     // SessionEnd hook copies a log after mark-distilled committed the
     // session). Floor-skipped ids are deliberately not in this set.
     legacy_logs.retain(|entry| !claude_scan.accounted_ids.contains(&entry.session_id));
+
+    let mut legacy_distill_child_ids = Vec::new();
+    legacy_logs.retain(|entry| {
+        if legacy_log_is_distill_child(entry) {
+            legacy_distill_child_ids.push(entry.session_id.clone());
+            false
+        } else {
+            true
+        }
+    });
+
     let external_claude_sessions = claude_scan.changed;
+    let mut excluded_distill_child_ids: Vec<String> = external_claude_sessions
+        .iter()
+        .filter(|session| session.is_distill_child)
+        .map(|session| session.session_id.clone())
+        .collect();
+    excluded_distill_child_ids.extend(legacy_distill_child_ids.iter().cloned());
 
     let codex_sessions =
         collect_codex_sessions(state_dir, &mut state, codex_home, codex_enabled, dry_run);
-    let staged_session_count = external_claude_sessions.len() + codex_sessions.staged_count;
+    excluded_distill_child_ids.extend(codex_sessions.excluded_child_ids.iter().cloned());
+    log_excluded_distill_children(&excluded_distill_child_ids);
+
+    let staged_session_count = external_claude_sessions.len()
+        + codex_sessions.staged_count
+        + legacy_distill_child_ids.len();
 
     let claude_emissions = merge_claude_emissions(legacy_logs, external_claude_sessions);
     let has_claude_logs = !claude_emissions.is_empty();
@@ -478,6 +501,7 @@ fn collect_claude_sessions(
 struct CodexCollection {
     rendered: Vec<DistilledCodexSession>,
     staged_count: usize,
+    excluded_child_ids: Vec<String>,
 }
 
 fn collect_codex_sessions(
@@ -491,6 +515,7 @@ fn collect_codex_sessions(
         return CodexCollection {
             rendered: Vec::new(),
             staged_count: 0,
+            excluded_child_ids: Vec::new(),
         };
     }
 
@@ -498,6 +523,7 @@ fn collect_codex_sessions(
         return CodexCollection {
             rendered: Vec::new(),
             staged_count: 0,
+            excluded_child_ids: Vec::new(),
         };
     };
 
@@ -513,14 +539,55 @@ fn collect_codex_sessions(
         }
     }
 
+    let excluded_child_ids = codex_sessions
+        .iter()
+        .filter(|session| session.is_distill_child)
+        .map(|session| session.session_id.clone())
+        .collect();
     let rendered = codex_sessions
         .into_iter()
-        .filter(|session| !session.rendered.is_empty())
+        .filter(|session| !session.is_distill_child && !session.rendered.is_empty())
         .collect();
     CodexCollection {
         rendered,
         staged_count,
+        excluded_child_ids,
     }
+}
+
+/// Return whether a legacy hook-copied Claude log is leiter's own child transcript.
+///
+/// Legacy logs have no watermark to stage, so classification only affects
+/// emission. If the file cannot be read here, leave it in the normal render
+/// path so the existing mid-run missing-file and hard read-error behavior
+/// still applies.
+fn legacy_log_is_distill_child(entry: &ParsedLogEntry) -> bool {
+    match fs::read_to_string(&entry.path) {
+        Ok(content) => is_distill_child_transcript(&content),
+        Err(err) => {
+            debug!(
+                "could not classify legacy log {} before rendering: {err}",
+                entry.filename
+            );
+            false
+        }
+    }
+}
+
+/// Log every sentinel-classified child id suppressed by this scan.
+fn log_excluded_distill_children(session_ids: &[String]) {
+    if session_ids.is_empty() {
+        return;
+    }
+    info!("{}", excluded_distill_child_log_message(session_ids));
+}
+
+/// Format the observability line for sentinel-classified child suppression.
+fn excluded_distill_child_log_message(session_ids: &[String]) -> String {
+    format!(
+        "excluded leiter distill child session(s) from emission: {}",
+        session_ids.join(", ")
+    )
 }
 
 /// Claude transcript item ready to be emitted in chronological order.
@@ -595,7 +662,7 @@ mod tests {
     use crate::config::LeiterConfig;
     use crate::log_filename::generate_log_filename;
     use crate::state::{LeiterState, SessionWatermark};
-    use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
+    use crate::templates::{DISTILL_PROMPT_SENTINEL, SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
     use chrono::{DateTime, TimeZone, Utc};
     use serde_json::Value;
     use std::path::PathBuf;
@@ -1200,6 +1267,116 @@ mod tests {
         assert!(!output.contains("legacy duplicate should be suppressed"));
         let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
         assert!(state.claude.pending.contains_key(session_id));
+    }
+
+    #[test]
+    fn distill_child_session_is_staged_without_emission_and_suppresses_legacy_log() {
+        let tmp = setup_state_dir();
+        let claude_home = tempfile::tempdir().unwrap();
+        let child_id = "0198fb08-e6e4-7a41-8b3f-2fc8a9ee215d";
+        let organic_id = "1198fb08-e6e4-7a41-8b3f-2fc8a9ee215d";
+        write_claude_session(
+            claude_home.path(),
+            "proj",
+            child_id,
+            &[claude_user_line(
+                &format!("{DISTILL_PROMPT_SENTINEL}\nchild-only historical payload"),
+                "2026-07-01T12:00:00Z",
+            )],
+        );
+        write_claude_session(
+            claude_home.path(),
+            "proj",
+            organic_id,
+            &[claude_user_line(
+                "organic preference survives",
+                "2026-07-01T12:01:00Z",
+            )],
+        );
+        write_log(
+            tmp.path(),
+            2026,
+            7,
+            1,
+            12,
+            child_id,
+            "legacy duplicate should be suppressed",
+        );
+        set_last_distilled(tmp.path(), 2026, 1, 1, 0);
+
+        let output = run_distill_with_claude_home(tmp.path(), claude_home.path(), false);
+
+        assert!(output.contains("organic preference survives"));
+        assert!(!output.contains("child-only historical payload"));
+        assert!(!output.contains("legacy duplicate should be suppressed"));
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(state.claude.pending.contains_key(child_id));
+        assert!(state.claude.pending.contains_key(organic_id));
+
+        crate::commands::mark_distilled::run(tmp.path(), &mut Vec::new(), None, None).unwrap();
+        let committed = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(committed.claude.committed.contains_key(child_id));
+        assert!(committed.claude.committed.contains_key(organic_id));
+    }
+
+    #[test]
+    fn interactive_distill_payload_adds_no_headless_sentinel() {
+        let tmp = setup_state_dir();
+        let claude_home = tempfile::tempdir().unwrap();
+        write_claude_session(
+            claude_home.path(),
+            "proj",
+            "0198fb08-e6e4-7a41-8b3f-2fc8a9ee215d",
+            &[claude_user_line("ordinary payload", "2026-07-01T12:00:00Z")],
+        );
+        set_last_distilled(tmp.path(), 2026, 1, 1, 0);
+
+        let output = run_distill_with_claude_home(tmp.path(), claude_home.path(), false);
+
+        assert!(output.contains("ordinary payload"));
+        assert!(!output.contains(DISTILL_PROMPT_SENTINEL));
+    }
+
+    #[test]
+    fn excluded_child_log_line_names_session_ids() {
+        let ids = vec!["id1".to_string(), "id2".to_string()];
+
+        assert_eq!(
+            excluded_distill_child_log_message(&ids),
+            "excluded leiter distill child session(s) from emission: id1, id2"
+        );
+    }
+
+    #[test]
+    fn legacy_distill_child_log_is_not_rendered() {
+        let tmp = setup_state_dir();
+        let child_id = "legacy-child";
+        let child_log = serde_json::json!({
+            "type": "user",
+            "message": {"content": format!("{DISTILL_PROMPT_SENTINEL}\nlegacy child payload")}
+        })
+        .to_string();
+        write_log(tmp.path(), 2026, 7, 1, 12, child_id, &child_log);
+        write_log(
+            tmp.path(),
+            2026,
+            7,
+            1,
+            13,
+            "legacy-organic",
+            &serde_json::json!({
+                "type": "user",
+                "message": {"content": "legacy organic payload"}
+            })
+            .to_string(),
+        );
+        set_last_distilled(tmp.path(), 2026, 1, 1, 0);
+
+        let output = run_distill(tmp.path());
+
+        assert!(output.contains("legacy organic payload"));
+        assert!(!output.contains("legacy child payload"));
+        assert!(!output.contains(DISTILL_PROMPT_SENTINEL));
     }
 
     #[test]
@@ -1917,6 +2094,63 @@ mod tests {
         assert!(output.contains("quoted < /session> and < /session-transcripts>"));
         assert_eq!(output.matches("</session>").count(), 1);
         assert_eq!(output.matches("</session-transcripts>").count(), 1);
+    }
+
+    #[test]
+    fn codex_distill_child_session_is_staged_without_emission() {
+        let tmp = setup_state_dir();
+        set_codex_enabled(tmp.path(), true);
+        let codex_home = tempfile::tempdir().unwrap();
+        write_codex_rollout(
+            codex_home.path(),
+            "sessions/child.jsonl",
+            &[
+                codex_session_meta("codex-child", "2026-03-07T18:00:00Z"),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T18:00:01Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": format!("{DISTILL_PROMPT_SENTINEL}\nchild codex payload")}]
+                    }
+                }),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T18:00:02Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "child summary"}]
+                    }
+                }),
+            ],
+        );
+        write_codex_rollout(
+            codex_home.path(),
+            "sessions/organic.jsonl",
+            &[
+                codex_session_meta("codex-organic", "2026-03-07T19:00:00Z"),
+                serde_json::json!({
+                    "timestamp": "2026-03-07T19:00:01Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "codex organic payload"}]
+                    }
+                }),
+            ],
+        );
+
+        let output = run_distill_with_codex_home(tmp.path(), codex_home.path(), false);
+
+        assert!(output.contains("codex organic payload"));
+        assert!(!output.contains("child codex payload"));
+        assert!(!output.contains("child summary"));
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(state.codex.pending.contains_key("codex-child"));
+        assert!(state.codex.pending.contains_key("codex-organic"));
     }
 
     #[test]

@@ -22,7 +22,7 @@ use crate::commands::mark_distilled::{
 use crate::config::{LeiterConfig, load_config_best_effort};
 use crate::paths;
 use crate::sync::{SyncHomes, resync_and_warn};
-use crate::templates::HEADLESS_DISTILL_EDIT_INSTRUCTION;
+use crate::templates::{DISTILL_PROMPT_SENTINEL, HEADLESS_DISTILL_EDIT_INSTRUCTION};
 use crate::validation::{ValidationStatus, validate_state};
 
 /// Run the top-level `leiter distill` command against the default homes.
@@ -73,7 +73,7 @@ pub fn run_with_homes(
     let prompt = compose_prompt(state_dir, &gathered.payload);
 
     if dry_run {
-        out.write_all(prompt.as_bytes())?;
+        out.write_all(elide_prompt_sentinel_for_dry_run(&prompt).as_bytes())?;
         return Ok(());
     }
 
@@ -183,17 +183,32 @@ pub fn run_with_homes(
 
 /// Compose the prompt sent to the child agent.
 ///
-/// The transcript payload is already bounded as historical data by
-/// `leiter soul distill`; this function appends only the concrete soul path
-/// and the edit-only instruction needed for the headless child. It must never
-/// add a mark or sync instruction because the parent command performs those
-/// bookkeeping steps after a successful child exit.
+/// The first line is the self-session sentinel. Session scanners use that
+/// exact first-user-message position to recognize the synthetic child
+/// transcript later; moving the sentinel deeper into the prompt would make the
+/// exclusion fail by design. The transcript payload is already bounded as
+/// historical data by `leiter soul distill`; this function appends only the
+/// concrete soul path and the edit-only instruction needed for the headless
+/// child. It must never add a mark or sync instruction because the parent
+/// command performs those bookkeeping steps after a successful child exit.
 fn compose_prompt(state_dir: &Path, payload: &[u8]) -> String {
     let payload = String::from_utf8_lossy(payload);
     let soul_path = paths::soul_path(state_dir);
     format!(
-        "{payload}\nSoul file: `{}`\n\n{HEADLESS_DISTILL_EDIT_INSTRUCTION}",
+        "{DISTILL_PROMPT_SENTINEL}\n{payload}\nSoul file: `{}`\n\n{HEADLESS_DISTILL_EDIT_INSTRUCTION}",
         soul_path.display()
+    )
+}
+
+/// Hide the live self-session sentinel from dry-run output.
+///
+/// Dry-run is for inspection, and a session that merely looked at the prompt
+/// should remain learnable. Real headless children receive the sentinel so
+/// their synthetic transcripts can be excluded on the next scan.
+fn elide_prompt_sentinel_for_dry_run(prompt: &str) -> String {
+    prompt.replace(
+        DISTILL_PROMPT_SENTINEL,
+        "[distill prompt sentinel elided from dry-run output]",
     )
 }
 
@@ -337,6 +352,7 @@ mod tests {
     use crate::log_filename::generate_log_filename;
     use crate::managed_block::{compose_block, sha256_hex};
     use crate::state::{LeiterState, SyncHashes};
+    use crate::templates::DISTILL_PROMPT_SENTINEL;
     use chrono::{Duration, TimeZone, Utc};
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -349,13 +365,12 @@ mod tests {
             .join("-tmp-proj")
             .join(format!("{session_id}.jsonl"));
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(
-            &path,
-            format!(
-                "{{\"timestamp\":\"2026-07-01T12:00:00Z\",\"type\":\"user\",\"message\":{{\"content\":\"{text}\"}}}}\n"
-            ),
-        )
-        .unwrap();
+        let line = serde_json::json!({
+            "timestamp": "2026-07-01T12:00:00Z",
+            "type": "user",
+            "message": {"content": text}
+        });
+        fs::write(&path, format!("{line}\n")).unwrap();
         path
     }
 
@@ -475,6 +490,7 @@ mod tests {
         assert!(err.is_empty());
 
         let prompt = fs::read_to_string(&prompt_path).unwrap();
+        assert!(prompt.starts_with(&format!("{DISTILL_PROMPT_SENTINEL}\n")));
         assert!(prompt.contains("Soul-writing guidelines"));
         assert!(prompt.contains("HISTORICAL DATA"));
         assert!(prompt.contains("<session-transcripts>"));
@@ -515,7 +531,11 @@ mod tests {
         update_state(tmp.path(), |state| {
             state.last_distilled = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
         });
-        write_claude_session(tmp.claude.path(), SESSION_ID, "same prompt bytes");
+        write_claude_session(
+            tmp.claude.path(),
+            SESSION_ID,
+            &format!("same prompt bytes with payload copy {DISTILL_PROMPT_SENTINEL}"),
+        );
         let obsolete =
             generate_log_filename(Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap(), "old");
         fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
@@ -540,12 +560,16 @@ mod tests {
         dry_result.unwrap();
         assert!(dry_err.is_empty());
         assert!(!dry_out.contains("Obsolete logs that would be deleted"));
+        assert_eq!(dry_out.matches(DISTILL_PROMPT_SENTINEL).count(), 0);
+        assert!(dry_out.starts_with("[distill prompt sentinel elided from dry-run output]\n"));
 
         let (real_result, _real_out, real_err) =
             run_capture(tmp.path(), &config, tmp.claude.path(), false);
         real_result.unwrap();
         assert!(real_err.is_empty());
-        assert_eq!(dry_out.as_bytes(), fs::read(&prompt_path).unwrap());
+        let real_prompt = fs::read_to_string(&prompt_path).unwrap();
+        assert!(real_prompt.starts_with(&format!("{DISTILL_PROMPT_SENTINEL}\n")));
+        assert_eq!(dry_out, elide_prompt_sentinel_for_dry_run(&real_prompt));
     }
 
     #[cfg(unix)]
@@ -565,6 +589,8 @@ mod tests {
         assert!(err.is_empty());
         assert!(out.contains("No new session logs to process."));
         assert!(out.contains(HEADLESS_DISTILL_EDIT_INSTRUCTION));
+        assert!(!out.contains(DISTILL_PROMPT_SENTINEL));
+        assert!(out.starts_with("[distill prompt sentinel elided from dry-run output]\n"));
         assert!(!out.contains("nothing to distill"));
     }
 
@@ -601,6 +627,130 @@ mod tests {
         assert!(state.claude.committed.contains_key(SESSION_ID));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn distill_child_session_is_restaged_after_failed_agent() {
+        let tmp = setup_state_dir();
+        let child_id = "22222222-2222-4222-8222-222222222222";
+        write_claude_session(tmp.claude.path(), SESSION_ID, "organic retry payload");
+        write_claude_session(
+            tmp.claude.path(),
+            child_id,
+            &format!("{DISTILL_PROMPT_SENTINEL}\nchild payload must stay hidden"),
+        );
+        let before = LeiterState::load(&paths::state_path(tmp.path()))
+            .unwrap()
+            .last_distilled;
+        let script_dir = tempfile::tempdir().unwrap();
+        let fail_script = script_dir.path().join("fail-agent.sh");
+        write_script(
+            &fail_script,
+            "#!/bin/sh\ncat > /dev/null\nprintf 'failed child\\n' >&2\nexit 1\n",
+        );
+        let fail_config = LeiterConfig {
+            agent_command: Some(vec![fail_script.display().to_string()]),
+            ..Default::default()
+        };
+
+        let (failed, _failed_out, failed_err) =
+            run_capture(tmp.path(), &fail_config, tmp.claude.path(), false);
+        assert!(failed.is_err());
+        assert!(failed_err.contains("failed child"));
+        let failed_state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert_eq!(failed_state.last_distilled, before);
+        assert!(failed_state.claude.pending.contains_key(SESSION_ID));
+        assert!(failed_state.claude.pending.contains_key(child_id));
+        assert!(!failed_state.claude.committed.contains_key(child_id));
+
+        let success_script = script_dir.path().join("success-agent.sh");
+        let prompt_path = script_dir.path().join("retry-prompt.txt");
+        write_script(
+            &success_script,
+            "#!/bin/sh\ncat > \"$1\"\nprintf 'retry summary\\n'\n",
+        );
+        let success_config = LeiterConfig {
+            agent_command: Some(vec![
+                success_script.display().to_string(),
+                prompt_path.display().to_string(),
+            ]),
+            ..Default::default()
+        };
+        let (succeeded, _succeeded_out, succeeded_err) =
+            run_capture(tmp.path(), &success_config, tmp.claude.path(), false);
+        succeeded.unwrap();
+        assert!(succeeded_err.is_empty());
+
+        let prompt = fs::read_to_string(prompt_path).unwrap();
+        assert!(prompt.contains("organic retry payload"));
+        assert!(!prompt.contains("child payload must stay hidden"));
+        let succeeded_state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(succeeded_state.claude.committed.contains_key(SESSION_ID));
+        assert!(succeeded_state.claude.committed.contains_key(child_id));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn distill_child_growth_transcript_is_marked_without_agent_spawn() {
+        let tmp = setup_state_dir();
+        write_claude_session(tmp.claude.path(), SESSION_ID, "first organic payload");
+        let script_dir = tempfile::tempdir().unwrap();
+        let first_script = script_dir.path().join("first-agent.sh");
+        let first_prompt = script_dir.path().join("first-prompt.txt");
+        write_script(
+            &first_script,
+            "#!/bin/sh\ncat > \"$1\"\nprintf 'first summary\\n'\n",
+        );
+        let first_config = LeiterConfig {
+            agent_command: Some(vec![
+                first_script.display().to_string(),
+                first_prompt.display().to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let (first_result, _first_out, first_err) =
+            run_capture(tmp.path(), &first_config, tmp.claude.path(), false);
+        first_result.unwrap();
+        assert!(first_err.is_empty());
+        assert!(
+            fs::read_to_string(&first_prompt)
+                .unwrap()
+                .contains("first organic payload")
+        );
+
+        let child_id = "33333333-3333-4333-8333-333333333333";
+        let huge_payload = "prior transcript payload ".repeat(4096);
+        write_claude_session(
+            tmp.claude.path(),
+            child_id,
+            &format!("{DISTILL_PROMPT_SENTINEL}\n{huge_payload}"),
+        );
+        let marker = script_dir.path().join("second-agent-spawned");
+        let second_script = script_dir.path().join("second-agent.sh");
+        write_script(
+            &second_script,
+            &format!(
+                "#!/bin/sh\ntouch '{}'\nprintf 'unexpected\\n'\n",
+                marker.display()
+            ),
+        );
+        let second_config = LeiterConfig {
+            agent_command: Some(vec![second_script.display().to_string()]),
+            ..Default::default()
+        };
+
+        let (second_result, second_out, second_err) =
+            run_capture(tmp.path(), &second_config, tmp.claude.path(), false);
+        second_result.unwrap();
+        assert!(second_err.is_empty());
+        assert!(second_out.contains("1 empty sessions marked processed"));
+        assert!(!second_out.contains("prior transcript payload"));
+        assert!(!marker.exists());
+
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(state.claude.committed.contains_key(child_id));
+    }
+
     /// The empty-only self-commit path must sweep drained legacy logs too: a
     /// suppressed duplicate legacy copy of a progress-only session would
     /// otherwise linger (and keep the directory alive) even though its
@@ -634,6 +784,57 @@ mod tests {
         assert!(
             !paths::logs_dir(tmp.path()).exists(),
             "empty-only commit must sweep the suppressed legacy log and remove the directory"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_distill_child_log_is_suppressed_and_drained() {
+        let tmp = setup_state_dir();
+        update_state(tmp.path(), |state| {
+            state.last_distilled = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
+        });
+        let legacy = generate_log_filename(
+            Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
+            "legacy-child",
+        );
+        let logs_dir = paths::logs_dir(tmp.path());
+        fs::create_dir_all(&logs_dir).unwrap();
+        fs::write(
+            logs_dir.join(&legacy),
+            serde_json::json!({
+                "type": "user",
+                "message": {"content": format!("{DISTILL_PROMPT_SENTINEL}\nlegacy child payload")}
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let script_dir = tempfile::tempdir().unwrap();
+        let script = script_dir.path().join("agent.sh");
+        let marker = script_dir.path().join("spawned");
+        write_script(
+            &script,
+            &format!(
+                "#!/bin/sh\ntouch '{}'\nprintf 'unexpected\\n'\n",
+                marker.display()
+            ),
+        );
+        let config = LeiterConfig {
+            agent_command: Some(vec![script.display().to_string()]),
+            ..Default::default()
+        };
+
+        let (result, out, err) = run_capture(tmp.path(), &config, tmp.claude.path(), false);
+
+        result.unwrap();
+        assert!(err.is_empty());
+        assert!(out.contains("1 empty sessions marked processed"));
+        assert!(!out.contains("legacy child payload"));
+        assert!(!marker.exists());
+        assert!(
+            !logs_dir.exists(),
+            "post-commit sweep should drain a classified legacy child log"
         );
     }
 
@@ -833,6 +1034,7 @@ mod tests {
         result.unwrap();
         assert!(out.contains("dry run content"));
         assert!(out.contains(HEADLESS_DISTILL_EDIT_INSTRUCTION));
+        assert!(!out.contains(DISTILL_PROMPT_SENTINEL));
         assert!(err.is_empty());
         assert!(!marker.exists());
         assert_eq!(fs::read(paths::state_path(tmp.path())).unwrap(), before);

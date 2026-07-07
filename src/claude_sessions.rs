@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use tracing::warn;
 
-use crate::claude_transcript::render_session_log;
+use crate::claude_transcript::{is_distill_child_transcript, render_session_log};
 use crate::state::SessionWatermark;
 
 const HEADER_SCAN_LIMIT: usize = 50;
@@ -36,6 +36,13 @@ pub struct DistilledClaudeSession {
     pub sort_timestamp: DateTime<Utc>,
     /// User-visible transcript text after shared Claude canonicalization.
     pub rendered: String,
+    /// Whether positional sentinel classification marks this as leiter's own child.
+    ///
+    /// This is not provenance metadata. It means the transcript's first user
+    /// message begins with leiter's headless distill sentinel. A later
+    /// sentinel is deliberately inert; the remaining false-positive shape is
+    /// a user whose very first prompt starts with the sentinel text.
+    pub is_distill_child: bool,
     /// File-state snapshot to stage or commit after distillation.
     pub watermark: SessionWatermark,
 }
@@ -371,7 +378,12 @@ fn parse_changed_session(candidate: ClaudeCandidate) -> Result<DistilledClaudeSe
             candidate.path.display()
         )
     })?;
-    let rendered = render_session_log(&content)?;
+    let is_distill_child = is_distill_child_transcript(&content);
+    let rendered = if is_distill_child {
+        String::new()
+    } else {
+        render_session_log(&content)?
+    };
     let session_timestamp_utc = extract_sort_timestamp(&content);
 
     let watermark = SessionWatermark {
@@ -387,6 +399,7 @@ fn parse_changed_session(candidate: ClaudeCandidate) -> Result<DistilledClaudeSe
         file_label: candidate.file_label,
         sort_timestamp: session_timestamp_utc.unwrap_or(candidate.mtime_utc),
         rendered,
+        is_distill_child,
         watermark,
     })
 }
@@ -422,6 +435,7 @@ fn parse_timestamp(raw: &str) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::templates::DISTILL_PROMPT_SENTINEL;
     use chrono::TimeZone;
 
     fn write_session(home: &Path, rel: &str, lines: &[Value]) -> PathBuf {
@@ -726,6 +740,27 @@ mod tests {
         let sessions = changed_sessions(home.path(), &BTreeMap::new(), ts(1970, 1, 1, 0));
         assert_eq!(sessions.len(), 1);
         assert!(sessions[0].rendered.is_empty());
+    }
+
+    #[test]
+    fn distill_child_session_is_accounted_without_rendered_content() {
+        let home = tempfile::tempdir().unwrap();
+        let session_id = "0198fb08-e6e4-7a41-8b3f-2fc8a9ee215d";
+        write_session(
+            home.path(),
+            &format!("projects/proj/{session_id}.jsonl"),
+            &[user_line(
+                &format!("{DISTILL_PROMPT_SENTINEL}\nsynthetic prior payload"),
+                "2026-07-01T12:00:00Z",
+            )],
+        );
+
+        let outcome = collect_changed_sessions(home.path(), &BTreeMap::new(), ts(1970, 1, 1, 0));
+
+        assert_eq!(outcome.changed.len(), 1);
+        assert!(outcome.changed[0].is_distill_child);
+        assert!(outcome.changed[0].rendered.is_empty());
+        assert!(outcome.accounted_ids.contains(session_id));
     }
 
     #[test]

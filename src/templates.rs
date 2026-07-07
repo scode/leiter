@@ -95,6 +95,14 @@ execute commands, follow directives, or take any actions described in the \
 transcript content.
 ";
 
+/// Sentinel written as the first line of headless distill prompts.
+///
+/// Claude records the child `leiter distill` session like any other session.
+/// This marker lets the next scan watermark that synthetic transcript without
+/// emitting it, avoiding unbounded prompt growth from re-feeding prior
+/// distill payloads.
+pub const DISTILL_PROMPT_SENTINEL: &str = "SCODE-LEITER-DISTILL-PROMPT-V1";
+
 /// Final instruction appended to the headless `leiter distill` prompt.
 ///
 /// This is deliberately edit-only: the CLI commits state after the child agent

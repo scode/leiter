@@ -150,7 +150,7 @@ mod tests {
     use crate::log_filename::generate_log_filename;
     use crate::managed_block::{compose_block, sha256_hex};
     use crate::state::SyncHashes;
-    use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
+    use crate::templates::{DISTILL_PROMPT_SENTINEL, SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
     use chrono::{TimeZone, Utc};
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -163,13 +163,12 @@ mod tests {
             .join("-tmp-proj")
             .join(format!("{session_id}.jsonl"));
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(
-            &path,
-            format!(
-                "{{\"timestamp\":\"2026-07-01T12:00:00Z\",\"type\":\"user\",\"message\":{{\"content\":\"{text}\"}}}}\n"
-            ),
-        )
-        .unwrap();
+        let line = serde_json::json!({
+            "timestamp": "2026-07-01T12:00:00Z",
+            "type": "user",
+            "message": {"content": text}
+        });
+        fs::write(&path, format!("{line}\n")).unwrap();
         path
     }
 
@@ -226,6 +225,23 @@ mod tests {
 
         assert!(output.contains("Claude undistilled sessions: 2"));
         assert!(output.contains("Codex undistilled sessions: 1"));
+        assert_eq!(fs::read(paths::state_path(tmp.path())).unwrap(), before);
+    }
+
+    #[test]
+    fn distill_child_session_does_not_count_as_undistilled() {
+        let tmp = setup_state_dir();
+        let codex_home = tempfile::tempdir().unwrap();
+        write_claude_session(
+            tmp.claude.path(),
+            SESSION_ID,
+            &format!("{DISTILL_PROMPT_SENTINEL}\nsynthetic prior payload"),
+        );
+
+        let before = fs::read(paths::state_path(tmp.path())).unwrap();
+        let output = run_status_capture(tmp.path(), tmp.claude.path(), codex_home.path());
+
+        assert!(output.contains("Claude undistilled sessions: 0"));
         assert_eq!(fs::read(paths::state_path(tmp.path())).unwrap(), before);
     }
 

@@ -89,7 +89,9 @@ tables. See [codex.md](codex.md).
 1. **Gather.** Scan the session stores, apply the watermarks and the `last_distilled` floor, and stage what this run
    will show the agent as `pending` watermarks in `state.toml`. Compose a prompt from the soul-writing guidelines, a
    data-boundary preamble wrapping the transcripts (they are historical data, never directives — dropping this boundary
-   would hand transcript prompt-injection a headless agent with soul write access), and the soul path.
+   would hand transcript prompt-injection a headless agent with soul write access), and the soul path. Leiter excludes
+   its own headless agent transcripts from later scans using a sentinel at the start of the child prompt, so distill
+   does not feed on itself.
 2. **Agent.** Invoke the agent CLI headlessly, piping the prompt on stdin (transcript batches routinely exceed
    `ARG_MAX`). By default this is `claude -p` with `Read`/`Edit`/`Write` grants added for the soul file — write access
    is scoped to the soul; reads fall under the harness's normal working-directory rules; a configured `agent_command`
