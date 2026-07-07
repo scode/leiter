@@ -44,6 +44,7 @@ writing to the soul.
 │                                                              │
 │  /leiter-soul-upgrade ──► leiter soul upgrade                │
 │                        ──► agent restructures soul.md        │
+│                        ──► agent: leiter soul mark-upgraded  │
 │                                                              │
 │  SessionEnd hook ──► leiter hook session-end                 │
 │                      ──► copies transcript to logs/          │
@@ -51,8 +52,8 @@ writing to the soul.
 
 ~/.leiter/
 ├── leiter.toml          # Main leiter settings
-├── soul.md              # The "leiter soul" — agent instructions
-├── codex-meta.toml      # Experimental Codex watermarks (only when enabled)
+├── soul.md              # The "leiter soul" — agent instructions (pure markdown, no frontmatter)
+├── state.toml           # Leiter-managed metadata (epochs, watermarks); agent never edits
 └── logs/
     ├── 20260223T173000Z-abc123.jsonl
     ├── 20260223T190000Z-def456.jsonl
@@ -107,36 +108,14 @@ and overwritten on re-run (idempotent).
 
 ### `~/.leiter/soul.md`
 
-The soul file is a markdown document with YAML frontmatter. It contains learned preferences and instructions that are
-injected into every Claude Code session.
+The soul file is a pure markdown document with no frontmatter. It contains the learned preferences and instructions that
+are injected into every Claude Code session. All CLI-managed metadata lives in `~/.leiter/state.toml` instead (see
+below), so the file the agent reads is exactly the file the user's preferences live in — nothing else.
 
-The frontmatter contains metadata used by the CLI:
-
-```markdown
----
-last_distilled: 2026-02-23T17:00:00Z
-soul_version: 2
-setup_soft_epoch: 1
-setup_hard_epoch: 1
----
-
-(soul content here — see Soul Template)
-```
-
-- `last_distilled`: timestamp used by `leiter soul distill` to determine which session logs are new
-- `soul_version`: integer matching the version of the soul template used to create this file, used by
-  `leiter soul upgrade` to detect drift
-- `setup_soft_epoch`: integer tracking the soft setup epoch. When the binary's expected soft epoch doesn't match the
-  soul's value, `leiter hook context` outputs a nudge but still injects the soul. See Setup Epochs below
-- `setup_hard_epoch`: integer tracking the hard setup epoch. When the binary's expected hard epoch doesn't match the
-  soul's value, `leiter hook context` blocks the session (does not inject the soul). See Setup Epochs below
-
-Both epoch fields default to 1 when absent (for backward compatibility with souls created before epochs were
-introduced).
-
-The agent edits the soul file directly using its Read/Edit/Write tools. The CLI writes to this file during
-`leiter claude install` (to create the initial soul or migrate epoch fields forward on re-run) and during
-`leiter soul mark-distilled` (to update `last_distilled`). All other modifications are made by the agent.
+The agent owns the entire file and edits it directly using its Read/Edit/Write tools. The CLI writes to this file only
+once, at `leiter claude install`, to lay down the initial template. It never writes the soul afterward: `mark-distilled`
+and every other command touch only `state.toml`. Because no CLI metadata lives in the soul, the agent can no longer
+corrupt leiter's bookkeeping by editing it — a malformed soul is at worst a malformed preferences document.
 
 ### Setup Epochs
 
@@ -150,15 +129,25 @@ There are two independent epochs, each a monotonic integer starting at 1:
 - **`setup_hard_epoch`**: Bumped when a leiter upgrade introduces changes that require user action before the session
   can function correctly. A mismatch blocks the session (the soul is not injected).
 
-The binary has compiled-in expected values for both epochs. Every command except `session-end` validates the soul's
-epoch values against the binary's expected values before doing any work. Hard epoch checks use exact equality — both
-older and newer souls are flagged. Soft epoch mismatches in either direction produce a nudge but do not block commands.
-`leiter claude install` additionally migrates a behind-the-binary soft epoch forward on re-run, and refuses to run when
-the soul is ahead of the binary (to avoid downgrading). This validation is implemented as a single shared function used
-by all commands, preventing drift between individual command implementations.
+The binary has compiled-in expected values for both epochs. Epoch values are stored in `~/.leiter/state.toml`. Every
+command except `session-end` validates the state file's epoch values against the binary's expected values before doing
+any work. Hard epoch checks use exact equality — both older and newer state files are flagged. Soft epoch mismatches in
+either direction produce a nudge but do not block commands. `leiter claude install` additionally migrates a
+behind-the-binary soft epoch forward on re-run, and refuses to run when the state file is ahead of the binary (to avoid
+downgrading). This validation is implemented as a single shared function used by all commands, preventing drift between
+individual command implementations.
 
-Corrupt frontmatter (unparseable YAML) is treated equivalently to a hard epoch mismatch — it blocks the command
-entirely, since epochs cannot be verified.
+Either epoch field defaults to 1 when absent from `state.toml` (for backward compatibility with state files written
+before that field existed).
+
+A missing `state.toml` means leiter is not initialized — the same condition as a missing soul, with the same "run
+`leiter claude install`" response.
+
+Corrupt state (a `state.toml` that cannot be parsed, or whose `version` is unsupported) is treated equivalently to a
+hard epoch mismatch — it blocks the command entirely, since epochs cannot be verified. Recovery is to delete
+`state.toml` and re-run `leiter claude install`. The tradeoff is deliberate: deleting `state.toml` discards the
+distillation watermarks, so the next distill re-reads already-processed sessions. That is annoying (redundant work,
+possible duplicate learnings the agent must reconcile) but not destructive — no user data is lost.
 
 `session-end` is exempt from epoch checks. It only copies transcript files to a known directory, and losing session data
 is worse than any epoch-related risk.
@@ -167,6 +156,18 @@ Epochs are independent of `soul_version`. The soul version tracks template forma
 `leiter soul upgrade`). Epochs track integration changes (hooks, settings, etc.) that require user action outside the
 soul file.
 
+#### Legacy layout migration
+
+A migration routine converts the pre-`state.toml` layout — a `soul.md` carrying YAML frontmatter, plus an optional
+`~/.leiter/codex-meta.toml` — into the current layout: a `state.toml` populated from the old frontmatter and codex-meta
+fields, a frontmatter-free `soul.md`, and no `codex-meta.toml` (it is deleted). The routine is re-runnable from any
+crash point: it keeps an existing `state.toml` rather than overwriting it, rewrites the soul atomically (temp file plus
+rename — the soul is the one file whose contents cannot be regenerated), and tolerates an already-stripped soul as a
+resumed half-migration. In this revision the routine exists and is unit-tested but is not yet invoked by any command; a
+later revision wires it into `leiter claude install`. Until then only fresh installs produce `state.toml`, and
+pre-existing installs are handled when that later revision lands. This is acceptable because releases are cut
+explicitly, so no user is exposed to the interim main-branch-only state.
+
 #### Epoch Error Messages Delivered to the User
 
 When `leiter hook context` or `leiter hook nudge` detects an incompatibility, the output is an instruction to the agent.
@@ -174,12 +175,15 @@ The agent must deliver the quoted message to the user **verbatim** — the instr
 (e.g. "EXACTLY this (word for word)") to maximize the chance the agent relays it unchanged. The exact user-facing
 phrases for each case:
 
-- **Setup outdated** (soul hard epoch < binary): "Leiter setup needs to be re-run — please run `leiter claude install`
+- **Setup outdated** (state hard epoch < binary): "Leiter setup needs to be re-run — please run `leiter claude install`
   in your terminal and follow the instructions, then start a new session."
-- **Binary outdated** (soul hard epoch > binary): "Your leiter binary is older than your soul file expects — please
+- **Binary outdated** (state hard epoch > binary): "Your leiter binary is older than your soul file expects — please
   upgrade leiter, then start a new session."
-- **Corrupt frontmatter**: "The leiter soul has corrupt frontmatter. Please fix the YAML front matter manually, or
-  delete the soul file and run `leiter claude install` to start fresh, then start a new session."
+- **Corrupt state**: "The leiter state file is corrupt. Please delete [path] and run `leiter claude install` to
+  re-initialize, then start a new session." Here `[path]` is the resolved `state.toml` path.
+- **State unreadable** (I/O or permission error, as opposed to corrupt content): "The leiter state file could not be
+  read. Please check file permissions on [path], then start a new session." This deliberately does not suggest deleting
+  the file — an unreadable state file may be fully intact, and deleting it would discard watermarks for no reason.
 - **Soul unreadable**: "The leiter soul file could not be read. Please check file permissions on [path], then start a
   new session."
 
@@ -193,9 +197,9 @@ sentence.
 ### Soul Template (built into the binary)
 
 The `leiter` binary contains a built-in soul template (~1 page) that defines the initial structure and categories for
-the soul. When `leiter claude install` creates `~/.leiter/soul.md`, it writes this template as the initial content (with
-the `last_distilled` frontmatter prepended). The template nudges the agent toward capturing specific kinds of
-information.
+the soul. When `leiter claude install` creates `~/.leiter/soul.md`, it writes this template as the initial content
+verbatim — no frontmatter is prepended, since all metadata lives in `state.toml`. The template nudges the agent toward
+capturing specific kinds of information.
 
 The template content is defined in source code as a well-identified constant (not inline in this spec). It should
 include section headings and brief descriptions of what belongs in each section (e.g., communication style, coding
@@ -208,8 +212,8 @@ Session transcripts, one file per session. Named `<UTC_ISO8601_BASIC>-<session_i
 Code session ID as a suffix. The session ID makes it easy to associate a log file with a specific session for debugging.
 Each file is a session transcript (JSONL) copied from the Claude Code transcript path provided by the SessionEnd hook.
 
-All timestamps in leiter — frontmatter values, log filenames, and CLI output — use UTC ISO 8601 format. Frontmatter uses
-extended format (`2026-02-23T17:00:00Z`). Filenames use basic format (`20260223T173000Z`) to avoid colons and other
+All timestamps in leiter — `state.toml` values, log filenames, and CLI output — use UTC ISO 8601 format. `state.toml`
+uses extended format (`2026-02-23T17:00:00Z`). Filenames use basic format (`20260223T173000Z`) to avoid colons and other
 filesystem-unfriendly characters.
 
 ### `~/.leiter/leiter.toml`
@@ -223,40 +227,57 @@ enable_codex_experimental = false
 ```
 
 `enable_codex_experimental` defaults to `false` when the file is missing. When false, `leiter soul distill` and
-`leiter soul mark-distilled` must not read Codex rollout files and must not read or write `~/.leiter/codex-meta.toml`.
+`leiter soul mark-distilled` must not read Codex rollout files, must not consult the `[codex.*]` tables in
+`~/.leiter/state.toml`, and must not modify those tables' contents. Since `state.toml` is core state (not
+Codex-specific), commands still load and rewrite the file as a whole — the requirement is that a disabled gate leaves
+the `[codex.*]` table contents exactly as they were, and epoch validation and `last_distilled` work unaffected.
 
-### `~/.leiter/codex-meta.toml`
+### `~/.leiter/state.toml`
 
-Best-effort experimental Codex distillation metadata. This file is only used when `enable_codex_experimental = true`. It
-records which Codex rollout files have already been committed by `leiter soul mark-distilled`.
+All CLI-managed metadata, stored as TOML. Leiter owns this file; the agent must never edit it. It unifies what used to
+be split between the soul frontmatter (`last_distilled`, `soul_version`, both setup epochs) and `codex-meta.toml` (the
+Codex distillation watermarks). Writes are atomic: leiter writes a temporary file in the same directory and renames it
+over `state.toml`, so a crash mid-write never leaves a torn file.
 
 Logical shape:
 
 ```toml
 version = 1
+soul_version = 2
+setup_soft_epoch = 2
+setup_hard_epoch = 1
+last_distilled = 2026-07-01T12:00:00Z
 
-[committed."<session_id>"]
+[codex.committed."<session_id>"]
 path = "/Users/alice/.codex/sessions/2026/03/07/rollout-....jsonl"
 size_bytes = 12345
 mtime_utc = 2026-03-07T18:10:00Z
-session_timestamp_utc = 2026-03-07T18:06:57Z
-latest_event_timestamp_utc = 2026-03-07T18:09:25Z
+session_timestamp_utc = 2026-03-07T18:06:57Z # optional
+latest_event_timestamp_utc = 2026-03-07T18:09:25Z # optional
 
-[pending."<session_id>"]
+[codex.pending."<session_id>"]
 # same fields as committed
 ```
 
-`committed` is the last successfully marked-distilled Codex watermark set. `pending` is staged by `leiter soul distill`
-and promoted by `leiter soul mark-distilled`. The dedupe watermark is per-session file state (`path`, `size_bytes`,
-`mtime_utc`) rather than a single global timestamp because Codex sessions can be resumed and appended.
+- `version`: the state-file schema version, currently `1`. An unrecognized (unsupported) version is an error, handled
+  the same as corrupt state (see Setup Epochs).
+- `soul_version`, `setup_soft_epoch`, `setup_hard_epoch`, `last_distilled`: the fields that previously lived in soul
+  frontmatter, with identical meaning. `soul_version` drives `leiter soul upgrade`; the epochs drive Setup Epochs
+  validation; `last_distilled` drives which session logs `leiter soul distill` treats as new.
+
+The `[codex.*]` tables carry the Codex distillation watermarks previously kept in `codex-meta.toml`, with the same
+semantics. `committed` is the last successfully marked-distilled Codex watermark set. `pending` is staged by
+`leiter soul distill` and promoted into `committed` by `leiter soul mark-distilled`. The dedupe watermark is per-session
+file state (`path`, `size_bytes`, `mtime_utc`) rather than a single global timestamp because Codex sessions can be
+resumed and appended.
 
 `pending` exists so `mark-distilled` can commit the exact Codex file state that `distill` actually showed to the LLM.
 Without `pending`, `mark-distilled` would have to either leave Codex state untouched forever or re-scan `~/.codex/` at
 mark time and risk committing a newer session file state than the LLM actually saw if a Codex session changed between
 the two commands.
 
-Known gap: Claude distillation state lives in soul frontmatter (`last_distilled`), while Codex distillation state lives
-in `codex-meta.toml`. This split is temporary and should likely be unified in a future revision.
+The tables are nested under `[codex.*]` (rather than a flat `[committed]`/`[pending]`) specifically so a later revision
+can add a parallel `[claude.*]` watermark map beside it without a further schema change.
 
 ## Implementation
 
@@ -312,12 +333,26 @@ sentinel) to the Claude Code home directory.
 
 1. Create `~/.leiter/` directory (no-op if exists)
 2. Create `~/.leiter/logs/` directory (no-op if exists)
-3. If `~/.leiter/soul.md` does not exist, create it from the soul template with `last_distilled: 1970-01-01T00:00:00Z`,
-   `soul_version` set to the current template version, and `setup_soft_epoch`/`setup_hard_epoch` set to the binary's
-   current epoch values in the frontmatter. If `soul.md` already exists, verify epoch compatibility: hard epochs must
-   exactly match (any mismatch is an error). For soft epochs, if the soul is behind the binary, migrate it forward by
-   rewriting the frontmatter with the binary's current `setup_soft_epoch` (preserving the body). If the soul is ahead of
-   the binary, fail with an error. If frontmatter cannot be parsed, fail with an error
+3. Converge the soul/state pair by which of the two files exist. "Fresh state" below means a `state.toml` with
+   `version = 1`, `last_distilled = 1970-01-01T00:00:00Z`, `soul_version` set to the current template version, and both
+   epochs set to the binary's current values. "Verify epochs" means: hard epochs must exactly match (any mismatch is an
+   error, using the direction-specific messages from Setup Epochs); a soft epoch behind the binary is migrated forward
+   by rewriting `state.toml` (preserving all other fields); a soft epoch ahead of the binary is an error; corrupt or
+   unsupported-version `state.toml` is an error. The four cases:
+   - **Neither exists** (fresh install): write fresh state, then the template soul.
+   - **Soul exists, state missing**: two situations share this shape, discriminated by whether the soul still parses as
+     YAML frontmatter. If it does, this is the pre-`state.toml` legacy layout: fail with an error saying migration
+     arrives in a later revision (see Legacy layout migration). If it does not, this is the documented corrupt-state
+     recovery path (the user deleted `state.toml`): write fresh state and keep the soul untouched — preferences survive,
+     watermarks reset.
+   - **Soul missing, state exists**: verify epochs first, then recreate the soul from the template. The existing state
+     is kept, not reset — its watermarks may be perfectly valid.
+   - **Both exist**: verify epochs.
+
+   Ordering invariant: whenever both files are written, `state.toml` is written before `soul.md`, and validation runs
+   before any write. This keeps a torn or refused install self-healing: dying between the two writes leaves the
+   soul-missing/state-present shape, which the next run repairs, never the soul-present/state-missing shape that reads
+   as a legacy layout
 4. Verify the Claude Code home directory exists (error if not — Claude Code not installed)
 5. Write all six skill files to their respective directories under `<claude_home>/skills/`. Overwrites existing files on
    re-run (idempotent)
@@ -349,7 +384,7 @@ Outputs natural language instructions for the agent to configure Claude Code hoo
 the same hook configuration content that `leiter claude install` used to output directly. It is called by the
 `/leiter-setup` skill.
 
-**Behavior:** Validates the soul file (see Setup Epochs). If incompatible, exits with an error.
+**Behavior:** Validates state (see Setup Epochs). If incompatible, exits with an error.
 
 **Output (stdout):** Instructions including the exact JSON hook entries for `SessionStart` and `SessionEnd`, plus
 three-case logic for handling fresh install, upgrade, and already-configured states. See Hook Configuration below for
@@ -360,7 +395,7 @@ the exact hook JSON. After hooks are configured, includes an optional permission
 Outputs natural language instructions for the agent to remove leiter hooks from `~/.claude/settings.json`. Called by the
 `/leiter-teardown` skill.
 
-**Behavior:** Validates the soul file (see Setup Epochs). If incompatible, exits with an error.
+**Behavior:** Validates state (see Setup Epochs). If incompatible, exits with an error.
 
 **Output (stdout):** Instructions telling the agent to find and remove hook entries whose commands contain
 `"leiter hook context"`, `"leiter hook nudge"`, or `"leiter hook session-end"`, clean up empty arrays, preserve
@@ -373,11 +408,11 @@ Outputs the soul content and agent instructions. Called by the SessionStart hook
 
 **Behavior:**
 
-1. Validate the soul file (see Setup Epochs). If the soul is missing, has corrupt frontmatter, or has a hard epoch
-   mismatch: output an error message and return without injecting the soul
-2. If `setup_soft_epoch` does not exactly match the binary's expected value: output a nudge message (different for older
-   vs. newer soul) but continue to inject the soul normally
-3. Output the preamble and full soul content
+1. Validate state (see Setup Epochs). If the soul is missing, `state.toml` is corrupt (unparseable or unsupported
+   version), or there is a hard epoch mismatch: output an error message and return without injecting the soul
+2. If `setup_soft_epoch` in `state.toml` does not exactly match the binary's expected value: output a nudge message
+   (different for older vs. newer state) but continue to inject the soul normally
+3. Output the preamble and full soul content (the soul file is emitted as-is; it has no frontmatter to strip)
 
 **Output (stdout):**
 
@@ -446,8 +481,8 @@ Outputs session logs that haven't been processed since the last distillation.
 
 **Behavior:**
 
-1. Validate the soul file (see Setup Epochs). If incompatible, exit with an error
-2. Read `last_distilled` timestamp from the validated frontmatter
+1. Validate state (see Setup Epochs). If incompatible, exit with an error
+2. Read `last_distilled` timestamp from the validated `state.toml`
 3. Scan `~/.leiter/logs/` for files whose filename timestamps (the `YYYYMMDDTHHMMSSZ` prefix, ignoring the session ID
    suffix) are newer than or equal to `last_distilled`. The inclusive comparison (>=) ensures that a log written in the
    same second as the distillation timestamp is not lost — this matters because the distillation flow has the agent
@@ -458,19 +493,21 @@ Outputs session logs that haven't been processed since the last distillation.
 6. If `enable_codex_experimental = true`, for each Codex rollout file, read the leading `session_meta` record and use
    `payload.id` as the stable session ID. Files without a readable leading `session_meta` record are skipped with a
    warning
-7. If `enable_codex_experimental = true`, load `~/.leiter/codex-meta.toml` if present. If it is unreadable or invalid,
-   warn and skip Codex processing for this run without failing the command
+7. If `enable_codex_experimental = true`, read the Codex `[codex.committed]` watermarks from the validated `state.toml`.
+   (Unlike the former `codex-meta.toml`, `state.toml` is core state validated in step 1, so an unreadable or invalid
+   state file is already a hard command error there — there is no separate warn-and-skip path for it. The
+   warn-and-default behavior for `leiter.toml` in step 4 is unchanged.)
 8. If `enable_codex_experimental = true`, for each Codex session ID, compare the current file watermark (`path`,
-   `size_bytes`, `mtime_utc`) to the `committed` watermark from `codex-meta.toml`. If unchanged, skip the session
+   `size_bytes`, `mtime_utc`) to the `[codex.committed]` watermark in `state.toml`. If unchanged, skip the session
    completely. If changed (or new), re-read the full rollout file and emit the full canonicalized session so the LLM
    sees the entire updated context
 9. Sort matching Claude logs chronologically. Sort changed Codex sessions by session timestamp (from
    `session_meta.payload.timestamp`) and then session ID
 10. Output the Claude transcript content, and also Codex transcript content when enabled, wrapped in XML-like boundary
     tags (see Output below)
-11. If `enable_codex_experimental = true` and `--dry-run` is not set, replace the Codex `pending` map in
-    `~/.leiter/codex-meta.toml` with the changed sessions from this run. If writing Codex metadata fails, warn and
-    continue
+11. If `enable_codex_experimental = true` and `--dry-run` is not set, replace the `[codex.pending]` map in
+    `~/.leiter/state.toml` with the changed sessions from this run (an atomic rewrite preserving all other state
+    fields). If writing state fails, warn and continue
 
 **Output (stdout):**
 
@@ -500,7 +537,8 @@ drops developer/system scaffolding, reasoning, token counts, raw tool results, a
 **Codex access constraints:** Codex support must never read SQLite, must never write or delete anything under
 `~/.codex/`, and must never fail the overall distill command when the Codex directory is missing, malformed, or
 unexpected. When `enable_codex_experimental = false`, the command must not read Codex rollout files and must not read or
-write `~/.leiter/codex-meta.toml`.
+modify the contents of the `[codex.*]` tables in `~/.leiter/state.toml` (it still loads and rewrites the file as a
+whole; the disabled gate just passes those tables through unchanged).
 
 **Obsolete log cleanup:** After outputting new logs (or reporting that there are none), the command collects log files
 whose filename timestamps are strictly before `last_distilled` — these have already been processed by a prior
@@ -510,26 +548,27 @@ If there are no obsolete logs, nothing is printed about cleanup. Codex rollout f
 
 ### `leiter soul mark-distilled`
 
-Sets `last_distilled` in the soul frontmatter to the current UTC time. This is the only way `last_distilled` should be
-updated — the agent must never edit it manually.
+Sets `last_distilled` in `~/.leiter/state.toml` to the current UTC time. This is the only way `last_distilled` should be
+updated — the agent must never edit it manually. This command never writes `soul.md`.
 
 **Behavior:**
 
-1. Validate the soul file (see Setup Epochs). If incompatible, exit with an error
-2. Set `last_distilled` to the current UTC time
-3. Write the soul back, preserving the body and all other frontmatter fields
-4. Load `~/.leiter/leiter.toml`. If it is unreadable or invalid, warn and use defaults
-5. If `enable_codex_experimental = true`, best-effort load `~/.leiter/codex-meta.toml`. If present and valid, merge
-   `pending` into `committed` and clear `pending`
-6. If Codex metadata is missing, malformed, or cannot be written, warn and continue without failing the command
+1. Validate state (see Setup Epochs). If incompatible, exit with an error
+2. Load `~/.leiter/leiter.toml`. If it is unreadable or invalid, warn and use defaults
+3. Set `last_distilled` to the current UTC time and, if `enable_codex_experimental = true`, merge the `[codex.pending]`
+   map into `[codex.committed]` and clear `[codex.pending]`
+4. Write `state.toml` back in a single atomic write, preserving all other fields. There is no separate best-effort path
+   for the Codex merge: it rides the same write as `last_distilled`, so it either all commits or the command fails. (The
+   old warn-and-continue behavior existed because Codex watermarks lived in a separate best-effort file; that split no
+   longer exists.)
 
-When `enable_codex_experimental = false`, `leiter soul mark-distilled` must not read or write
-`~/.leiter/codex-meta.toml`.
+When `enable_codex_experimental = false`, `leiter soul mark-distilled` must not consult or modify the contents of the
+`[codex.*]` tables in `~/.leiter/state.toml` — the rewrite that updates `last_distilled` passes them through unchanged.
 
 **Output (stdout):** A confirmation message including the exact timestamp that was set.
 
-**Errors:** If the soul file is incompatible (missing, corrupt frontmatter, or epoch mismatch), exit with a non-zero
-code and an error message on stderr.
+**Errors:** If state is incompatible (soul missing, corrupt state, or epoch mismatch), exit with a non-zero code and an
+error message on stderr.
 
 ### `leiter soul instill <text>`
 
@@ -540,7 +579,7 @@ preference ("remember", "learn", "instill", "always", "never", or similar langua
 
 **Behavior:**
 
-1. Validate the soul file (see Setup Epochs). If incompatible, exit with an error
+1. Validate state (see Setup Epochs). If incompatible, exit with an error
 
 **Output (stdout):**
 
@@ -553,18 +592,18 @@ See the Architecture section for why guidelines are shared between `instill` and
 
 ### `leiter soul show`
 
-Outputs the soul body (without frontmatter) wrapped in XML boundary tags for safe verbatim display. Called by the
-`/leiter-soul` skill when the user asks to see their soul.
+Outputs the full soul file wrapped in XML boundary tags for safe verbatim display. Called by the `/leiter-soul` skill
+when the user asks to see their soul.
 
 **Behavior:**
 
-1. Validate the soul file (see Setup Epochs). If incompatible, exit with an error
+1. Validate state (see Setup Epochs). If incompatible, exit with an error
 
 **Output (stdout):**
 
-The soul body content (everything after the YAML frontmatter) wrapped in `<leiter-soul-content>` /
-`</leiter-soul-content>` XML tags. The frontmatter is stripped so the user sees only the learned preferences, not
-internal metadata.
+The full contents of `~/.leiter/soul.md` wrapped in `<leiter-soul-content>` / `</leiter-soul-content>` XML tags. The
+soul is pure preferences content with no frontmatter, so the whole file is the learned preferences the user wants to see
+— there is no internal metadata to strip.
 
 The XML boundary tags, combined with skill instructions that tell the agent to display content verbatim in a fenced code
 block, mitigate the risk of the agent interpreting soul content as directives. The skill instructions tell the agent to
@@ -583,11 +622,11 @@ Checks for stale undistilled session logs and outputs a nudge if any exist. Call
 
 **Behavior:**
 
-1. Validate the soul file (see Setup Epochs). If the soul does not exist or the logs directory does not exist, silently
-   output nothing and exit successfully. If the soul has corrupt frontmatter or a hard epoch mismatch, output an error
-   message and exit successfully (the hook must never fail the session). If the logs directory cannot be read, silently
-   output nothing
-2. Read `last_distilled` timestamp from the validated frontmatter
+1. Validate state (see Setup Epochs). If `state.toml`, the soul, or the logs directory does not exist, silently output
+   nothing and exit successfully. If `state.toml` is corrupt (unparseable or unsupported version) or there is a hard
+   epoch mismatch, output an error message and exit successfully (the hook must never fail the session). If the logs
+   directory cannot be read, silently output nothing
+2. Read `last_distilled` timestamp from the validated `state.toml`
 3. Scan `~/.leiter/logs/` for files whose filename timestamps are >= `last_distilled` (same inclusive comparison as
    `leiter soul distill`)
 4. If any such file has a timestamp older than the threshold (`now - 24h`, or `now - 4h` with `--auto-distill`): output
@@ -609,10 +648,12 @@ natural language).
 
 **Behavior:**
 
-1. Validate the soul file (see Setup Epochs). If incompatible, exit with an error
-2. Compare `soul_version` against the current template version built into the binary
+1. Validate state (see Setup Epochs). If incompatible, exit with an error
+2. Compare `soul_version` in `state.toml` against the current template version built into the binary
 3. If already up to date: output a message saying so
-4. If outdated: output upgrade instructions for the agent (see below)
+4. If outdated: output upgrade instructions for the agent (see below). This command does not write `soul_version` itself
+   — the version advances only via `leiter soul mark-upgraded`, so a botched or abandoned restructuring leaves the soul
+   correctly reported as outdated and re-running upgrade re-emits the instructions
 
 **Output when outdated:**
 
@@ -620,11 +661,31 @@ natural language).
    version (like a soul template changelog)
 2. The full current template with its version number
 3. Instructions for the agent to restructure the existing soul content into the new format while preserving all learned
-   preferences, and to update `soul_version` in the frontmatter
+   preferences, then run `leiter soul mark-upgraded` as the final step. The agent edits only the soul file;
+   `soul_version` lives in `state.toml` and is written only by the CLI
 
 The changelog entries are maintained in the source code as human- and agent-readable text. There is no required
 structure — each entry is a brief prose description of what changed in that soul template version. New entries are added
 when the soul template is modified in future code changes. The agent performs the actual soul file edits.
+
+### `leiter soul mark-upgraded`
+
+Sets `soul_version` in `~/.leiter/state.toml` to the binary's current template version. This is the only way
+`soul_version` advances — the agent must never edit it. Run by the agent as the final step of the upgrade flow, after
+restructuring the soul.
+
+The failure direction is deliberate, mirroring `mark-distilled`: if the agent restructures the soul but forgets this
+step, the soul merely keeps reporting as outdated and the next `leiter soul upgrade` re-emits instructions (harmless
+re-prompt). The optimistic alternative — bumping the version when instructions are emitted — would mark a botched
+upgrade as done.
+
+**Behavior:**
+
+1. Validate state (see Setup Epochs). If incompatible, exit with an error
+2. Set `soul_version` to the binary's current template version and write `state.toml` back atomically, preserving all
+   other fields
+
+**Output (stdout):** A confirmation message including the version that was set.
 
 ## Hook Configuration
 
@@ -738,8 +799,8 @@ soul file path. Empty `permissions.allow` arrays and empty `permissions` objects
 3. Skill runs `leiter soul upgrade`
 4. If already current: agent relays that no upgrade is needed
 5. If outdated: agent receives the upgrade instructions and new template
-6. Agent reads current `~/.leiter/soul.md`, restructures it into the new format, and updates `soul_version` in the
-   frontmatter
+6. Agent reads current `~/.leiter/soul.md`, restructures it into the new format, then runs `leiter soul mark-upgraded`
+   to record the new `soul_version` in `state.toml` (the agent never edits version metadata directly)
 
 ### Distillation
 

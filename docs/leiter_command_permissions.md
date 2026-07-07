@@ -34,7 +34,7 @@ Here's what the leiter CLI can actually do:
 - **Read and write your soul file** (`leiter soul distill`, `leiter soul instill`, `leiter soul upgrade`) — this is
   leiter's core function, so it's expected.
 - **Read session transcripts** (`leiter soul distill` reads saved logs from `~/.leiter/`) — again, core function.
-- **Mark logs as processed** (`leiter soul mark-distilled`) — updates a timestamp in the soul frontmatter.
+- **Mark logs as processed** (`leiter soul mark-distilled`) — updates `last_distilled` in `~/.leiter/state.toml`.
 - **Manage Claude Code integration** (`leiter claude install`, `leiter claude uninstall`) — these modify skill files and
   could in principle be invoked by the agent, though in normal use you run these yourself from the terminal.
 - **Change leiter configuration** (`leiter config set`) — sets persistent config values.

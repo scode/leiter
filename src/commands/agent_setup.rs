@@ -9,15 +9,12 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, TimeZone, Utc};
 use tracing::info;
 
-use crate::frontmatter::{SoulFrontmatter, serialize_soul};
 use crate::paths;
-use crate::soul_validation::{SoulStatus, validate_soul};
-use crate::templates::{
-    SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH, SKILL_CONTENTS, SOUL_TEMPLATE, SOUL_TEMPLATE_VERSION,
-};
+use crate::state::LeiterState;
+use crate::templates::{SETUP_SOFT_EPOCH, SKILL_CONTENTS, SOUL_TEMPLATE};
+use crate::validation::{ValidationStatus, load_and_check_state, validate_state};
 
 /// Run the `leiter claude install` command.
 ///
@@ -53,9 +50,9 @@ pub fn run(state_dir: &Path, claude_home: &Path) -> Result<()> {
 ///
 /// Used by `leiter claude agent-setup-instructions`.
 pub fn agent_setup_instructions(state_dir: &Path, out: &mut impl Write) -> Result<()> {
-    match validate_soul(state_dir) {
-        SoulStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
-        SoulStatus::Compatible { .. } => {}
+    match validate_state(state_dir) {
+        ValidationStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
+        ValidationStatus::Compatible { .. } => {}
     }
     write!(
         out,
@@ -69,28 +66,74 @@ pub fn agent_setup_instructions(state_dir: &Path, out: &mut impl Write) -> Resul
 fn init_filesystem(state_dir: &Path) -> Result<()> {
     let logs_dir = paths::logs_dir(state_dir);
     let soul_path = paths::soul_path(state_dir);
+    let state_path = paths::state_path(state_dir);
 
     fs::create_dir_all(state_dir)
         .with_context(|| format!("failed to create {}", state_dir.display()))?;
     fs::create_dir_all(&logs_dir)
         .with_context(|| format!("failed to create {}", logs_dir.display()))?;
 
-    if !soul_path.exists() {
-        let frontmatter = SoulFrontmatter {
-            last_distilled: epoch(),
-            soul_version: SOUL_TEMPLATE_VERSION,
-            setup_soft_epoch: SETUP_SOFT_EPOCH,
-            setup_hard_epoch: SETUP_HARD_EPOCH,
-        };
-        let content = serialize_soul(&frontmatter, SOUL_TEMPLATE);
-        fs::write(&soul_path, &content)
-            .with_context(|| format!("failed to write {}", soul_path.display()))?;
-        info!("created {}", soul_path.display());
-    } else {
-        verify_epochs(state_dir)?;
+    let soul_exists = soul_path.exists();
+    let state_exists = state_path.exists();
+
+    // Ordering rules that keep a torn install self-healing:
+    //
+    // - state.toml is always written BEFORE soul.md. If install dies between
+    //   the two writes, the rerun lands in the (soul missing, state present)
+    //   quadrant, which repairs the soul — instead of (soul present, state
+    //   missing), which reads as an unmigrated legacy layout and dead-ends.
+    // - Validation runs BEFORE any write in the quadrants that refuse, so a
+    //   refused install leaves the layout untouched.
+    match (soul_exists, state_exists) {
+        (false, false) => {
+            LeiterState::fresh().save(&state_path)?;
+            fs::write(&soul_path, SOUL_TEMPLATE)
+                .with_context(|| format!("failed to write {}", soul_path.display()))?;
+            info!("created {}", state_path.display());
+            info!("created {}", soul_path.display());
+        }
+        (true, false) => {
+            // Two very different situations look like (soul, no state): a
+            // pre-state.toml legacy install (soul still carries YAML
+            // frontmatter) and the documented corrupt-state recovery path
+            // (user deleted state.toml; soul is already frontmatter-free).
+            // The frontmatter is the discriminator.
+            if soul_has_legacy_frontmatter(&soul_path)? {
+                bail!(
+                    "existing leiter layout predates state.toml. Automatic migration is not wired into this revision yet; leave {} in place and upgrade with a later leiter revision that performs the migration.",
+                    soul_path.display()
+                );
+            }
+            LeiterState::fresh().save(&state_path)?;
+            info!(
+                "re-initialized {} (existing soul kept; distillation watermarks reset)",
+                state_path.display()
+            );
+        }
+        (false, true) => {
+            verify_epochs(state_dir)?;
+            fs::write(&soul_path, SOUL_TEMPLATE)
+                .with_context(|| format!("failed to write {}", soul_path.display()))?;
+            info!("created {}", soul_path.display());
+        }
+        (true, true) => {
+            verify_epochs(state_dir)?;
+        }
     }
 
     Ok(())
+}
+
+/// Detect the pre-state.toml layout: a soul that still opens with a YAML
+/// frontmatter block.
+///
+/// A parse failure is treated as "no frontmatter" rather than an error — a
+/// soul that merely starts with `---` (say, a horizontal rule) is the agent's
+/// content to keep, not a legacy layout to migrate.
+fn soul_has_legacy_frontmatter(soul_path: &Path) -> Result<bool> {
+    let raw = fs::read_to_string(soul_path)
+        .with_context(|| format!("failed to read {}", soul_path.display()))?;
+    Ok(crate::frontmatter::parse_soul(&raw).is_ok())
 }
 
 /// Write skill files to the Claude Code home directory.
@@ -107,47 +150,46 @@ fn write_plugin_files(claude_home: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Verify that epochs in the existing soul match the binary's epochs,
-/// migrating the soft epoch forward when the soul is behind.
+/// Verify state epochs, migrating an older soft epoch forward on re-run.
+///
+/// Hard mismatches and corrupt state are delegated to `load_and_check_state`
+/// so the direction-specific error texts (setup outdated vs binary outdated)
+/// stay in one place. The state-only layer is deliberate: install calls this
+/// in quadrants where the soul may not exist yet, and it must refuse or
+/// proceed based on state compatibility alone, before any file is written.
+/// The soft epoch is the only field install repairs itself: validation treats
+/// a soft-ahead state as merely nudge-worthy, but install must refuse it
+/// outright — rewriting the file here would downgrade it.
 fn verify_epochs(state_dir: &Path) -> Result<()> {
-    match validate_soul(state_dir) {
-        SoulStatus::Compatible {
-            frontmatter, body, ..
-        } => {
-            if frontmatter.setup_soft_epoch == SETUP_SOFT_EPOCH {
-                info!("epochs already current");
-            } else if frontmatter.setup_soft_epoch < SETUP_SOFT_EPOCH {
-                let old_epoch = frontmatter.setup_soft_epoch;
-                let soul_path = paths::soul_path(state_dir);
-                let mut fm = frontmatter;
-                fm.setup_soft_epoch = SETUP_SOFT_EPOCH;
-                fs::write(&soul_path, serialize_soul(&fm, &body))?;
-                info!("updated setup_soft_epoch from {old_epoch} to {SETUP_SOFT_EPOCH}");
-            } else {
-                bail!(
-                    "soul was created by a newer version of leiter \
-                     (setup_soft_epoch: soul={}, binary={SETUP_SOFT_EPOCH}). \
-                     Please upgrade leiter.",
-                    frontmatter.setup_soft_epoch
-                );
-            }
-            Ok(())
-        }
-        SoulStatus::Incompatible(reason) => {
-            bail!("{}", reason.user_message());
-        }
-    }
-}
+    let mut state = match load_and_check_state(state_dir) {
+        Ok(state) => state,
+        Err(reason) => bail!("{}", reason.user_message()),
+    };
 
-fn epoch() -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap()
+    if state.setup_soft_epoch == SETUP_SOFT_EPOCH {
+        info!("epochs already current");
+    } else if state.setup_soft_epoch < SETUP_SOFT_EPOCH {
+        let old_epoch = state.setup_soft_epoch;
+        state.setup_soft_epoch = SETUP_SOFT_EPOCH;
+        state.save(&paths::state_path(state_dir))?;
+        info!("updated setup_soft_epoch from {old_epoch} to {SETUP_SOFT_EPOCH}");
+    } else {
+        bail!(
+            "state was created by a newer version of leiter \
+             (setup_soft_epoch: state={}, binary={SETUP_SOFT_EPOCH}). \
+             Please upgrade leiter.",
+            state.setup_soft_epoch
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frontmatter::{parse_soul, serialize_soul};
-    use crate::templates::SKILL_CONTENTS;
+    use crate::state::LeiterState;
+    use crate::templates::{SETUP_HARD_EPOCH, SKILL_CONTENTS, SOUL_TEMPLATE_VERSION};
+    use chrono::{TimeZone, Utc};
 
     fn run_setup(state_dir: &Path, claude_home: &Path) {
         run(state_dir, claude_home).unwrap();
@@ -183,26 +225,26 @@ mod tests {
     }
 
     #[test]
-    fn soul_has_expected_frontmatter() {
+    fn fresh_setup_creates_state_with_expected_metadata() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         let _claude_tmp = run_setup_with_claude_home(dir);
 
-        let content = fs::read_to_string(paths::soul_path(dir)).unwrap();
-        let (fm, _) = parse_soul(&content).unwrap();
-        assert_eq!(fm.last_distilled, epoch());
-        assert_eq!(fm.soul_version, SOUL_TEMPLATE_VERSION);
+        let state = LeiterState::load(&paths::state_path(dir)).unwrap();
+        assert_eq!(state.last_distilled, LeiterState::fresh().last_distilled);
+        assert_eq!(state.soul_version, SOUL_TEMPLATE_VERSION);
+        assert_eq!(state.setup_soft_epoch, SETUP_SOFT_EPOCH);
+        assert_eq!(state.setup_hard_epoch, SETUP_HARD_EPOCH);
     }
 
     #[test]
-    fn soul_body_matches_template() {
+    fn soul_matches_template_without_frontmatter() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         let _claude_tmp = run_setup_with_claude_home(dir);
 
         let content = fs::read_to_string(paths::soul_path(dir)).unwrap();
-        let (_, body) = parse_soul(&content).unwrap();
-        assert_eq!(body, SOUL_TEMPLATE);
+        assert_eq!(content, SOUL_TEMPLATE);
     }
 
     #[test]
@@ -228,11 +270,10 @@ mod tests {
         let dir = tmp.path();
         run_setup(dir, claude_tmp.path());
 
-        let soul = paths::soul_path(dir);
-        let content = fs::read_to_string(&soul).unwrap();
-        let (mut fm, body) = parse_soul(&content).unwrap();
-        fm.setup_hard_epoch = SETUP_HARD_EPOCH + 1;
-        fs::write(&soul, serialize_soul(&fm, body)).unwrap();
+        let state_path = paths::state_path(dir);
+        let mut state = LeiterState::load(&state_path).unwrap();
+        state.setup_hard_epoch = SETUP_HARD_EPOCH + 1;
+        state.save(&state_path).unwrap();
 
         let err = run(dir, claude_tmp.path()).unwrap_err();
         assert!(err.to_string().contains("binary is outdated"));
@@ -245,11 +286,10 @@ mod tests {
         let dir = tmp.path();
         run_setup(dir, claude_tmp.path());
 
-        let soul = paths::soul_path(dir);
-        let content = fs::read_to_string(&soul).unwrap();
-        let (mut fm, body) = parse_soul(&content).unwrap();
-        fm.setup_soft_epoch = SETUP_SOFT_EPOCH + 1;
-        fs::write(&soul, serialize_soul(&fm, body)).unwrap();
+        let state_path = paths::state_path(dir);
+        let mut state = LeiterState::load(&state_path).unwrap();
+        state.setup_soft_epoch = SETUP_SOFT_EPOCH + 1;
+        state.save(&state_path).unwrap();
 
         let err = run(dir, claude_tmp.path()).unwrap_err();
         assert!(err.to_string().contains("newer version"));
@@ -262,17 +302,15 @@ mod tests {
         let dir = tmp.path();
         run_setup(dir, claude_tmp.path());
 
-        let soul = paths::soul_path(dir);
-        let content = fs::read_to_string(&soul).unwrap();
-        let (mut fm, body) = parse_soul(&content).unwrap();
-        fm.setup_soft_epoch = SETUP_SOFT_EPOCH - 1;
-        fs::write(&soul, serialize_soul(&fm, body)).unwrap();
+        let state_path = paths::state_path(dir);
+        let mut state = LeiterState::load(&state_path).unwrap();
+        state.setup_soft_epoch = SETUP_SOFT_EPOCH - 1;
+        state.save(&state_path).unwrap();
 
         run_setup(dir, claude_tmp.path());
 
-        let updated = fs::read_to_string(&soul).unwrap();
-        let (updated_fm, _) = parse_soul(&updated).unwrap();
-        assert_eq!(updated_fm.setup_soft_epoch, SETUP_SOFT_EPOCH);
+        let updated = LeiterState::load(&state_path).unwrap();
+        assert_eq!(updated.setup_soft_epoch, SETUP_SOFT_EPOCH);
     }
 
     #[test]
@@ -283,16 +321,15 @@ mod tests {
         run_setup(dir, claude_tmp.path());
 
         let soul = paths::soul_path(dir);
-        let content = fs::read_to_string(&soul).unwrap();
-        let (mut fm, body) = parse_soul(&content).unwrap();
-        let original_body = body.to_string();
-        fm.setup_soft_epoch = SETUP_SOFT_EPOCH - 1;
-        fs::write(&soul, serialize_soul(&fm, body)).unwrap();
+        let original_body = fs::read_to_string(&soul).unwrap();
+        let state_path = paths::state_path(dir);
+        let mut state = LeiterState::load(&state_path).unwrap();
+        state.setup_soft_epoch = SETUP_SOFT_EPOCH - 1;
+        state.save(&state_path).unwrap();
 
         run_setup(dir, claude_tmp.path());
 
-        let updated = fs::read_to_string(&soul).unwrap();
-        let (_, updated_body) = parse_soul(&updated).unwrap();
+        let updated_body = fs::read_to_string(&soul).unwrap();
         assert_eq!(updated_body, original_body);
     }
 
@@ -303,28 +340,90 @@ mod tests {
         let dir = tmp.path();
         run_setup(dir, claude_tmp.path());
 
-        let soul = paths::soul_path(dir);
-        let content = fs::read_to_string(&soul).unwrap();
-        let (mut fm, body) = parse_soul(&content).unwrap();
-        fm.setup_hard_epoch = 0;
-        fs::write(&soul, serialize_soul(&fm, body)).unwrap();
+        let state_path = paths::state_path(dir);
+        let mut state = LeiterState::load(&state_path).unwrap();
+        state.setup_hard_epoch = 0;
+        state.save(&state_path).unwrap();
 
         let err = run(dir, claude_tmp.path()).unwrap_err();
         assert!(err.to_string().contains("setup is incompatible"));
+        assert!(err.to_string().contains("leiter claude install"));
     }
 
     #[test]
-    fn rerun_with_unparseable_frontmatter_fails() {
+    fn rerun_with_corrupt_state_fails() {
         let tmp = tempfile::tempdir().unwrap();
         let claude_tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         run_setup(dir, claude_tmp.path());
 
-        let soul = paths::soul_path(dir);
-        fs::write(&soul, "---\ngarbage: true\n---\nbody\n").unwrap();
+        fs::write(paths::state_path(dir), "not = valid = toml").unwrap();
 
         let err = run(dir, claude_tmp.path()).unwrap_err();
-        assert!(err.to_string().contains("invalid YAML front matter"));
+        assert!(err.to_string().contains("is corrupt"));
+    }
+
+    #[test]
+    fn legacy_frontmatter_soul_without_state_reports_legacy_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path()).unwrap();
+        // A legacy soul is discriminated by its YAML frontmatter.
+        let legacy_soul = format!(
+            "---\nlast_distilled: 2026-01-01T00:00:00Z\nsoul_version: 1\n---\n{SOUL_TEMPLATE}"
+        );
+        fs::write(paths::soul_path(tmp.path()), legacy_soul).unwrap();
+
+        let err = run(tmp.path(), claude_tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("predates state.toml"));
+    }
+
+    /// The corrupt-state recovery path: the CLI's own error message tells the
+    /// user to delete state.toml and re-run install, so install must accept a
+    /// frontmatter-free soul with no state — keeping the soul, resetting
+    /// watermarks — rather than misreading it as an unmigrated legacy layout.
+    #[test]
+    fn frontmatter_free_soul_without_state_recovers_with_fresh_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path()).unwrap();
+        let user_soul = "# My soul\n\nLearned things live here.\n";
+        fs::write(paths::soul_path(tmp.path()), user_soul).unwrap();
+
+        run_setup(tmp.path(), claude_tmp.path());
+
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert_eq!(state.soul_version, SOUL_TEMPLATE_VERSION);
+        assert_eq!(
+            fs::read_to_string(paths::soul_path(tmp.path())).unwrap(),
+            user_soul,
+            "recovery must keep the user's soul, not overwrite it with the template"
+        );
+    }
+
+    /// A torn first install can leave `state.toml` behind without `soul.md`.
+    /// Re-running install must repair only the missing generated file; resetting
+    /// state here would lose distillation watermarks that may already be valid.
+    #[test]
+    fn missing_soul_with_existing_state_recreates_soul_and_preserves_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        let state_dir = tmp.path();
+        run_setup(state_dir, claude_tmp.path());
+
+        let known_last_distilled = Utc.with_ymd_and_hms(2026, 8, 3, 9, 30, 0).unwrap();
+        let state_path = paths::state_path(state_dir);
+        let mut state = LeiterState::load(&state_path).unwrap();
+        state.last_distilled = known_last_distilled;
+        state.save(&state_path).unwrap();
+        fs::remove_file(paths::soul_path(state_dir)).unwrap();
+
+        run_setup(state_dir, claude_tmp.path());
+
+        let soul = fs::read_to_string(paths::soul_path(state_dir)).unwrap();
+        let state = LeiterState::load(&state_path).unwrap();
+        assert_eq!(soul, SOUL_TEMPLATE);
+        assert_eq!(state.last_distilled, known_last_distilled);
     }
 
     #[test]
@@ -393,16 +492,13 @@ mod tests {
     }
 
     #[test]
-    fn agent_setup_instructions_new_soul_epoch_mismatch_errors() {
+    fn agent_setup_instructions_new_state_epoch_mismatch_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        let fm = SoulFrontmatter {
-            last_distilled: epoch(),
-            soul_version: SOUL_TEMPLATE_VERSION,
-            setup_soft_epoch: SETUP_SOFT_EPOCH,
-            setup_hard_epoch: SETUP_HARD_EPOCH + 1,
-        };
-        fs::create_dir_all(tmp.path()).unwrap();
-        fs::write(paths::soul_path(tmp.path()), serialize_soul(&fm, "body\n")).unwrap();
+        crate::commands::test_support::write_state_with_epochs(
+            tmp.path(),
+            SETUP_SOFT_EPOCH,
+            SETUP_HARD_EPOCH + 1,
+        );
 
         let mut out = Vec::new();
         let err = agent_setup_instructions(tmp.path(), &mut out).unwrap_err();
@@ -413,16 +509,13 @@ mod tests {
     }
 
     #[test]
-    fn agent_setup_instructions_old_soul_epoch_mismatch_errors() {
+    fn agent_setup_instructions_old_state_epoch_mismatch_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        let fm = SoulFrontmatter {
-            last_distilled: epoch(),
-            soul_version: SOUL_TEMPLATE_VERSION,
-            setup_soft_epoch: SETUP_SOFT_EPOCH,
-            setup_hard_epoch: SETUP_HARD_EPOCH.saturating_sub(1),
-        };
-        fs::create_dir_all(tmp.path()).unwrap();
-        fs::write(paths::soul_path(tmp.path()), serialize_soul(&fm, "body\n")).unwrap();
+        crate::commands::test_support::write_state_with_epochs(
+            tmp.path(),
+            SETUP_SOFT_EPOCH,
+            SETUP_HARD_EPOCH.saturating_sub(1),
+        );
 
         let mut out = Vec::new();
         let err = agent_setup_instructions(tmp.path(), &mut out).unwrap_err();
@@ -430,27 +523,31 @@ mod tests {
     }
 
     #[test]
-    fn agent_setup_instructions_corrupt_frontmatter_errors() {
+    fn agent_setup_instructions_corrupt_state_errors() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path()).unwrap();
-        fs::write(paths::soul_path(tmp.path()), "---\n[invalid yaml\n---\n").unwrap();
+        fs::write(paths::soul_path(tmp.path()), "body\n").unwrap();
+        fs::write(paths::state_path(tmp.path()), "not = valid = toml").unwrap();
 
         let mut out = Vec::new();
         let err = agent_setup_instructions(tmp.path(), &mut out).unwrap_err();
-        assert!(err.to_string().contains("invalid YAML"));
+        assert!(err.to_string().contains("state file"));
     }
 
     #[test]
-    fn rerun_with_no_delimiter_frontmatter_fails() {
+    fn rerun_with_plain_soul_succeeds() {
         let tmp = tempfile::tempdir().unwrap();
         let claude_tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         run_setup(dir, claude_tmp.path());
 
         let soul = paths::soul_path(dir);
-        fs::write(&soul, "not frontmatter").unwrap();
+        fs::write(&soul, "not frontmatter, just markdown").unwrap();
 
-        let err = run(dir, claude_tmp.path()).unwrap_err();
-        assert!(err.to_string().contains("invalid YAML front matter"));
+        run(dir, claude_tmp.path()).unwrap();
+        assert_eq!(
+            fs::read_to_string(soul).unwrap(),
+            "not frontmatter, just markdown"
+        );
     }
 }

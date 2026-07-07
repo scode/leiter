@@ -5,8 +5,9 @@ mod errors;
 mod frontmatter;
 mod log_filename;
 mod paths;
-mod soul_validation;
+mod state;
 mod templates;
+mod validation;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -90,6 +91,8 @@ pub enum SoulCommand {
     Upgrade,
     /// Set last_distilled to the current time
     MarkDistilled,
+    /// Set soul_version to the current template version
+    MarkUpgraded,
 }
 
 #[derive(Subcommand)]
@@ -182,6 +185,9 @@ fn main() -> Result<()> {
             }
             SoulCommand::MarkDistilled => {
                 commands::mark_distilled::run(&state_dir, &mut std::io::stdout())?;
+            }
+            SoulCommand::MarkUpgraded => {
+                commands::mark_upgraded::run(&state_dir, &mut std::io::stdout())?;
             }
         },
         Command::Claude {

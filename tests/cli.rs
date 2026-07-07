@@ -232,6 +232,16 @@ fn parses_soul_mark_distilled() {
 }
 
 #[test]
+fn parses_soul_mark_upgraded() {
+    let tmp = tempfile::tempdir().unwrap();
+    leiter(tmp.path())
+        .args(["soul", "mark-upgraded"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not initialized"));
+}
+
+#[test]
 fn parses_config_set() {
     let tmp = tempfile::tempdir().unwrap();
     leiter(tmp.path())

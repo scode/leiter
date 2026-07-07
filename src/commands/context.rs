@@ -3,38 +3,37 @@
 //! Called by the SessionStart hook on every session start. Checks setup epoch
 //! compatibility, then outputs the preamble (explaining how to interact with
 //! leiter) followed by the full soul file. Hard epoch mismatches and corrupt
-//! frontmatter block the session; soft mismatches produce a nudge.
+//! state block the session; soft mismatches produce a nudge.
 
 use std::io::Write;
 use std::path::Path;
 
 use anyhow::Result;
 
-use crate::soul_validation::{SoulStatus, validate_soul};
 use crate::templates::context_preamble;
+use crate::validation::{ValidationStatus, validate_state};
 
 /// Run the context command.
 ///
-/// Validates the soul file, then outputs the preamble and soul content.
-/// Hard epoch mismatches and corrupt frontmatter block the session (no soul
-/// injected). Soft epoch mismatches produce a nudge but still inject the soul.
+/// Validates `state.toml` epochs and soul readability, then outputs the
+/// preamble and soul content. Hard epoch mismatches and corrupt state block the
+/// session (no soul injected). Soft epoch mismatches produce a nudge but still
+/// inject the soul.
 ///
 /// Always exits successfully — the SessionStart hook should never fail the
 /// session.
 pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
-    match validate_soul(state_dir) {
-        SoulStatus::Incompatible(reason) => {
+    match validate_state(state_dir) {
+        ValidationStatus::Incompatible(reason) => {
             writeln!(out, "{}", reason.agent_message())?;
         }
-        SoulStatus::Compatible {
-            raw_content,
-            soft_nudge,
-            ..
+        ValidationStatus::Compatible {
+            soul, soft_nudge, ..
         } => {
             if let Some(nudge) = &soft_nudge {
                 writeln!(out, "{nudge}\n")?;
             }
-            write!(out, "{}{raw_content}", context_preamble(state_dir))?;
+            write!(out, "{}{soul}", context_preamble(state_dir))?;
         }
     }
 
@@ -45,7 +44,7 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
 mod tests {
     use super::*;
     use crate::commands::agent_setup;
-    use crate::commands::test_support::write_soul_with_epochs;
+    use crate::commands::test_support::write_state_with_epochs;
     use crate::paths;
     use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
     use std::fs;
@@ -107,7 +106,7 @@ mod tests {
     #[test]
     fn hard_epoch_mismatch_old_soul_blocks() {
         let tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(
+        write_state_with_epochs(
             tmp.path(),
             SETUP_SOFT_EPOCH,
             SETUP_HARD_EPOCH.saturating_sub(1),
@@ -121,7 +120,7 @@ mod tests {
     #[test]
     fn hard_epoch_mismatch_new_soul_blocks() {
         let tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
+        write_state_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH + 1);
         let output = run_context(tmp.path());
         assert!(output.contains("ACTION REQUIRED"));
         assert!(output.contains("binary is older than your soul file"));
@@ -131,7 +130,7 @@ mod tests {
     #[test]
     fn soft_epoch_mismatch_old_soul_nudges() {
         let tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(
+        write_state_with_epochs(
             tmp.path(),
             SETUP_SOFT_EPOCH.saturating_sub(1),
             SETUP_HARD_EPOCH,
@@ -145,7 +144,7 @@ mod tests {
     #[test]
     fn soft_epoch_mismatch_new_soul_nudges() {
         let tmp = tempfile::tempdir().unwrap();
-        write_soul_with_epochs(tmp.path(), SETUP_SOFT_EPOCH + 1, SETUP_HARD_EPOCH);
+        write_state_with_epochs(tmp.path(), SETUP_SOFT_EPOCH + 1, SETUP_HARD_EPOCH);
         let output = run_context(tmp.path());
         assert!(output.contains("binary is a bit behind"));
         assert!(output.contains("upgrade leiter"));
@@ -153,16 +152,17 @@ mod tests {
     }
 
     #[test]
-    fn malformed_frontmatter_blocks_soul_injection() {
+    fn corrupt_state_blocks_soul_injection() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         fs::create_dir_all(dir).unwrap();
-        let soul_path = paths::soul_path(dir);
-        fs::write(&soul_path, "not valid frontmatter\n").unwrap();
+        fs::write(paths::soul_path(dir), "body\n").unwrap();
+        let state_path = paths::state_path(dir);
+        fs::write(&state_path, "not = valid = toml").unwrap();
         let output = run_context(dir);
         assert!(output.contains("ACTION REQUIRED"));
-        assert!(output.contains("invalid YAML"));
-        assert!(output.contains(&soul_path.display().to_string()));
+        assert!(output.contains("state file"));
+        assert!(output.contains(&state_path.display().to_string()));
         assert!(!output.contains(&context_preamble(dir)));
     }
 

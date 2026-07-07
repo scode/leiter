@@ -19,8 +19,8 @@ cargo install --path .
 
 ## Configure
 
-Run `leiter claude install` in your terminal. This creates the `~/.leiter/` directory (containing your soul file and log
-storage) and installs skill files into `~/.claude/skills/`.
+Run `leiter claude install` in your terminal. This creates the `~/.leiter/` directory (containing your soul file, state,
+and log storage) and installs skill files into `~/.claude/skills/`.
 
 ```sh
 leiter claude install
@@ -78,6 +78,7 @@ After setup, leiter's files live in two places:
 ```
 ~/.leiter/
 ├── soul.md              # Your learned preferences (the "soul")
+├── state.toml           # Leiter-managed epochs, soul_version, last_distilled, and watermarks; the agent must never edit this
 └── logs/
     └── *.jsonl          # Session transcripts
 

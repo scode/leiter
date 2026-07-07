@@ -5,6 +5,7 @@ pub mod context;
 pub mod distill;
 pub mod instill;
 pub mod mark_distilled;
+pub mod mark_upgraded;
 pub mod nudge;
 pub mod session_end;
 pub mod soul_show;

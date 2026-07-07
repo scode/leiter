@@ -75,10 +75,9 @@ involvement is needed.
 
 ## The soul file
 
-The soul is a markdown file at `~/.leiter/soul.md` with YAML frontmatter for metadata (timestamps, version numbers) and
-a body containing your learned preferences organized by category. The agent edits this file directly using its standard
-file editing tools. The CLI creates the initial soul during install and may update frontmatter during upgrades, but the
-body — your actual preferences — is only ever written by the agent.
+The soul is a pure markdown file at `~/.leiter/soul.md` containing your learned preferences organized by category. The
+agent edits this file directly using its standard file editing tools. CLI-managed metadata, including `last_distilled`
+and `soul_version`, lives in `~/.leiter/state.toml`; the agent must not edit that file.
 
 See [usage.md](usage.md) for details on the soul file format and how to customize it.
 

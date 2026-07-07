@@ -35,12 +35,12 @@ When `enable_codex_experimental = true`:
 
 When `enable_codex_experimental = false`:
 
-- `leiter soul distill` does not read Codex logs or Codex metadata at all.
-- `leiter soul mark-distilled` does not read or update Codex metadata at all.
+- `leiter soul distill` does not read Codex logs or consult the Codex watermark tables.
+- `leiter soul mark-distilled` preserves the Codex watermark tables unchanged.
 
 ## Watermark metadata
 
-When the experiment is enabled, leiter stores Codex watermarks in `~/.leiter/codex-meta.toml`.
+When the experiment is enabled, leiter stores Codex watermarks under `[codex.*]` in `~/.leiter/state.toml`.
 
 A watermark is leiter's remembered snapshot of a Codex session file at the moment that session was last successfully
 marked distilled. On a later `leiter soul distill` run, leiter recomputes the snapshot for each discovered Codex session
@@ -55,7 +55,7 @@ The dedupe watermark is this session-level file state:
 - `size_bytes`
 - `mtime_utc`
 
-`codex-meta.toml` uses its own staged/committed watermark maps:
+`state.toml` carries staged and committed Codex watermark maps:
 
 - `pending` is what the most recent `leiter soul distill` run observed
 - `committed` is what the most recent successful `leiter soul mark-distilled` accepted
@@ -66,6 +66,3 @@ Leiter also records:
 - `latest_event_timestamp_utc`
 
 Those timestamps are for ordering and observability. They are not the primary dedupe rule.
-
-Known gap: Claude distillation state still lives in soul frontmatter while Codex distillation state lives in
-`codex-meta.toml`.
