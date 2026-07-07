@@ -1,7 +1,11 @@
 # Usage
 
-Once leiter is set up, session context injection and logging happen automatically. This page covers the three ways the
-soul gets updated and how to work with the soul file directly.
+Once leiter is set up, your soul is delivered into every session automatically through the managed `~/.claude/CLAUDE.md`
+block. This page covers the ways the soul gets updated, how distillation works, and how to check leiter's health.
+
+All of the in-session actions below are driven by natural language. Leiter installs one consolidated `leiter` skill
+whose description carries the trigger words (remember, learn, instill, always, never, distill, soul, upgrade), so Claude
+routes matching requests to it and it runs the right `leiter` command for you. There are no slash commands to memorize.
 
 ## Teaching preferences (instill)
 
@@ -13,61 +17,98 @@ The fastest way to teach leiter is to tell the agent to "instill" a preference. 
 - "Remember that I prefer explicit error handling over unwrap"
 - "Always run clippy before considering work done"
 
-The agent invokes the `/leiter-instill` skill, which provides writing guidelines and tells the agent to edit
-`~/.leiter/soul.md`. The preference takes effect immediately in the current session and all future sessions.
+The skill runs `leiter soul instill`, which hands the agent writing guidelines and tells it to edit `~/.leiter/soul.md`,
+then run `leiter sync` so the managed block picks up the change. The preference takes effect immediately in the current
+session and in all future sessions.
 
 You can also instill broader patterns:
 
 - "Remember that I prefer prose over bullet lists in documentation"
 - "Learn that I use Graphite for branch management, not raw git"
-- "Always squash into a single commit per feature branch"
 
 The agent places each preference in the appropriate section of the soul file and resolves conflicts with existing
 entries (newer observations replace older ones).
 
 ## Distillation
 
-Distillation processes accumulated session transcripts and extracts patterns you have not explicitly taught. It catches
-things like: you consistently prefer a certain error handling style, you always structure tests a particular way, or you
-tend to ask for specific kinds of code review.
+Distillation reads your recent session transcripts and folds in patterns you have not explicitly taught — things like a
+consistent error-handling style, how you structure tests, or the kind of code review you tend to ask for. It is manual
+by default; leiter never distills on its own unless you schedule it.
 
-### Manual distillation
+Trigger it two ways, both running the same `leiter distill` command:
 
-Say "distill" or similar natural language in a Claude Code session, or run `leiter distill` yourself (from a shell or
-cron). Leiter starts a headless agent to read through recent transcripts, update the soul, and commit its own
-distillation bookkeeping after the agent succeeds.
+- Say "distill" (or similar) in a Claude Code session. The skill runs `leiter distill`.
+- Run `leiter distill` yourself from a shell.
 
-### Automatic distillation
+`leiter distill` scans Claude Code's session store (and Codex's, when enabled), composes a prompt of the new transcripts
+plus soul-writing guidelines, and hands it to a headless agent (`claude -p` by default, or your configured
+`agent_command`) whose write access is scoped to the soul file (its read access is the harness default for its working
+directory). The agent edits the soul and prints a one-paragraph summary of what changed. Leiter then commits its own
+bookkeeping — advancing `last_distilled` and re-syncing the managed block — but only after a verified successful run.
+You see the agent's summary followed by the new `last_distilled`.
 
-If you opted into auto-distillation during `/leiter-setup`, the agent automatically runs distillation at session start
-whenever undistilled logs are older than 4 hours. It will briefly let you know it's doing so.
+NOTE: A session is only visible to distillation once Claude Code has written its transcript to disk. `leiter distill`
+reads the transcript in place, so there is nothing to export first, but a session that is still in progress may not be
+picked up until it has been written out.
 
-### Nudges
+### Running from cron
 
-Without auto-distillation, leiter nudges you after the first turn when undistilled logs are older than 24 hours. The
-agent mentions that logs are available for distillation and suggests running it. You can do it then or ignore it.
+Because `leiter distill` is non-interactive, you can schedule it instead of triggering it by hand. A daily run keeps
+your soul current without you thinking about it. For example, in your crontab:
+
+```cron
+0 3 * * * leiter distill
+```
+
+Distill on a cadence that keeps sessions inside Claude Code's retention window (its `cleanupPeriodDays`, ~30 days by
+default) — once Claude Code prunes a session, it is gone before the scan can read it. When a run distills a session
+whose transcript is already older than `retention_warn_days` (default 21), `leiter distill` logs a warning on stderr,
+which is what cron mails you.
+
+## Checking status
+
+`leiter status` is a read-only report of leiter's health. It never writes anything. It reports:
+
+- How many Claude sessions (and Codex sessions, when enabled) are waiting to be distilled.
+- The state of each managed block (`CLAUDE.md`, and `AGENTS.md` when Codex is enabled): **in sync**, **stale** (the soul
+  changed since the block was last written, or the block is missing), **hand-edited** (someone edited inside the managed
+  span — rerun `leiter sync --force` to overwrite), **never synced**, or **unreadable** (a permissions problem or a
+  mangled marker pair, which `--force` would not fix).
+- A soft-epoch advisory when your state's soft epoch differs from the binary's — suggesting you re-run
+  `leiter claude install` or upgrade the binary. This is where a recommended-upgrade notice lives now that there is no
+  session-start nudge.
+- A retention warning naming any undistilled Claude sessions whose transcripts are older than `retention_warn_days`.
+
+`leiter status` exits 0 as long as validation passes (a readable soul, a valid state file, matching hard epochs) — the
+things it reports are informational, not failures.
 
 ## Soul upgrades
 
-When you update the leiter binary, the soul template may have changed (new sections, reorganized categories, etc.). The
-agent tells you when an upgrade is available — just follow its suggestion. You can also trigger it manually by running
-`/leiter-soul-upgrade` (or saying "upgrade the leiter soul" in natural language). The agent runs `leiter soul upgrade`,
-gets the migration instructions, and restructures your soul while preserving all learned preferences.
+When you update the leiter binary, the soul template may have changed (new sections, reorganized categories). Ask the
+agent to "upgrade the leiter soul" (or it may tell you an upgrade is available). The skill runs `leiter soul upgrade`,
+which hands the agent a changelog and the new template; the agent restructures your soul while preserving all learned
+preferences, then runs `leiter soul mark-upgraded` to record the new version in `state.toml`. If the agent restructures
+the soul but the version does not advance, that is harmless — the next upgrade attempt just re-emits the instructions.
 
 ## Viewing the soul
 
-Run `/leiter-soul` to see the current contents of your soul file. The agent displays the learned preferences verbatim,
-with no hidden metadata stripped out.
+Ask to "show my soul" and the skill runs `leiter soul show`. The agent displays the learned preferences verbatim in a
+fenced code block, with no hidden metadata stripped out — the soul is pure preferences content.
 
 ## The soul file
 
-The soul lives at `~/.leiter/soul.md`. It is a markdown file you can read and edit directly — there is nothing magic
-about it. The agent edits it with the same tools it uses for any other file.
+The soul lives at `~/.leiter/soul.md`. It is a plain markdown file you can read and edit directly — there is nothing
+magic about it, and the agent edits it with the same tools it uses for any other file.
 
-The file is pure markdown. CLI-managed metadata lives in `~/.leiter/state.toml` instead: epochs, `soul_version`,
-`last_distilled`, and distillation watermarks. The agent writes the soul through instill and distillation, and you can
-also edit it directly if you want to reorganize, remove entries, or add things by hand. Changes take effect on the next
-session.
+CLI-managed metadata lives in `~/.leiter/state.toml` instead: epochs, `soul_version`, `last_distilled`, the
+managed-block sync hashes, and distillation watermarks. Do not edit `state.toml` by hand.
 
-`last_distilled` is updated by `leiter distill` after a verified successful run, and by the lower-level
-`leiter soul mark-distilled` plumbing command. Do not edit `state.toml` by hand.
+If you edit the soul directly — reorganizing, removing entries, adding things by hand — run `leiter sync` afterward so
+the managed block is brought back in line. (The skill does this for you after any edit it makes on your behalf.) A block
+you hand-edited between the markers is not silently overwritten; `leiter sync` warns and leaves it, and you rerun with
+`--force` to accept the re-materialized copy.
+
+`last_distilled` is the cutoff that decides which sessions a distill treats as new. It is advanced by `leiter distill`
+after a verified successful run — set to the time that run's scan started, not the wall-clock mark time, so any session
+created after the scan is the next run's responsibility. The lower-level `leiter soul mark-distilled` plumbing advances
+it the same way. The agent must never edit it by hand.
