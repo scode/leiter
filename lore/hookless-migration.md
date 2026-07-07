@@ -359,3 +359,32 @@ report.
 Record results per scenario (pass/fail, transcript snippets for the message-relay checks, and any deviation between
 observed Claude/Codex behavior and the assumptions in this document — especially around hook firing in headless mode and
 `claude -p` permission flags).
+
+## Battery results (2026-07-07, leiter-e2e-ded1@localhost)
+
+Executed against the full stack (PRs #111-#120); binaries: old = v0.8.1 tag build, new = stack head. All claude
+invocations ran with `--model opus`. The automatable scenarios run through the migrated `e2e` feature suite
+(`LEITER_E2E_DEST=leiter-e2e-ded1@localhost cargo test --features e2e`); the rest were driven manually over ssh.
+
+- Automated suite (15 steps: install layout, block delivery, instill, headless distill, status, clobber guard, soul
+  upgrade, both epoch surfaces, session-end exemption, legacy migration with drain, uninstall/reinstall, retention
+  warning, opportunistic heal, error paths): PASS on run 4.
+- Scenario 2 (fresh + Codex): PASS — the codex agent instilled via the AGENTS.md block on its own; distill committed the
+  rollout watermark; blocks in sync.
+- Scenarios 3+4 (cooperative migration after procrastination, run combined): PASS — tombstone delivered the migration
+  message; archiving continued through deferral (5 logs, zero loss); agent-driven install converged every quadrant
+  (epochs stamped, soul stripped, six skills collapsed, codex-meta absorbed, config normalized, settings untouched with
+  cleanup instructions relayed, decoy hook preserved through cleanup); one straggler archive from the
+  drain-vs-session-end race converged on the next distill as designed.
+- Scenario 6 (resume/in-flight): PASS — resumed transcript re-flagged undistilled, re-emitted in full, only the new
+  preference learned, watermark re-committed.
+- Scenario 12 (injection posture): PASS — distill agent identified the planted SYSTEM-OVERRIDE payload, learned only the
+  genuine preference, wrote nothing else; a mid-content sentinel did not suppress learning (positional check).
+
+The battery caught two real product bugs, both fixed in-stack: the legacy drain took two cycles instead of the promised
+one (PR #119, post-commit sweep), and distill fed on its own child transcripts with unbounded prompt growth — wedged at
+~3.7M tokens on cycle four (PR #120, positional sentinel exclusion across the claude/codex/legacy channels). One
+test-contract bug (legacy-only sessions wrongly expected a watermark) was fixed in the suite (PR #118). Deviation notes:
+`claude -p` refuses piped stdin over 10MB (future consideration for pathological backlogs; the retention warning
+partially covers it), and pre-fix child transcripts on the test box had to be deleted by hand — a state impossible on
+real boxes since the sentinel ships with headless distill itself.
