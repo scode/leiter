@@ -75,20 +75,45 @@ fn install(state_dir: &Path, claude_home: &Path) {
         .success();
 }
 
+fn install_default_home(state_dir: &Path) -> std::path::PathBuf {
+    let claude_home = state_dir.join(".claude");
+    fs::create_dir_all(&claude_home).unwrap();
+    install(state_dir, &claude_home);
+    claude_home
+}
+
 #[test]
-fn config_set_persists_experimental_codex_flag() {
+fn config_set_persists_codex_flag() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    install(tmp.path(), claude_tmp.path());
+
+    leiter(tmp.path())
+        .args(["config", "set", "codex", "true"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("codex set to true"));
+
+    let config = fs::read_to_string(tmp.path().join("leiter.toml")).unwrap();
+    assert!(config.contains("codex = true"));
+    assert!(!config.contains("enable_codex_experimental"));
+}
+
+#[test]
+fn config_set_legacy_key_prints_deprecation_and_rewrites_to_codex() {
+    let tmp = tempfile::tempdir().unwrap();
+    install_default_home(tmp.path());
 
     leiter(tmp.path())
         .args(["config", "set", "enable_codex_experimental", "true"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "enable_codex_experimental set to true",
-        ));
+        .stdout(predicate::str::contains("codex set to true"))
+        .stdout(predicate::str::contains("deprecated"));
 
     let config = fs::read_to_string(tmp.path().join("leiter.toml")).unwrap();
-    assert!(config.contains("enable_codex_experimental = true"));
+    assert!(config.contains("codex = true"));
+    assert!(!config.contains("enable_codex_experimental"));
 }
 
 #[test]
@@ -118,7 +143,7 @@ fn codex_distill_is_gated_by_experimental_flag() {
     assert!(!dir.join("codex-meta.toml").exists());
 
     leiter(dir)
-        .args(["config", "set", "enable_codex_experimental", "true"])
+        .args(["config", "set", "codex", "true"])
         .assert()
         .success();
 
@@ -153,17 +178,12 @@ fn claude_install_creates_skill_files() {
 
     install(tmp.path(), claude_tmp.path());
 
-    for name in &[
-        "leiter-setup",
-        "leiter-distill",
-        "leiter-instill",
-        "leiter-soul",
-        "leiter-soul-upgrade",
-        "leiter-teardown",
-    ] {
-        let skill_md = claude_tmp.path().join("skills").join(name).join("SKILL.md");
-        assert!(skill_md.is_file(), "missing skill file: {name}");
-    }
+    let skill_md = claude_tmp
+        .path()
+        .join("skills")
+        .join("leiter")
+        .join("SKILL.md");
+    assert!(skill_md.is_file(), "missing consolidated skill file");
 }
 
 #[test]
@@ -180,16 +200,7 @@ fn claude_uninstall_removes_plugin_files() {
         .success()
         .stderr(predicate::str::contains("removed"));
 
-    for name in &[
-        "leiter-setup",
-        "leiter-distill",
-        "leiter-instill",
-        "leiter-soul",
-        "leiter-soul-upgrade",
-        "leiter-teardown",
-    ] {
-        assert!(!claude_tmp.path().join("skills").join(name).exists());
-    }
+    assert!(!claude_tmp.path().join("skills").join("leiter").exists());
 
     // State dir is untouched.
     assert!(dir.join("soul.md").is_file());
@@ -206,6 +217,71 @@ fn claude_uninstall_without_install_fails() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("not initialized"));
+}
+
+#[test]
+fn sync_refuses_hand_edited_block_until_forced() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_home = install_default_home(tmp.path());
+    let claude_md = claude_home.join("CLAUDE.md");
+    let tampered = fs::read_to_string(&claude_md)
+        .unwrap()
+        .replace("Communication Style", "Hand Edited Style");
+    fs::write(&claude_md, tampered).unwrap();
+
+    leiter(tmp.path())
+        .args(["sync"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("refused"))
+        .stderr(predicate::str::contains("--force"));
+
+    leiter(tmp.path())
+        .args(["sync", "--force"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CLAUDE.md synced"));
+}
+
+#[test]
+fn mark_distilled_opportunistically_heals_stale_block() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_home = install_default_home(tmp.path());
+    let claude_md = claude_home.join("CLAUDE.md");
+    fs::write(tmp.path().join("soul.md"), "updated soul\n").unwrap();
+
+    leiter(tmp.path())
+        .args(["soul", "mark-distilled"])
+        .assert()
+        .success();
+
+    assert!(
+        fs::read_to_string(&claude_md)
+            .unwrap()
+            .contains("updated soul")
+    );
+}
+
+#[test]
+fn mark_distilled_warns_but_succeeds_on_hand_edited_block() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_home = install_default_home(tmp.path());
+    let claude_md = claude_home.join("CLAUDE.md");
+    let tampered = fs::read_to_string(&claude_md)
+        .unwrap()
+        .replace("Communication Style", "Hand Edited Style");
+    fs::write(&claude_md, tampered).unwrap();
+    fs::write(tmp.path().join("soul.md"), "new soul body\n").unwrap();
+
+    leiter(tmp.path())
+        .args(["soul", "mark-distilled"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("warning: CLAUDE.md refused"));
+
+    let block = fs::read_to_string(&claude_md).unwrap();
+    assert!(block.contains("Hand Edited Style"));
+    assert!(!block.contains("new soul body"));
 }
 
 #[test]
@@ -358,7 +434,7 @@ fn distill_accepts_external_codex_home_flag() {
 
     install(dir, claude_tmp.path());
     leiter(dir)
-        .args(["config", "set", "enable_codex_experimental", "true"])
+        .args(["config", "set", "codex", "true"])
         .assert()
         .success();
 

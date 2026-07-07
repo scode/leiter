@@ -25,26 +25,28 @@ writing to the soul.
 ┌──────────────────────────────────────────────────────────────┐
 │                       Claude Code Session                    │
 │                                                              │
-│  SessionStart hook ──► leiter hook context ──► soul + agent  │
-│                        leiter hook nudge        instructions  │
-│                                                injected      │
+│  Session start (both active this revision):                  │
+│    <claude_home>/CLAUDE.md block ──► soul inlined            │
+│    SessionStart hook ──► leiter hook context ──► soul +      │
+│                          leiter hook nudge      instructions │
+│    Soul is seen twice until the hooks are dismantled.        │
 │                                                              │
 │  ... normal session ...                                      │
 │                                                              │
-│  /leiter-instill (or "instill X") ──► /leiter-instill skill   │
-│                           ──► agent edits soul.md            │
+│  "instill X" ──► leiter skill ──► leiter soul instill        │
+│                  ──► agent edits soul.md ──► leiter sync     │
 │                                                              │
-│  /leiter-distill (or "distill") ──► /leiter-distill skill     │
-│                           ──► sub-agent: leiter soul distill │
-│                           ──► sub-agent edits soul.md        │
-│                        ──► agent: leiter soul mark-distilled │
+│  "distill" ──► leiter skill                                  │
+│                  ──► sub-agent: leiter soul distill          │
+│                  ──► sub-agent edits soul.md                 │
+│                  ──► agent: leiter soul mark-distilled       │
 │                                                              │
-│  /leiter-soul ──► leiter soul show ──► agent displays         │
-│                                       soul verbatim          │
+│  "show soul" ──► leiter skill ──► leiter soul show           │
+│                  ──► agent displays verbatim                 │
 │                                                              │
-│  /leiter-soul-upgrade ──► leiter soul upgrade                │
-│                        ──► agent restructures soul.md        │
-│                        ──► agent: leiter soul mark-upgraded  │
+│  "upgrade soul" ──► leiter skill ──► leiter soul upgrade     │
+│                  ──► agent restructures soul.md              │
+│                  ──► agent: leiter soul mark-upgraded        │
 │                                                              │
 │  SessionEnd hook ──► leiter hook session-end                 │
 │                      ──► copies transcript to logs/          │
@@ -53,19 +55,19 @@ writing to the soul.
 ~/.leiter/
 ├── leiter.toml          # Main leiter settings
 ├── soul.md              # The "leiter soul" — agent instructions (pure markdown, no frontmatter)
-├── state.toml           # Leiter-managed metadata (epochs, watermarks); agent never edits
+├── state.toml           # Leiter-managed metadata (epochs, watermarks, sync hashes); agent never edits
 └── logs/
     ├── 20260223T173000Z-abc123.jsonl
     ├── 20260223T190000Z-def456.jsonl
     └── ...
 
-~/.claude/skills/
-├── leiter-setup/SKILL.md        # Each contains <!-- SCODE_LEITER_INSTALLED -->
-├── leiter-distill/SKILL.md
-├── leiter-instill/SKILL.md
-├── leiter-soul/SKILL.md
-├── leiter-soul-upgrade/SKILL.md
-└── leiter-teardown/SKILL.md
+~/.claude/
+├── CLAUDE.md               # Carries the managed soul block (SCODE_LEITER_BEGIN/END)
+└── skills/
+    └── leiter/SKILL.md     # Contains <!-- SCODE_LEITER_INSTALLED -->
+
+~/.codex/                   # Only present when codex = true
+└── AGENTS.md               # Carries the managed soul block (SCODE_LEITER_BEGIN/END)
 ```
 
 ## State Directory
@@ -81,30 +83,120 @@ directory path obtained from `LEITER_HOME` (or the `$HOME/.leiter` fallback) ins
 
 ### Claude Code Home Directory
 
-The Claude Code home directory is where leiter installs its plugin files (skill files). The default is `~/.claude/`. The
-`leiter claude` subcommand accepts a `--claude-home <path>` flag to override the directory, primarily for testing.
+The Claude Code home directory is where leiter installs its plugin file (the single skill) and the managed soul block in
+`CLAUDE.md`. The default is `~/.claude/`. The `leiter claude` subcommand accepts a `--claude-home <path>` flag to
+override the directory, primarily for testing. It also accepts `--codex-home <path>`, used only when `codex = true` and
+the command re-syncs the Codex `AGENTS.md` block (see `leiter claude install`); both flags exist to keep install and
+uninstall drivable against fixture directories in tests.
+
+### Codex Home Directory
+
+The Codex home directory is where leiter writes the managed soul block for Codex (`<codex_home>/AGENTS.md`). The default
+is `~/.codex/`. The `leiter codex` subcommand accepts a `--codex-home <path>` flag to override it, mirroring
+`--claude-home` on the `leiter claude` subcommand and primarily for testing. This is a distinct flag from the
+`--codex-home` on `leiter soul distill`, which is unrelated plumbing scoped to Codex session scanning.
 
 ### Plugin Files
 
-`leiter claude install` writes skill files into the Claude Code home directory:
+`leiter claude install` writes a single skill file into the Claude Code home directory:
 
-- **`<claude_home>/skills/leiter-setup/SKILL.md`** — skill that calls `leiter claude agent-setup-instructions` to
-  configure hooks.
-- **`<claude_home>/skills/leiter-distill/SKILL.md`** — skill for distilling session logs into the soul.
-- **`<claude_home>/skills/leiter-instill/SKILL.md`** — skill for recording preferences. Description includes trigger
-  keywords (remember, learn, always, never) so Claude can auto-match.
-- **`<claude_home>/skills/leiter-soul/SKILL.md`** — skill for showing the current soul file contents. Runs
-  `leiter soul show` and displays the output verbatim.
-- **`<claude_home>/skills/leiter-soul-upgrade/SKILL.md`** — skill for upgrading the soul template to the latest version.
-  Runs `leiter soul upgrade` and follows its migration instructions.
-- **`<claude_home>/skills/leiter-teardown/SKILL.md`** — skill that calls `leiter claude agent-teardown-instructions` to
-  remove hooks.
+- **`<claude_home>/skills/leiter/SKILL.md`** — the one consolidated leiter skill. It exists purely for auto-matching
+  convenience; the underlying mechanism is always the CLI. Its description carries the trigger keywords (remember,
+  learn, instill, always, never, distill, soul, upgrade) so Claude routes matching requests to it. Its body routes by
+  intent: instill → `leiter soul instill`; distill → the existing sub-agent flow (`leiter soul distill` in a sub-agent,
+  then `leiter soul mark-distilled` — a later revision repoints this at a standalone distill command); show →
+  `leiter soul
+  show`, displayed verbatim in a fenced code block (keeping the existing fence-length instruction so
+  backticks in the soul cannot break out of the fence); upgrade → `leiter soul upgrade` then
+  `leiter soul mark-upgraded`; and after any direct edit of the soul file → `leiter sync`, so the managed blocks pick up
+  the change.
 
-Each skill file contains the sentinel string `SCODE_LEITER_INSTALLED` as an HTML comment. `leiter claude uninstall`
+The skill file contains the sentinel string `SCODE_LEITER_INSTALLED` as an HTML comment. `leiter claude uninstall`
 checks for this sentinel to verify that leiter was installed before removing files.
 
-All skill files are `const &str` templates built into the binary. They are written to disk by `leiter claude install`
-and overwritten on re-run (idempotent).
+Transitional note: this one skill replaces the previous six `leiter-*` skills. The `/leiter-setup` and
+`/leiter-teardown` skills in particular are gone from fresh installs, but the commands they used to call —
+`leiter claude agent-setup-instructions` and `leiter claude agent-teardown-instructions` — still exist and can be run
+directly. They (and the hooks they configure) are dismantled in a later revision. `leiter claude install` removes any of
+the old `leiter-*` skill directories whose `SKILL.md` still carries the sentinel, so upgrading a box collapses the old
+set down to the one skill.
+
+The skill file is a `const &str` template built into the binary. It is written to disk by `leiter claude install` and
+overwritten on re-run (idempotent).
+
+### Managed soul-delivery blocks
+
+Both harnesses receive the soul through a managed block — a span delimited by the sentinel comments
+`<!-- SCODE_LEITER_BEGIN -->` and `<!-- SCODE_LEITER_END -->` — written into a file the harness already reads at session
+start. For Claude that file is `<claude_home>/CLAUDE.md`, and the block is written on every `leiter claude install` and
+every `leiter sync`, unconditionally. For Codex it is `<codex_home>/AGENTS.md`, written only when `codex = true` in
+`leiter.toml`.
+
+The block opens with a short preamble and then inlines the soul body verbatim. The preamble states leiter's identity (a
+self-training system that learns across sessions), the resolved soul path (the state directory joined with `soul.md`),
+and how the agent should act on the user's language: instill on "remember"/"learn"/"always"/"never" (or similar) by
+running `leiter soul instill`; distill on request via the distillation flow; show the soul on request via
+`leiter soul show`; upgrade on request via `leiter soul upgrade`; and — the point that matters most for a delivery model
+built on a materialized copy — run `leiter sync` after any direct edit of the soul file, so the managed blocks are
+brought back in line. The soul body follows the preamble inside a backtick code fence whose length is computed at write
+time: at least three backticks, and always strictly longer than the longest run of consecutive backticks anywhere in the
+soul body, so a soul that itself contains fenced code blocks cannot terminate the fence early.
+
+Why the soul is inlined rather than imported. Claude Code supports `@path` imports in `CLAUDE.md`, which would be a
+tempting way to deliver an always-current soul without materializing a copy. That was rejected on evidence, not
+preference. Imports in `CLAUDE.md` resolve, and they nest — an import inside an imported file also resolves (verified
+2026-07-07 against a claude 2.1.20x-era CLI). The soul is agent-writable, so an import-delivered soul would let anything
+that can write `soul.md` pull arbitrary readable files into every session by planting an `@import` of them. Imports
+inside a code fence, by contrast, were verified inert. That is exactly what makes the inlined fenced copy safe, and it
+has a second benefit: incidental `@`-tokens in soul prose (decorators, email addresses) inside the fence are never
+interpreted as imports either. Codex has no import syntax at all, so inlining is the only option there regardless — and
+using one delivery model for both harnesses keeps the sync and staleness handling uniform.
+
+The sentinel comment text must say, in the file itself, that the block is machine-managed by leiter and that edits
+belong in the soul file at its resolved path — not between the sentinels. A human opening `CLAUDE.md` or `AGENTS.md` is
+thereby told where to make changes and that hand edits inside the block will be reported and refused by `leiter sync`
+(see below).
+
+Writer semantics. The block writer targets exactly one file and behaves by what it finds:
+
+- Target file absent → create it containing only the block.
+- Present with neither sentinel → append the block, preserving all existing content byte-for-byte.
+- Present with both sentinels → replace only the span between (and including) them, leaving everything outside the span
+  byte-for-byte untouched.
+- Present with a `BEGIN` sentinel but no matching `END` → error and refuse to touch the file. The managed span cannot be
+  located unambiguously, and guessing risks corrupting user content.
+
+Every block write is atomic: leiter writes a temporary file in the same directory and renames it over the target, so a
+crash mid-write never leaves a torn `CLAUDE.md` or `AGENTS.md`.
+
+Symlinked targets are followed, not replaced. Dotfiles-managed setups routinely make `CLAUDE.md` or `AGENTS.md` a
+symlink into a config repo; a naive rename-over would swap the symlink for a regular file and silently disconnect that
+setup. When the target exists, leiter canonicalizes it and performs the temp-file-plus-rename in the resolved file's own
+directory. A dangling symlink (target path resolves to nothing) is an error, not a create — writing "through" a broken
+link cannot match the user's intent.
+
+Leiter records two SHA-256 hashes per target in `state.toml` (see `~/.leiter/state.toml`): the soul body it last
+materialized into that block (for staleness detection) and the full block content it last wrote (for clobber detection).
+These drive `leiter sync` and the opportunistic re-sync described next.
+
+#### Opportunistic re-sync
+
+`leiter sync` is the explicit way to re-materialize the blocks, but the agent typically edits the soul _after_ leiter's
+involvement in a command has ended, so there is a structural gap: the block on disk drifts from the soul between syncs.
+To heal that gap, every state-mutating leiter command that runs to completion also re-materializes any managed block
+whose recorded soul hash no longer matches the current soul body — the same work `leiter sync` does, run as a side
+effect. The commands that do this are `leiter soul mark-distilled`, `leiter soul mark-upgraded`, `leiter config set`,
+`leiter claude install`, `leiter codex install`, and the pending-watermark staging path of `leiter soul distill`.
+
+The same clobber guard applies: a block hand-edited since leiter last wrote it is warned about and left alone, never
+silently clobbered. Here a refusal is only a warning — it never turns the host command into a failure. A
+`mark-distilled` that cannot heal a hand-edited `CLAUDE.md` still succeeds at marking distilled; the user is simply told
+to run `leiter sync --force`.
+
+Read-only surfaces never write blocks. `leiter soul show` and any `--dry-run` path report or display without healing, so
+their output reflects on-disk state rather than a state they silently repaired. The explicit `leiter sync` step that the
+`leiter soul instill` guidelines end with (see that command) is the primary close of the gap; opportunistic re-sync is
+the backstop for every path that does not run it.
 
 ### `~/.leiter/soul.md`
 
@@ -227,16 +319,23 @@ Main leiter settings stored as TOML.
 Logical shape:
 
 ```toml
-enable_codex_experimental = false
+codex = false
 ```
 
-`enable_codex_experimental` defaults to `false` when the file is missing. When false, `leiter soul distill` and
+`codex` defaults to `false` when the file is missing. When true, Codex support is active: it gates the Codex portions of
+`leiter soul distill` and `leiter soul mark-distilled` and the delivery of the `AGENTS.md` managed block.
+`leiter codex
+install` is the command that flips it on. When false, `leiter soul distill` and
 `leiter soul mark-distilled` must not read Codex rollout files, must not consult the `[codex.*]` tables in
 `~/.leiter/state.toml`, and must not modify those tables' contents. Since `state.toml` is core state (not
 Codex-specific), commands still load and rewrite the file as a whole — the requirement is that a disabled gate leaves
 the `[codex.*]` table contents exactly as they were, and epoch validation and `last_distilled` work unaffected. This
 gate is Codex-only: the external Claude session scan and its `[claude.*]` tables are always active and are never gated
 on this flag.
+
+The key `codex` replaces the older `enable_codex_experimental` with identical gating semantics. For backward
+compatibility, loading still accepts `enable_codex_experimental` as an alias (same meaning); saving always writes the
+new `codex` key, so a config loaded with the legacy name is rewritten to `codex` the next time leiter persists it.
 
 ### `~/.leiter/state.toml`
 
@@ -253,6 +352,13 @@ soul_version = 2
 setup_soft_epoch = 2
 setup_hard_epoch = 1
 last_distilled = 2026-07-01T12:00:00Z
+
+[sync.claude_md]
+soul_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+block_hash = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+
+[sync.agents_md]
+# same shape; present only when codex = true and the AGENTS.md block has been synced
 
 [claude.committed."<session_id>"]
 path = "/home/alice/.claude/projects/-home-alice-proj/<uuid>.jsonl"
@@ -283,6 +389,14 @@ latest_event_timestamp_utc = 2026-03-07T18:09:25Z # optional
 - `pending_scan_started_utc` (optional): the scan-start time staged by the most recent non-dry-run distill.
   `mark-distilled` consumes it as the new `last_distilled` (see that command). Absent when no distill has staged
   anything since the last mark.
+- `[sync.claude_md]` and `[sync.agents_md]` (optional): per-target sync tracking for the managed soul-delivery blocks
+  (see Managed soul-delivery blocks). Each table holds two SHA-256 hex digests. `soul_hash` is the soul body last
+  materialized into that block — comparing it against the current soul body is how leiter detects a stale block.
+  `block_hash` is the full block content leiter last wrote to that target — comparing it against the block currently on
+  disk is how leiter detects a hand edit inside the managed span (the clobber guard). An absent table means that target
+  has never been synced. A `[sync.agents_md]` table may linger after Codex is disabled — uninstall deliberately leaves
+  `state.toml` alone — which is harmless: a target whose file lacks the block is recreated without `--force` on the next
+  sync, regardless of stale hashes.
 
 The `[codex.*]` tables carry the Codex distillation watermarks previously kept in `codex-meta.toml`, with the same
 semantics. `committed` is the last successfully marked-distilled Codex watermark set. `pending` is staged by
@@ -339,11 +453,13 @@ Writes a persistent setting to `~/.leiter/leiter.toml`.
 
 1. Load `~/.leiter/leiter.toml` if it exists; if it is unreadable or invalid, warn and continue from defaults
 2. Validate the key/value pair
-3. Persist the updated config back to `~/.leiter/leiter.toml`
+3. If the block-relevant soul state is stale, opportunistically re-sync the managed blocks (see Opportunistic re-sync)
+4. Persist the updated config back to `~/.leiter/leiter.toml`
 
 **Supported keys:**
 
-- `enable_codex_experimental`: boolean (`true` or `false`)
+- `codex`: boolean (`true` or `false`). The legacy key name `enable_codex_experimental` is also accepted and is written
+  back as `codex`; when it is used, the confirmation output includes a note that the name is deprecated.
 
 **Output (stdout):** A confirmation message of the form `<key> set to <value>`.
 
@@ -351,8 +467,8 @@ Writes a persistent setting to `~/.leiter/leiter.toml`.
 
 ### `leiter claude install`
 
-First-time setup. Performs deterministic initialization of the state directory and writes plugin files (skills and
-sentinel) to the Claude Code home directory.
+First-time setup. Performs deterministic initialization of the state directory, writes the plugin file (the single
+skill) to the Claude Code home directory, and writes the managed soul-delivery blocks.
 
 **Deterministic steps:**
 
@@ -384,35 +500,140 @@ sentinel) to the Claude Code home directory.
    soul-missing/state-present shape, which the next run repairs, never the soul-present/state-missing shape that reads
    as a legacy layout
 4. Verify the Claude Code home directory exists (error if not — Claude Code not installed)
-5. Write all six skill files to their respective directories under `<claude_home>/skills/`. Overwrites existing files on
-   re-run (idempotent)
+5. Write the single `<claude_home>/skills/leiter/SKILL.md` skill file, overwriting on re-run (idempotent). Remove any of
+   the old `<claude_home>/skills/leiter-*/` directories whose `SKILL.md` carries the `SCODE_LEITER_INSTALLED` sentinel —
+   this collapses a previous six-skill install down to the one skill and is safe to re-run
+6. Write the managed soul-delivery block into `<claude_home>/CLAUDE.md` (always), and into `<codex_home>/AGENTS.md` when
+   `codex = true` — effectively a `leiter sync` of both targets, using the block writer and clobber-guard semantics from
+   Managed soul-delivery blocks. This runs after the state/soul convergence so the block reflects the just-materialized
+   soul, and it records the `[sync.*]` hashes. A fresh install has no recorded block hash, so both targets are written
+   unconditionally
 
-**Output (stdout):** A success message listing the available skills and telling the user to run `/leiter-setup` to
-configure hooks.
+**Output (stdout):** A success message confirming what was written — the `CLAUDE.md` managed soul block (and the
+`AGENTS.md` block when `codex = true`) and the single `leiter` skill — and noting that the soul is now delivered inline
+via the managed block, so soul injection no longer depends on a hook. Because the `/leiter-setup` skill is gone, the
+message points users who still want the session-logging and nudge hooks at running
+`leiter claude
+agent-setup-instructions` directly; those hooks remain available in this revision (the external Claude
+scan already reads transcripts directly, so they are no longer required for distillation to see sessions).
 
 If any step fails, the output instructs the agent to relay the error to the user.
 
 ### `leiter claude uninstall`
 
-Removes leiter plugin files from the Claude Code home directory. Does NOT touch `~/.leiter/` (soul and logs) or
-`~/.claude/settings.json` (hooks are removed via the `agent-teardown-instructions` subcommand or manually).
+Removes leiter's skill and the managed soul block from the Claude Code home directory. Does NOT touch `~/.leiter/`
+(soul, logs, and state) or `~/.claude/settings.json` (hooks are removed via the `agent-teardown-instructions` subcommand
+or manually). It also leaves the Codex `AGENTS.md` block alone — that is removed by `leiter codex uninstall`.
 
 **Behavior:**
 
-1. Scan skill directories under `<claude_home>/skills/` for a `SKILL.md` containing `SCODE_LEITER_INSTALLED`
-2. If no skill file contains the sentinel: error
-3. Remove all six `<claude_home>/skills/leiter-*/` directories (best-effort, skip missing)
+1. Remove the managed soul-delivery block from `<claude_home>/CLAUDE.md`, preserving all other file content
+   byte-for-byte. The file is left in place without the block, not deleted. A missing `CLAUDE.md`, or a `CLAUDE.md` with
+   no managed block, is a no-op for this step
+2. Scan skill directories under `<claude_home>/skills/` for a `SKILL.md` containing `SCODE_LEITER_INSTALLED` (the one
+   `leiter/` skill, plus any stale old `leiter-*` skills) and remove them (best-effort, skip missing)
+3. If nothing leiter-owned was found at all — no sentinel-bearing skill and no managed block to remove — error
+
+Block removal runs before the skill check on purpose: a partial uninstall (skills gone, block left behind by an earlier
+failure) must be completable by re-running the command, and a skills-first sentinel bail would make the block removal
+permanently unreachable on retry.
+
+The recorded `[sync.claude_md]` hashes in `state.toml` are deliberately left as-is (uninstall does not touch
+`~/.leiter/`). This is harmless: with the block gone from disk, a later `leiter claude install` finds no managed block
+and recreates it without needing `--force`.
 
 **Output (stdout):** A success message with guidance on how to remove hooks, fully clean up (`~/.leiter/`), and
 re-enable later.
 
-**Errors:** If the sentinel is missing or unreadable, exit with a non-zero code.
+**Errors:** Exit non-zero only when there was nothing leiter-owned to remove (neither sentinel-bearing skills nor a
+managed block).
+
+### `leiter codex install`
+
+Enables Codex support and delivers the soul to it. This is the one command that flips Codex on.
+
+**Flags:**
+
+- `--codex-home <path>`: override the Codex home directory (default `~/.codex/`), primarily for testing. Mirrors
+  `--claude-home` on the `leiter claude` subcommand.
+
+**Behavior:**
+
+1. Validate state (see Setup Epochs). If incompatible, exit with an error
+2. Set `codex = true` in `~/.leiter/leiter.toml` (creating the file if absent, preserving other keys)
+3. Write the managed soul-delivery block into `<codex_home>/AGENTS.md` using the block writer semantics from Managed
+   soul-delivery blocks, and record the `[sync.agents_md]` hashes
+4. Because this is a state-mutating command, opportunistically re-sync the `CLAUDE.md` block if it has gone stale (see
+   Opportunistic re-sync)
+
+**Output (stdout):** A confirmation that Codex is enabled and the `AGENTS.md` block was written.
+
+### `leiter codex uninstall`
+
+Removes the Codex managed soul block and disables Codex support. It must work regardless of the current config value — a
+user who set `codex = false` first must still be able to clean up the block — so it never gates on the flag.
+
+**Flags:**
+
+- `--codex-home <path>`: as above.
+
+**Behavior:**
+
+1. Validate state (see Setup Epochs). If incompatible, exit with an error
+2. Remove the managed block from `<codex_home>/AGENTS.md`, preserving all other file content byte-for-byte. A missing
+   `AGENTS.md`, or a present file with no managed block, is a no-op success — there is nothing to remove
+3. Set `codex = false` in `~/.leiter/leiter.toml`
+
+As with `leiter claude uninstall`, the recorded `[sync.agents_md]` hashes are left as-is; they are harmless once the
+block is gone, and a later `leiter codex install` recreates the block without `--force`.
+
+**Output (stdout):** A confirmation that Codex is disabled and the `AGENTS.md` block was removed (or that there was
+nothing to remove).
+
+### `leiter sync`
+
+Re-materializes the managed soul-delivery blocks from the current soul, bringing each target back in line with
+`~/.leiter/soul.md`. This is the command the agent (or a human) runs after editing the soul directly, and the primary
+way the `CLAUDE.md` and `AGENTS.md` copies stay current.
+
+**Flags:**
+
+- `--force`: overwrite a block that has been hand-edited since leiter last wrote it (see clobber guard).
+
+**Behavior:**
+
+1. Validate state (see Setup Epochs). If incompatible, exit with an error
+2. Determine the target set: always `CLAUDE.md`; additionally `AGENTS.md` when `codex = true` in `leiter.toml`
+3. For each target, reconcile the on-disk block against the recorded `[sync.*]` hashes and the current soul body (see
+   the outcomes below), writing the block where needed
+4. After the block writes succeed, update the `[sync.*]` hashes in `state.toml` in a single atomic write. Writing the
+   blocks first and committing the hashes only on success keeps the recorded state from ever getting ahead of reality
+
+**Clobber guard and per-target outcomes.** For each target, leiter compares the block currently on disk against that
+target's recorded `block_hash`, and the recorded `soul_hash` against the current soul body:
+
+- On-disk block matches `block_hash` and `soul_hash` equals the current soul body → **already current**; nothing is
+  written.
+- On-disk block matches `block_hash` but the soul body has changed → stale copy; re-materialize the block and record the
+  new hashes → **synced**.
+- The target file has no managed block at all → (re)create it and record the hashes → **synced**. Nothing user-authored
+  is at risk, so this needs no `--force`.
+- A block is present but does not match `block_hash` → someone edited inside the managed span. Leiter warns, naming the
+  target, and **refuses** that target unless `--force` is passed (which re-materializes and re-records). One hand-edited
+  block does not block the others — every other target still syncs.
+
+**Output (stdout):** One line per target reporting its outcome — synced, already current, or refused (hand-edited, rerun
+with `--force`).
 
 ### `leiter claude agent-setup-instructions`
 
 Outputs natural language instructions for the agent to configure Claude Code hooks in `~/.claude/settings.json`. This is
-the same hook configuration content that `leiter claude install` used to output directly. It is called by the
-`/leiter-setup` skill.
+the same hook configuration content that `leiter claude install` used to output directly.
+
+Transitional note: this command used to be invoked by the `/leiter-setup` skill, which no longer exists (the six skills
+are consolidated into one — see Plugin Files). The command itself stays runnable directly, so a user who wants the
+session-logging and nudge hooks can still get these instructions. It is retired along with the hooks in a later
+revision.
 
 **Behavior:** Validates state (see Setup Epochs). If incompatible, exits with an error.
 
@@ -422,8 +643,10 @@ the exact hook JSON. After hooks are configured, includes an optional permission
 
 ### `leiter claude agent-teardown-instructions`
 
-Outputs natural language instructions for the agent to remove leiter hooks from `~/.claude/settings.json`. Called by the
-`/leiter-teardown` skill.
+Outputs natural language instructions for the agent to remove leiter hooks from `~/.claude/settings.json`.
+
+Transitional note: this command used to be invoked by the `/leiter-teardown` skill, which no longer exists. Like
+`agent-setup-instructions`, the command stays runnable directly until the hooks are dismantled in a later revision.
 
 **Behavior:** Validates state (see Setup Epochs). If incompatible, exits with an error.
 
@@ -435,6 +658,13 @@ the user.
 ### `leiter hook context`
 
 Outputs the soul content and agent instructions. Called by the SessionStart hook.
+
+Transitional note: as of this revision the soul is also delivered by the managed `CLAUDE.md` block (see Managed
+soul-delivery blocks), so on a box that still has the hook configured the agent sees the soul twice at session start —
+harmless duplication that resolves when the hook is dismantled in a later revision. This preamble also still names the
+previous per-topic skills (`/leiter-instill`, `/leiter-distill`, `/leiter-soul`, `/leiter-soul-upgrade`), which have
+been consolidated into the single `leiter` skill; the consolidated skill auto-matches the same trigger keywords, and the
+managed block carries the current routing guidance. The mismatch is cosmetic and is retired with the hook.
 
 **Behavior:**
 
@@ -533,11 +763,11 @@ with it the legacy path.
    write a session log immediately before running `leiter soul distill`, and the two timestamps could collide
 4. Load `~/.leiter/leiter.toml`. If it is unreadable or invalid, warn and use defaults
 5. Scan the external Claude session store under `<claude_home>/projects/` (default `~/.claude/`, overridable with
-   `--claude-home`). This scan is unconditional — it is **not** gated on `enable_codex_experimental` (that gate is
-   Codex-only). Discovery is recursive but fail-useful about Claude Code's undocumented layout: only regular files
-   (symlinks are never followed), only `.jsonl` files whose filename stem parses as a UUID (that stem is the session
-   id), everything else silently skipped; unreadable files or directories are warned about and skipped, never fatal. See
-   Claude session scanning below for the full contract
+   `--claude-home`). This scan is unconditional — it is **not** gated on `codex` (that gate is Codex-only). Discovery is
+   recursive but fail-useful about Claude Code's undocumented layout: only regular files (symlinks are never followed),
+   only `.jsonl` files whose filename stem parses as a UUID (that stem is the session id), everything else silently
+   skipped; unreadable files or directories are warned about and skipped, never fatal. See Claude session scanning below
+   for the full contract
 6. Read the Claude `[claude.committed]` watermarks from the validated `state.toml` (same core-state note as the Codex
    watermarks in step 10). For each discovered session, compare the current file watermark (`path`, `size_bytes`,
    `mtime_utc`) to the committed watermark. If unchanged, skip the session completely. If changed or new, re-read the
@@ -552,20 +782,18 @@ with it the legacy path.
    otherwise re-emit the whole session from the legacy copy. Floor-skipped sessions are deliberately not in the
    suppression set: for those the legacy log may be the only copy that would ever emit. The suppressed legacy file still
    participates in obsolete-log cleanup below
-8. If `enable_codex_experimental = true`, best-effort scan Codex rollout transcripts under
-   `<codex_home>/sessions/**/*.jsonl` and `<codex_home>/archived_sessions/**/*.jsonl` (default `~/.codex/`, overridable
-   with `--codex-home`)
-9. If `enable_codex_experimental = true`, for each Codex rollout file, read the leading `session_meta` record and use
-   `payload.id` as the stable session ID. Files without a readable leading `session_meta` record are skipped with a
-   warning
-10. If `enable_codex_experimental = true`, read the Codex `[codex.committed]` watermarks from the validated
-    `state.toml`. (Unlike the former `codex-meta.toml`, `state.toml` is core state validated in step 1, so an unreadable
-    or invalid state file is already a hard command error there — there is no separate warn-and-skip path for it. The
-    warn-and-default behavior for `leiter.toml` in step 4 is unchanged.)
-11. If `enable_codex_experimental = true`, for each Codex session ID, compare the current file watermark (`path`,
-    `size_bytes`, `mtime_utc`) to the `[codex.committed]` watermark in `state.toml`. If unchanged, skip the session
-    completely. If changed (or new), re-read the full rollout file and emit the full canonicalized session so the LLM
-    sees the entire updated context
+8. If `codex = true`, best-effort scan Codex rollout transcripts under `<codex_home>/sessions/**/*.jsonl` and
+   `<codex_home>/archived_sessions/**/*.jsonl` (default `~/.codex/`, overridable with `--codex-home`)
+9. If `codex = true`, for each Codex rollout file, read the leading `session_meta` record and use `payload.id` as the
+   stable session ID. Files without a readable leading `session_meta` record are skipped with a warning
+10. If `codex = true`, read the Codex `[codex.committed]` watermarks from the validated `state.toml`. (Unlike the former
+    `codex-meta.toml`, `state.toml` is core state validated in step 1, so an unreadable or invalid state file is already
+    a hard command error there — there is no separate warn-and-skip path for it. The warn-and-default behavior for
+    `leiter.toml` in step 4 is unchanged.)
+11. If `codex = true`, for each Codex session ID, compare the current file watermark (`path`, `size_bytes`, `mtime_utc`)
+    to the `[codex.committed]` watermark in `state.toml`. If unchanged, skip the session completely. If changed (or
+    new), re-read the full rollout file and emit the full canonicalized session so the LLM sees the entire updated
+    context
 12. Sort the combined Claude output chronologically, interleaving legacy `~/.leiter/logs/` sessions (keyed by filename
     timestamp, as today) with external Claude sessions (keyed by their session timestamp — see Claude session scanning
     for how that timestamp is derived — then session id as a tiebreak). Sort changed Codex sessions separately by
@@ -574,15 +802,18 @@ with it the legacy path.
     enabled, wrapped in XML-like boundary tags (see Output below)
 14. If `--dry-run` is not set, replace the `[claude.pending]` map in `~/.leiter/state.toml` with this run's changed
     Claude sessions and set `pending_scan_started_utc` to the time this run's scan began (an atomic rewrite preserving
-    all other state fields). This staging is **not** gated on `enable_codex_experimental`, and it happens even when the
-    Claude home could not be resolved and the scan was skipped — pending means "exactly what this run showed the LLM",
-    and a run that scanned nothing showed nothing; leaving a stale pending map would let the next `mark-distilled`
-    commit watermarks for sessions this cycle never emitted. If writing state fails, warn and continue. Staging may
-    happen before the emission step completes; this is safe because `mark-distilled` is only ever run after a distill
-    that succeeded end to end (a failed distill is rerun, restaging from current reality)
-15. If `enable_codex_experimental = true` and `--dry-run` is not set, replace the `[codex.pending]` map in
-    `~/.leiter/state.toml` with the changed sessions from this run (an atomic rewrite preserving all other state
-    fields). If writing state fails, warn and continue
+    all other state fields). This staging is **not** gated on `codex`, and it happens even when the Claude home could
+    not be resolved and the scan was skipped — pending means "exactly what this run showed the LLM", and a run that
+    scanned nothing showed nothing; leaving a stale pending map would let the next `mark-distilled` commit watermarks
+    for sessions this cycle never emitted. If writing state fails, warn and continue. Staging may happen before the
+    emission step completes; this is safe because `mark-distilled` is only ever run after a distill that succeeded end
+    to end (a failed distill is rerun, restaging from current reality)
+15. If `codex = true` and `--dry-run` is not set, replace the `[codex.pending]` map in `~/.leiter/state.toml` with the
+    changed sessions from this run (an atomic rewrite preserving all other state fields). If writing state fails, warn
+    and continue
+16. On the non-dry-run staging path only, opportunistically re-sync any stale managed block (see Opportunistic re-sync).
+    A `--dry-run` distill writes no state and must not touch the blocks. Hand-edited blocks are warned about, never
+    clobbered, and a refusal does not fail the command
 
 **Output (stdout):**
 
@@ -610,7 +841,7 @@ with only tool_use blocks (no text) emits only the tool summary lines. Tool resu
 **Claude session scanning:** In addition to the hook-copied logs in `~/.leiter/logs/`, `leiter soul distill` reads
 Claude Code's own session transcripts directly from the Claude home directory. Claude Code stores one JSONL transcript
 per session at `<claude_home>/projects/<cwd-slug>/<session-uuid>.jsonl`, appended live while the session runs. This
-external scan is always active in this revision; it is not gated on `enable_codex_experimental`.
+external scan is always active in this revision; it is not gated on `codex`.
 
 Discovery starts at `<claude_home>/projects/` (default `~/.claude/projects/`, override the home with `--claude-home`)
 and recurses, but it is deliberately fail-useful about this undocumented layout. It considers only regular files; it
@@ -667,9 +898,9 @@ drops developer/system scaffolding, reasoning, token counts, raw tool results, a
 
 **Codex access constraints:** Codex support must never read SQLite, must never write or delete anything under
 `~/.codex/`, and must never fail the overall distill command when the Codex directory is missing, malformed, or
-unexpected. When `enable_codex_experimental = false`, the command must not read Codex rollout files and must not read or
-modify the contents of the `[codex.*]` tables in `~/.leiter/state.toml` (it still loads and rewrites the file as a
-whole; the disabled gate just passes those tables through unchanged).
+unexpected. When `codex = false`, the command must not read Codex rollout files and must not read or modify the contents
+of the `[codex.*]` tables in `~/.leiter/state.toml` (it still loads and rewrites the file as a whole; the disabled gate
+just passes those tables through unchanged).
 
 **Obsolete log cleanup:** After outputting new logs (or reporting that there are none), the command collects log files
 whose filename timestamps are strictly before `last_distilled` — these have already been processed by a prior
@@ -691,17 +922,19 @@ be updated — the agent must never edit it manually. This command never writes 
 1. Validate state (see Setup Epochs). If incompatible, exit with an error
 2. Load `~/.leiter/leiter.toml`. If it is unreadable or invalid, warn and use defaults
 3. Merge the `[claude.pending]` map into `[claude.committed]` and clear `[claude.pending]`. This always happens — it is
-   **not** gated on `enable_codex_experimental`, since the external Claude scan is always active
+   **not** gated on `codex`, since the external Claude scan is always active
 4. Set `last_distilled` to the staged `pending_scan_started_utc` (clearing that field), falling back to the current UTC
-   time when nothing is staged (a mark without a preceding non-dry-run distill). If `enable_codex_experimental = true`,
-   also merge the `[codex.pending]` map into `[codex.committed]` and clear `[codex.pending]`
+   time when nothing is staged (a mark without a preceding non-dry-run distill). If `codex = true`, also merge the
+   `[codex.pending]` map into `[codex.committed]` and clear `[codex.pending]`
 5. Write `state.toml` back in a single atomic write, preserving all other fields. There is no separate best-effort path
    for either merge: both the Claude and (when enabled) Codex promotions ride the same write as `last_distilled`, so the
    whole thing either commits or the command fails. (The old warn-and-continue behavior existed because Codex watermarks
    lived in a separate best-effort file; that split no longer exists.)
+6. On successful commit, opportunistically re-sync any stale managed block (see Opportunistic re-sync). A block that was
+   hand-edited is warned about, never clobbered, and a refusal here does not fail the command
 
-When `enable_codex_experimental = false`, `leiter soul mark-distilled` must not consult or modify the contents of the
-`[codex.*]` tables in `~/.leiter/state.toml` — the rewrite that updates `last_distilled` passes them through unchanged.
+When `codex = false`, `leiter soul mark-distilled` must not consult or modify the contents of the `[codex.*]` tables in
+`~/.leiter/state.toml` — the rewrite that updates `last_distilled` passes them through unchanged.
 
 **Output (stdout):** A confirmation message including the exact timestamp that was set.
 
@@ -725,13 +958,16 @@ preference ("remember", "learn", "instill", "always", "never", or similar langua
 2. Soul-writing guidelines (shared with `leiter soul distill`) covering entry format, specificity, placement,
    contradiction resolution, recording judgment, and examples
 3. Instruction to read `~/.leiter/soul.md` and edit the appropriate section
+4. A final instruction to run `leiter sync` after editing, so the managed soul-delivery blocks pick up the change. This
+   step is the primary close of the structural gap where the agent edits the soul after leiter's involvement ended (see
+   Opportunistic re-sync); the guidelines end with it
 
 See the Architecture section for why guidelines are shared between `instill` and `distill`.
 
 ### `leiter soul show`
 
-Outputs the full soul file wrapped in XML boundary tags for safe verbatim display. Called by the `/leiter-soul` skill
-when the user asks to see their soul.
+Outputs the full soul file wrapped in XML boundary tags for safe verbatim display. Invoked through the consolidated
+`leiter` skill (its show route) when the user asks to see their soul.
 
 **Behavior:**
 
@@ -756,7 +992,7 @@ Checks for stale undistilled session logs and outputs a nudge if any exist. Call
 **Flags:**
 
 - `--auto-distill`: Use a 4-hour threshold instead of 24 hours, and output an instruction for the agent to run
-  distillation (instead of asking the user). This is opt-in via `/leiter-setup` option 3.
+  distillation (instead of asking the user). This is opt-in via `leiter claude agent-setup-instructions` option 3.
 
 **Behavior:**
 
@@ -781,8 +1017,8 @@ Checks for stale undistilled session logs and outputs a nudge if any exist. Call
 ### `leiter soul upgrade`
 
 Detects soul template drift and outputs agent instructions to migrate the existing soul to the current template format.
-Invoked by the `/leiter-soul-upgrade` skill (or directly by the agent when the user asks to upgrade the soul using
-natural language).
+Invoked through the consolidated `leiter` skill (its upgrade route), or directly by the agent when the user asks to
+upgrade the soul using natural language.
 
 **Behavior:**
 
@@ -822,13 +1058,19 @@ upgrade as done.
 1. Validate state (see Setup Epochs). If incompatible, exit with an error
 2. Set `soul_version` to the binary's current template version and write `state.toml` back atomically, preserving all
    other fields
+3. On success, opportunistically re-sync any stale managed block (see Opportunistic re-sync) — an upgrade restructures
+   the soul, so the delivered copies would otherwise be stale until the next command. Hand-edited blocks are warned
+   about, never clobbered, and a refusal does not fail the command
 
 **Output (stdout):** A confirmation message including the version that was set.
 
 ## Hook Configuration
 
-The following hooks are configured in `~/.claude/settings.json` by the agent when the user runs `/leiter-setup` (which
-calls `leiter claude agent-setup-instructions`):
+The following hooks are configured in `~/.claude/settings.json` by the agent when it runs
+`leiter claude agent-setup-instructions` (formerly triggered by the `/leiter-setup` skill, which no longer exists — see
+Plugin Files). In this revision hooks are optional: the soul reaches the agent through the managed `CLAUDE.md` block
+regardless, and the external Claude scan reads transcripts directly, so these hooks add session-end archiving and
+distillation nudges rather than being required for leiter to function. They are dismantled entirely in a later revision.
 
 ### SessionStart Hook
 
@@ -856,7 +1098,7 @@ calls `leiter claude agent-setup-instructions`):
 Fires on every session start (new, resume, clear, compact). The stdout output is added as context for the agent. The
 `leiter hook context` hook injects the soul and agent instructions; the `leiter hook nudge` hook outputs a distillation
 reminder only when stale undistilled logs exist (otherwise it outputs nothing, adding zero context). If the user opts
-into auto-distillation during `/leiter-setup` (option 3), the nudge command is configured as
+into auto-distillation during `leiter claude agent-setup-instructions` (option 3), the nudge command is configured as
 `leiter hook nudge --auto-distill`, which uses a 4-hour threshold and instructs the agent to run distillation.
 
 ### SessionEnd Hook
@@ -905,51 +1147,57 @@ soul file path. Empty `permissions.allow` arrays and empty `permissions` objects
 
 1. User installs `leiter` binary
 2. User runs `leiter claude install` from their terminal
-3. The command creates `~/.leiter/` structure and writes skill files to `~/.claude/skills/`
-4. User starts a Claude Code session and runs `/leiter-setup`
-5. The skill calls `leiter claude agent-setup-instructions`, agent configures hooks in `~/.claude/settings.json`
-6. User reviews and approves the settings change
-7. Agent presents optional features (Bash permissions, soul file access, auto-distillation); user accepts any
+3. The command creates the `~/.leiter/` structure, writes the single `leiter` skill to `~/.claude/skills/`, and writes
+   the managed soul block into `~/.claude/CLAUDE.md` (and `~/.codex/AGENTS.md` when `codex = true`)
+4. On the next session start, the harness reads the managed block, so the agent has the soul and leiter instructions
+   with no hook involved
+5. Optionally, to capture session transcripts through the SessionEnd hook and receive distillation nudges, the user has
+   the agent run `leiter claude agent-setup-instructions` and configure hooks in `~/.claude/settings.json` with the
+   user's approval. The `/leiter-setup` skill that used to drive this is gone in this revision, but the command remains
+6. Agent presents optional features (Bash permissions, soul file access, auto-distillation); user accepts any
    combination or none
-8. On next session start, leiter is active
 
 ### Normal Session (After Setup)
 
-1. Session starts → SessionStart hook fires → `leiter hook context` outputs soul + instructions, `leiter hook nudge`
-   outputs a distillation reminder if stale logs exist (or instructs distillation when `--auto-distill` is enabled) →
-   agent has leiter hook context
+1. Session starts → the agent has the soul from the managed `CLAUDE.md` block. If hooks are configured, the SessionStart
+   hook also fires → `leiter hook context` outputs soul + instructions (a harmless second copy this revision) and
+   `leiter hook nudge` outputs a distillation reminder if stale logs exist
 2. Normal session proceeds
-3. Session ends → SessionEnd hook fires → `leiter hook session-end` copies transcript to `~/.leiter/logs/`
+3. Session ends → if the SessionEnd hook is configured, `leiter hook session-end` copies the transcript to
+   `~/.leiter/logs/`. Either way, `leiter soul distill`'s external scan reads the live transcript from
+   `~/.claude/projects/` directly
 
 ### User Asks the Agent to Learn Something
 
-1. User runs `/leiter-instill` (or says "instill", "remember", "always", "never", etc. — the agent auto-matches the
-   skill)
-2. Skill runs `leiter soul instill "always use snake_case for Rust functions"`
+1. User says "instill", "remember", "always", "never", etc. — the agent auto-matches the consolidated `leiter` skill
+2. The skill runs `leiter soul instill "always use snake_case for Rust functions"`
 3. Agent receives writing guidelines and the quoted preference
-4. Agent reads `~/.leiter/soul.md`, edits the appropriate section following the guidelines
-5. Preference is active in all future sessions
+4. Agent reads `~/.leiter/soul.md`, edits the appropriate section following the guidelines, then runs `leiter sync` so
+   the managed blocks pick up the new preference
+5. Preference is active in all future sessions, delivered via the managed block
 
 ### Soul Upgrade
 
 1. User updates `leiter` binary to a newer version
-2. User runs `/leiter-soul-upgrade` (or says "upgrade the leiter soul" — the agent auto-matches the skill)
-3. Skill runs `leiter soul upgrade`
+2. User says "upgrade the leiter soul" — the agent auto-matches the consolidated `leiter` skill (its upgrade route)
+3. The skill runs `leiter soul upgrade`
 4. If already current: agent relays that no upgrade is needed
 5. If outdated: agent receives the upgrade instructions and new template
 6. Agent reads current `~/.leiter/soul.md`, restructures it into the new format, then runs `leiter soul mark-upgraded`
-   to record the new `soul_version` in `state.toml` (the agent never edits version metadata directly)
+   to record the new `soul_version` in `state.toml` (the agent never edits version metadata directly). `mark-upgraded`
+   opportunistically re-syncs the managed blocks so the restructured soul is delivered right away
 
 ### Distillation
 
-1. User runs `/leiter-distill` (or says "distill" or similar — the agent auto-matches the skill)
-2. Skill spawns a sub-agent to handle distillation (keeps session log output out of the main context)
+1. User says "distill" or similar — the agent auto-matches the consolidated `leiter` skill (its distill route)
+2. The skill spawns a sub-agent to handle distillation (keeps session log output out of the main context)
 3. Sub-agent runs `leiter soul distill`, reads the output, updates the soul with new learnings, and returns a concise
    summary of what it added, modified, or removed
 4. After the sub-agent completes successfully, the main agent always runs `leiter soul mark-distilled` — even if the
    sub-agent found no new preferences to add. This advances `last_distilled` and commits the external Claude scan's
-   `pending` watermarks so unchanged sessions are not re-processed; when experimental Codex support is enabled it also
-   commits the Codex `pending` watermarks
+   `pending` watermarks so unchanged sessions are not re-processed; when Codex support is enabled it also commits the
+   Codex `pending` watermarks. `mark-distilled` also opportunistically re-syncs the managed blocks, so a soul edited
+   during distillation reaches future sessions
 5. Main agent relays the sub-agent's summary to the user so they can see what distillation changed
 
 ## Non-Goals (For Now)

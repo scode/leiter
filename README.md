@@ -20,9 +20,11 @@ Here is an example of it learning:
 
 - `brew install scode/dist-tap/leiter`
 - `leiter claude install`
-- Start a new claude session and run `/leiter-setup` and follow the instructions.
-- If you did not enable auto-distillation during setup, remember to run `/leiter-distill` every now and then (once a day
-  or so) to apply learnings from past sessions.
+- That's it — your soul is delivered through a managed block in `~/.claude/CLAUDE.md`, so it loads in every new session
+  with no hook required. If you also want the optional session-logging and distillation-nudge hooks, start a Claude Code
+  session and run `leiter claude agent-setup-instructions`, then follow the instructions.
+- If you did not enable auto-distillation, remember to run `/leiter-distill` every now and then (once a day or so) to
+  apply learnings from past sessions.
 
 For more details, including if you cannot or do not want to use Homebrew, see [docs/setup.md](docs/setup.md) for the
 full setup guide.
@@ -44,8 +46,8 @@ Here's the TLDR of the mechanics:
 - **Session end:** The session transcript is automatically saved to a log directory under `~/.leiter`.
 - **Distillation:** This refers to "distilling" the logs to extract learnings, and updating the soul. This can be
   automatic or manual.
-  - If you chose auto-distillation during `/leiter-setup`, leiter will periodically launch automatic distillation in a
-    background agent after the first turn in a session.
+  - If you enabled auto-distillation when running `leiter claude agent-setup-instructions`, leiter will periodically
+    launch automatic distillation in a background agent after the first turn in a session.
   - Otherwise, or in addition to automatic distillation, you can run `/leiter-distill` at any time to trigger immediate
     distillation.
     - NOTE: The current session is only included once Claude Code has written a transcript for it on disk. If you do not
@@ -58,12 +60,13 @@ See [docs/how-it-works.md](docs/how-it-works.md) for the full picture.
 The quickstart above is all you need to use it. A little more details and guidance on whether to enable
 auto-distillation during setup is in [docs/usage.md](docs/usage.md).
 
-If you want to change your choices made during `/leiter-setup`, simply run `/leiter-teardown` followed by running
-`/leiter-setup` again.
+If you want to change your hook choices, run `leiter claude agent-teardown-instructions` to remove them, then
+`leiter claude agent-setup-instructions` to reconfigure — both in a Claude Code session.
 
 ## Uninstalling
 
-- Run `/leiter-teardown` in a session.
+- If you configured the optional hooks, run `leiter claude agent-teardown-instructions` in a session and follow the
+  output to remove them.
 - Run `leiter claude uninstall`.
 - Uninstall the binary (e.g. `brew uninstall leiter`).
 

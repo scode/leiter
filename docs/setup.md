@@ -26,7 +26,9 @@ and log storage) and installs skill files into `~/.claude/skills/`.
 leiter claude install
 ```
 
-Then start a Claude Code session and run `/leiter-setup`. The agent reads the setup instructions and configures hooks in
+Your soul is delivered through a managed block in `~/.claude/CLAUDE.md`, so it loads in every new session with no hook
+required. Hooks are now optional. To add the session-logging and distillation-nudge hooks, start a Claude Code session
+and run `leiter claude agent-setup-instructions`. The agent reads the setup instructions and configures hooks in
 `~/.claude/settings.json`:
 
 - A **SessionStart** hook that injects your soul into every session
@@ -62,8 +64,8 @@ In either case, the fix is the same:
 leiter claude install
 ```
 
-Then run `/leiter-setup` again in a Claude Code session. The agent handles the upgrade — it detects the existing hooks
-and updates them rather than duplicating them.
+Then, if you use the optional hooks, run `leiter claude agent-setup-instructions` again in a Claude Code session. The
+agent handles the upgrade — it detects the existing hooks and updates them rather than duplicating them.
 
 ## Verifying it works
 

@@ -10,7 +10,9 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
+use crate::config::load_config_best_effort;
 use crate::paths;
+use crate::sync::{SyncHomes, resync_and_warn};
 use crate::templates::SOUL_TEMPLATE_VERSION;
 use crate::validation::{ValidationStatus, validate_state};
 
@@ -19,16 +21,44 @@ use crate::validation::{ValidationStatus, validate_state};
 /// Validates the current state and soul, then records the binary's current
 /// soul template version in `state.toml` with the same atomic writer used by
 /// all state updates.
-pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
-    let mut state = match validate_state(state_dir) {
+///
+/// `claude_home_override`/`codex_home_override` exist only for testability:
+/// production callers (`main.rs`) pass `None` so the opportunistic resync
+/// below resolves the real default homes through
+/// [`crate::paths::resolve_claude_home`]/[`crate::paths::resolve_codex_home`].
+/// Neither home has a CLI flag on this command — SPEC.md does not document
+/// one — so a non-`None` override only ever comes from a unit test injecting
+/// a temp directory in place of the caller's real `~/.claude`/`~/.codex`.
+pub fn run(
+    state_dir: &Path,
+    out: &mut impl Write,
+    claude_home_override: Option<&Path>,
+    codex_home_override: Option<&Path>,
+) -> Result<()> {
+    let (mut state, soul) = match validate_state(state_dir) {
         ValidationStatus::Incompatible(reason) => bail!("{}", reason.agent_message()),
-        ValidationStatus::Compatible { state, .. } => state,
+        ValidationStatus::Compatible { state, soul, .. } => (state, soul),
     };
 
     state.soul_version = SOUL_TEMPLATE_VERSION;
     state.save(&paths::state_path(state_dir))?;
 
     writeln!(out, "soul_version set to {SOUL_TEMPLATE_VERSION}")?;
+    let config = load_config_best_effort(state_dir);
+    if let Some(claude_home) = paths::resolve_claude_home(claude_home_override) {
+        let codex_home = paths::resolve_codex_home(codex_home_override, config.codex);
+        resync_and_warn(
+            out,
+            state_dir,
+            &mut state,
+            &soul,
+            SyncHomes {
+                claude_home: Some(&claude_home),
+                codex_home: codex_home.as_deref(),
+            },
+            config.codex,
+        )?;
+    }
     Ok(())
 }
 
@@ -44,7 +74,7 @@ mod tests {
 
     fn run_mark_upgraded(state_dir: &Path) -> String {
         let mut out = Vec::new();
-        run(state_dir, &mut out).unwrap();
+        run(state_dir, &mut out, None, None).unwrap();
         bytes_to_string(out)
     }
 
@@ -76,7 +106,7 @@ mod tests {
     fn missing_state_errors() {
         let tmp = tempfile::tempdir().unwrap();
         let mut out = Vec::new();
-        let err = run(tmp.path(), &mut out).unwrap_err();
+        let err = run(tmp.path(), &mut out, None, None).unwrap_err();
         assert!(err.to_string().contains("not initialized"));
     }
 
@@ -87,7 +117,7 @@ mod tests {
         update_state(tmp.path(), |state| state.soul_version = 0);
 
         let mut out = Vec::new();
-        let err = run(tmp.path(), &mut out).unwrap_err();
+        let err = run(tmp.path(), &mut out, None, None).unwrap_err();
 
         let state = LeiterState::load(&crate::paths::state_path(tmp.path())).unwrap();
         assert!(
@@ -109,7 +139,7 @@ mod tests {
         update_state(tmp.path(), |state| state.soul_version = 0);
 
         let mut out = Vec::new();
-        let err = run(tmp.path(), &mut out).unwrap_err();
+        let err = run(tmp.path(), &mut out, None, None).unwrap_err();
 
         let state = LeiterState::load(&crate::paths::state_path(tmp.path())).unwrap();
         assert!(err.to_string().contains("leiter claude install"));
@@ -124,7 +154,7 @@ mod tests {
         fs::write(crate::paths::state_path(tmp.path()), "not = valid = toml").unwrap();
 
         let mut out = Vec::new();
-        let err = run(tmp.path(), &mut out).unwrap_err();
+        let err = run(tmp.path(), &mut out, None, None).unwrap_err();
 
         assert!(err.to_string().contains("state file"));
         assert_eq!(
@@ -132,5 +162,48 @@ mod tests {
             "not = valid = toml"
         );
         assert!(bytes_to_string(out).is_empty());
+    }
+
+    /// Regression coverage for home-directory dependency injection: an
+    /// injected override is the home the opportunistic resync heals. Proven the
+    /// same way as the equivalent `mark_distilled` test — by observing healing
+    /// land in the temp home we handed in, since `paths::resolve_claude_home`
+    /// only reaches a real default when the override is `None`.
+    #[test]
+    fn opportunistic_resync_heals_stale_block_in_injected_home() {
+        let tmp = setup_state_dir();
+        let claude_home = tempfile::tempdir().unwrap();
+
+        let soul_path = crate::paths::soul_path(tmp.path());
+        let old_soul = fs::read_to_string(&soul_path).unwrap();
+        let old_block = crate::managed_block::compose_block(&soul_path, &old_soul);
+        fs::write(crate::paths::claude_md_path(claude_home.path()), &old_block).unwrap();
+        update_state(tmp.path(), |state| {
+            state.sync.claude_md = Some(crate::state::SyncHashes {
+                soul_hash: crate::managed_block::sha256_hex(&old_soul),
+                block_hash: crate::managed_block::sha256_hex(&old_block),
+            });
+        });
+        fs::write(&soul_path, "new soul body\n").unwrap();
+
+        let mut out = Vec::new();
+        run(tmp.path(), &mut out, Some(claude_home.path()), None).unwrap();
+
+        let healed = fs::read_to_string(crate::paths::claude_md_path(claude_home.path())).unwrap();
+        assert!(healed.contains("new soul body"));
+    }
+
+    /// Opportunistic re-sync never performs a first install: a target with no
+    /// recorded sync hashes must stay untouched, even in the injected home.
+    #[test]
+    fn opportunistic_resync_never_installs_a_never_synced_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_state_with_epochs(tmp.path(), SETUP_SOFT_EPOCH, SETUP_HARD_EPOCH);
+        let claude_home = tempfile::tempdir().unwrap();
+
+        let mut out = Vec::new();
+        run(tmp.path(), &mut out, Some(claude_home.path()), None).unwrap();
+
+        assert!(!crate::paths::claude_md_path(claude_home.path()).exists());
     }
 }

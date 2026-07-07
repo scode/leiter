@@ -25,7 +25,7 @@ fn parses_claude_install() {
         .args(["claude", &claude_home_flag(claude_tmp.path()), "install"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("installed successfully"));
+        .stdout(predicate::str::contains("installed successfully"));
 
     assert!(dir.join("soul.md").is_file());
     assert!(dir.join("logs").is_dir());
@@ -244,13 +244,79 @@ fn parses_soul_mark_upgraded() {
 #[test]
 fn parses_config_set() {
     let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
     leiter(tmp.path())
-        .args(["config", "set", "enable_codex_experimental", "true"])
+        .args(["claude", &claude_home_flag(claude_tmp.path()), "install"])
+        .assert()
+        .success();
+
+    leiter(tmp.path())
+        .args(["config", "set", "codex", "true"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "enable_codex_experimental set to true",
-        ));
+        .stdout(predicate::str::contains("codex set to true"));
+}
+
+#[test]
+fn parses_sync() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    leiter(tmp.path())
+        .args(["claude", &claude_home_flag(claude_tmp.path()), "install"])
+        .assert()
+        .success();
+
+    leiter(tmp.path())
+        .args(["sync"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CLAUDE.md"));
+}
+
+#[test]
+fn parses_codex_install_uninstall() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_tmp = tempfile::tempdir().unwrap();
+    let codex_tmp = tempfile::tempdir().unwrap();
+    leiter(tmp.path())
+        .args(["claude", &claude_home_flag(claude_tmp.path()), "install"])
+        .assert()
+        .success();
+
+    leiter(tmp.path())
+        .args([
+            "codex",
+            &format!("--codex-home={}", codex_tmp.path().display()),
+            "install",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("codex set to true"));
+
+    let agents_md = codex_tmp.path().join("AGENTS.md");
+    assert!(
+        fs::read_to_string(&agents_md)
+            .unwrap()
+            .contains("SCODE_LEITER_BEGIN"),
+        "codex install must write the managed AGENTS.md block"
+    );
+
+    leiter(tmp.path())
+        .args([
+            "codex",
+            &format!("--codex-home={}", codex_tmp.path().display()),
+            "uninstall",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("codex set to false"));
+
+    assert!(
+        !fs::read_to_string(&agents_md)
+            .unwrap()
+            .contains("SCODE_LEITER_BEGIN"),
+        "codex uninstall must remove the managed AGENTS.md block"
+    );
 }
 
 #[test]

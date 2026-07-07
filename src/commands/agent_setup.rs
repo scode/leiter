@@ -1,8 +1,8 @@
 //! `leiter claude install` — first-time initialization and plugin file installation.
 //!
 //! Creates the leiter state directory structure and initial soul file, writes
-//! skill files to `~/.claude/skills/`, then prints a success message listing
-//! available skills.
+//! the consolidated skill to `~/.claude/skills/`, then materializes the
+//! managed soul-delivery blocks.
 
 use std::fs;
 use std::io::Write;
@@ -11,17 +11,28 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use tracing::info;
 
+use crate::config::load_config_best_effort;
 use crate::paths;
 use crate::state::LeiterState;
-use crate::templates::{SETUP_SOFT_EPOCH, SKILL_CONTENTS, SOUL_TEMPLATE};
+use crate::sync::{SyncHomes, sync_blocks};
+use crate::templates::{
+    LEGACY_SKILL_DIRS, PLUGIN_SENTINEL, SETUP_SOFT_EPOCH, SKILL_CONTENTS, SOUL_TEMPLATE,
+};
 use crate::validation::{ValidationStatus, load_and_check_state, validate_state};
 
 /// Run the `leiter claude install` command.
 ///
 /// Creates directories and the initial soul file under `state_dir`, writes
-/// skill files under `claude_home`, then outputs a success message listing
-/// available skills.
-pub fn run(state_dir: &Path, claude_home: &Path) -> Result<()> {
+/// skill file under `claude_home`, then writes the managed prompt blocks.
+///
+/// User-facing confirmation is written to `out` (production passes stdout),
+/// matching every other command; diagnostics still go through `tracing`.
+pub fn run(
+    state_dir: &Path,
+    claude_home: &Path,
+    codex_home: &Path,
+    out: &mut impl Write,
+) -> Result<()> {
     init_filesystem(state_dir)?;
 
     if !claude_home.is_dir() {
@@ -32,16 +43,53 @@ pub fn run(state_dir: &Path, claude_home: &Path) -> Result<()> {
     }
 
     write_plugin_files(claude_home)?;
+    remove_legacy_skill_dirs(claude_home)?;
 
-    info!("Leiter installed successfully");
-    info!("Available skills:");
-    info!("  /leiter-setup         — configure Claude Code hooks");
-    info!("  /leiter-distill       — distill session logs into the soul");
-    info!("  /leiter-instill       — record a preference in the soul");
-    info!("  /leiter-soul          — show the current soul file contents");
-    info!("  /leiter-soul-upgrade  — upgrade the soul template");
-    info!("  /leiter-teardown      — remove leiter hooks");
-    info!("Start a new Claude Code session and run /leiter-setup to configure hooks");
+    let (mut state, soul) = match validate_state(state_dir) {
+        ValidationStatus::Compatible { state, soul, .. } => (state, soul),
+        ValidationStatus::Incompatible(reason) => bail!("{}", reason.user_message()),
+    };
+    let config = load_config_best_effort(state_dir);
+    // Install syncs with force on purpose (SPEC install step 6): it is the
+    // explicit converge command the user just chose to run, and the clobber
+    // guard would otherwise dead-end the documented corrupt-state recovery
+    // (fresh state has no recorded hashes while CLAUDE.md still carries the
+    // previous block) and dotfiles-restored boxes. Hand edits inside the
+    // managed span do not survive an install; the sentinel text warns so.
+    let _outcomes = sync_blocks(
+        state_dir,
+        &mut state,
+        &soul,
+        SyncHomes {
+            claude_home: Some(claude_home),
+            codex_home: Some(codex_home),
+        },
+        config.codex,
+        true,
+    )?;
+
+    writeln!(out, "Leiter installed successfully.")?;
+    writeln!(out, "Wrote the consolidated `leiter` skill.")?;
+    writeln!(
+        out,
+        "Wrote the managed soul block in {}.",
+        paths::claude_md_path(claude_home).display()
+    )?;
+    if config.codex {
+        writeln!(
+            out,
+            "Wrote the managed soul block in {}.",
+            paths::agents_md_path(codex_home).display()
+        )?;
+    }
+    writeln!(
+        out,
+        "The soul is now delivered inline through managed blocks, so soul injection no longer depends on a hook."
+    )?;
+    writeln!(
+        out,
+        "The old /leiter-setup skill is gone. If you still want the transitional session-logging and nudge hooks, run `leiter claude agent-setup-instructions` directly."
+    )?;
 
     Ok(())
 }
@@ -150,6 +198,27 @@ fn write_plugin_files(claude_home: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Remove owned directories from the old six-skill install.
+///
+/// The sentinel check is the ownership boundary. A user-created directory with
+/// an old leiter name but no sentinel is left alone because leiter cannot prove
+/// it owns that content.
+fn remove_legacy_skill_dirs(claude_home: &Path) -> Result<()> {
+    for name in LEGACY_SKILL_DIRS {
+        let skill_dir = paths::skill_dir(claude_home, name);
+        let skill_md = skill_dir.join("SKILL.md");
+        let has_sentinel = fs::read_to_string(&skill_md)
+            .map(|content| content.contains(PLUGIN_SENTINEL))
+            .unwrap_or(false);
+        if has_sentinel {
+            fs::remove_dir_all(&skill_dir)
+                .with_context(|| format!("failed to remove {}", skill_dir.display()))?;
+            info!("removed legacy skill {name}");
+        }
+    }
+    Ok(())
+}
+
 /// Verify state epochs, migrating an older soft epoch forward on re-run.
 ///
 /// Hard mismatches and corrupt state are delegated to `load_and_check_state`
@@ -187,12 +256,19 @@ fn verify_epochs(state_dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::LeiterConfig;
     use crate::state::LeiterState;
     use crate::templates::{SETUP_HARD_EPOCH, SKILL_CONTENTS, SOUL_TEMPLATE_VERSION};
     use chrono::{SubsecRound, TimeZone, Utc};
 
     fn run_setup(state_dir: &Path, claude_home: &Path) {
-        run(state_dir, claude_home).unwrap();
+        let codex_tmp = tempfile::tempdir().unwrap();
+        run(state_dir, claude_home, codex_tmp.path(), &mut Vec::new()).unwrap();
+    }
+
+    fn run_setup_result(state_dir: &Path, claude_home: &Path) -> Result<()> {
+        let codex_tmp = tempfile::tempdir().unwrap();
+        run(state_dir, claude_home, codex_tmp.path(), &mut Vec::new())
     }
 
     fn run_setup_with_claude_home(state_dir: &Path) -> tempfile::TempDir {
@@ -278,7 +354,7 @@ mod tests {
         state.setup_hard_epoch = SETUP_HARD_EPOCH + 1;
         state.save(&state_path).unwrap();
 
-        let err = run(dir, claude_tmp.path()).unwrap_err();
+        let err = run_setup_result(dir, claude_tmp.path()).unwrap_err();
         assert!(err.to_string().contains("binary is outdated"));
     }
 
@@ -294,7 +370,7 @@ mod tests {
         state.setup_soft_epoch = SETUP_SOFT_EPOCH + 1;
         state.save(&state_path).unwrap();
 
-        let err = run(dir, claude_tmp.path()).unwrap_err();
+        let err = run_setup_result(dir, claude_tmp.path()).unwrap_err();
         assert!(err.to_string().contains("newer version"));
     }
 
@@ -348,7 +424,7 @@ mod tests {
         state.setup_hard_epoch = 0;
         state.save(&state_path).unwrap();
 
-        let err = run(dir, claude_tmp.path()).unwrap_err();
+        let err = run_setup_result(dir, claude_tmp.path()).unwrap_err();
         assert!(err.to_string().contains("setup is incompatible"));
         assert!(err.to_string().contains("leiter claude install"));
     }
@@ -362,7 +438,7 @@ mod tests {
 
         fs::write(paths::state_path(dir), "not = valid = toml").unwrap();
 
-        let err = run(dir, claude_tmp.path()).unwrap_err();
+        let err = run_setup_result(dir, claude_tmp.path()).unwrap_err();
         assert!(err.to_string().contains("is corrupt"));
     }
 
@@ -377,7 +453,7 @@ mod tests {
         );
         fs::write(paths::soul_path(tmp.path()), legacy_soul).unwrap();
 
-        let err = run(tmp.path(), claude_tmp.path()).unwrap_err();
+        let err = run_setup_result(tmp.path(), claude_tmp.path()).unwrap_err();
         assert!(err.to_string().contains("predates state.toml"));
     }
 
@@ -447,14 +523,14 @@ mod tests {
     fn init_failure_returns_error() {
         let bad_dir = Path::new("/dev/null/impossible");
         let claude_tmp = tempfile::tempdir().unwrap();
-        let err = run(bad_dir, claude_tmp.path()).unwrap_err();
+        let err = run_setup_result(bad_dir, claude_tmp.path()).unwrap_err();
         assert!(err.to_string().contains("failed to create"));
     }
 
     #[test]
     fn claude_home_missing_returns_error() {
         let tmp = tempfile::tempdir().unwrap();
-        let err = run(tmp.path(), Path::new("/nonexistent/claude")).unwrap_err();
+        let err = run_setup_result(tmp.path(), Path::new("/nonexistent/claude")).unwrap_err();
         assert!(err.to_string().contains("does not exist"));
     }
 
@@ -464,13 +540,133 @@ mod tests {
         let claude_tmp = tempfile::tempdir().unwrap();
         run_setup(tmp.path(), claude_tmp.path());
 
-        let skill_md = paths::skill_dir(claude_tmp.path(), "leiter-setup").join("SKILL.md");
+        let skill_md = paths::skill_dir(claude_tmp.path(), "leiter").join("SKILL.md");
         fs::write(&skill_md, "old content").unwrap();
 
         run_setup(tmp.path(), claude_tmp.path());
 
         let content = fs::read_to_string(skill_md).unwrap();
         assert_ne!(content, "old content");
+    }
+
+    #[test]
+    fn install_removes_owned_legacy_skill_dirs_and_preserves_unowned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(paths::skill_dir(claude_tmp.path(), "leiter-distill")).unwrap();
+        fs::write(
+            paths::skill_dir(claude_tmp.path(), "leiter-distill").join("SKILL.md"),
+            format!("<!-- {PLUGIN_SENTINEL} -->\n"),
+        )
+        .unwrap();
+        fs::create_dir_all(paths::skill_dir(claude_tmp.path(), "leiter-instill")).unwrap();
+        fs::write(
+            paths::skill_dir(claude_tmp.path(), "leiter-instill").join("SKILL.md"),
+            "user content\n",
+        )
+        .unwrap();
+
+        run_setup(tmp.path(), claude_tmp.path());
+
+        assert!(!paths::skill_dir(claude_tmp.path(), "leiter-distill").exists());
+        assert!(paths::skill_dir(claude_tmp.path(), "leiter-instill").exists());
+        assert!(paths::skill_dir(claude_tmp.path(), "leiter").exists());
+    }
+
+    /// Install's confirmation now goes to an injected writer (SPEC install
+    /// output). The message must name the skill, the `CLAUDE.md` path, and —
+    /// when `codex = true` — the `AGENTS.md` path, so the user sees exactly
+    /// what was written.
+    #[test]
+    fn install_output_names_skill_and_managed_block_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        let codex_tmp = tempfile::tempdir().unwrap();
+        LeiterConfig { codex: true }
+            .save(&paths::leiter_config_path(tmp.path()))
+            .unwrap();
+
+        let mut out = Vec::new();
+        run(tmp.path(), claude_tmp.path(), codex_tmp.path(), &mut out).unwrap();
+        let output = String::from_utf8(out).unwrap();
+
+        assert!(output.contains("`leiter` skill"));
+        assert!(
+            output.contains(
+                &paths::claude_md_path(claude_tmp.path())
+                    .display()
+                    .to_string()
+            )
+        );
+        assert!(
+            output.contains(
+                &paths::agents_md_path(codex_tmp.path())
+                    .display()
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn install_writes_managed_claude_block_and_sync_hashes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+
+        run_setup(tmp.path(), claude_tmp.path());
+
+        let claude_md = fs::read_to_string(paths::claude_md_path(claude_tmp.path())).unwrap();
+        assert!(claude_md.contains(crate::managed_block::BEGIN_SENTINEL));
+        assert!(claude_md.contains("# Communication Style"));
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(state.sync.claude_md.is_some());
+    }
+
+    /// (C6a) With `codex = true` in the config, install materializes the
+    /// AGENTS.md block into the Codex home and records its hashes.
+    #[test]
+    fn install_with_codex_writes_agents_block_and_hashes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        let codex_tmp = tempfile::tempdir().unwrap();
+        LeiterConfig { codex: true }
+            .save(&paths::leiter_config_path(tmp.path()))
+            .unwrap();
+
+        run(
+            tmp.path(),
+            claude_tmp.path(),
+            codex_tmp.path(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+
+        let agents = fs::read_to_string(paths::agents_md_path(codex_tmp.path())).unwrap();
+        assert!(agents.contains(crate::managed_block::BEGIN_SENTINEL));
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(state.sync.agents_md.is_some());
+    }
+
+    /// (C6b) Install uses force semantics (SPEC install step 6): a hand-tampered
+    /// managed block is overwritten without error and the hashes are re-recorded.
+    #[test]
+    fn install_force_overwrites_hand_tampered_block() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+
+        run_setup(tmp.path(), claude_tmp.path());
+        let claude_md = paths::claude_md_path(claude_tmp.path());
+        let tampered = fs::read_to_string(&claude_md)
+            .unwrap()
+            .replace("# Communication Style", "# TAMPERED HEADING");
+        fs::write(&claude_md, tampered).unwrap();
+
+        run_setup(tmp.path(), claude_tmp.path());
+
+        let restored = fs::read_to_string(&claude_md).unwrap();
+        assert!(restored.contains("# Communication Style"));
+        assert!(!restored.contains("TAMPERED"));
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert!(state.sync.claude_md.is_some());
     }
 
     #[test]
@@ -547,7 +743,7 @@ mod tests {
         let soul = paths::soul_path(dir);
         fs::write(&soul, "not frontmatter, just markdown").unwrap();
 
-        run(dir, claude_tmp.path()).unwrap();
+        run_setup_result(dir, claude_tmp.path()).unwrap();
         assert_eq!(
             fs::read_to_string(soul).unwrap(),
             "not frontmatter, just markdown"

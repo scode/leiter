@@ -11,7 +11,6 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -20,6 +19,7 @@ use chrono::{DateTime, SubsecRound, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::frontmatter::parse_soul;
+use crate::fs_atomic::write_atomic;
 use crate::paths;
 use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH, SOUL_TEMPLATE_VERSION};
 
@@ -83,6 +83,41 @@ pub struct LeiterState {
     /// is enabled.
     #[serde(default)]
     pub codex: WatermarkSet,
+    /// Managed soul-delivery block hashes, one optional table per target.
+    ///
+    /// `soul_hash` is the soul body last materialized into a target; `block_hash`
+    /// is the exact managed block leiter wrote there. Keeping both values lets
+    /// sync distinguish a stale materialized copy from a hand-edited managed
+    /// block that should not be clobbered without `--force`.
+    #[serde(default, skip_serializing_if = "SyncState::is_empty")]
+    pub sync: SyncState,
+}
+
+/// Hash bookkeeping for all managed soul-delivery block targets.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncState {
+    /// Hashes for the managed block in Claude Code's `CLAUDE.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_md: Option<SyncHashes>,
+    /// Hashes for the managed block in Codex's `AGENTS.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents_md: Option<SyncHashes>,
+}
+
+impl SyncState {
+    /// Return true when no target has ever recorded a managed block write.
+    pub fn is_empty(&self) -> bool {
+        self.claude_md.is_none() && self.agents_md.is_none()
+    }
+}
+
+/// SHA-256 digests recorded for one managed block target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncHashes {
+    /// Hex SHA-256 of the soul body last materialized into this target.
+    pub soul_hash: String,
+    /// Hex SHA-256 of the complete managed block leiter last wrote.
+    pub block_hash: String,
 }
 
 /// A pair of committed and pending transcript watermarks for one harness.
@@ -212,6 +247,7 @@ impl LeiterState {
             pending_scan_started_utc: None,
             claude: WatermarkSet::default(),
             codex: WatermarkSet::default(),
+            sync: SyncState::default(),
         }
     }
 
@@ -264,12 +300,7 @@ impl LeiterState {
             .with_context(|| format!("failed to create {}", parent.display()))?;
 
         let serialized = toml::to_string_pretty(self).context("failed to serialize state")?;
-        let mut tmp = tempfile::NamedTempFile::new_in(parent)
-            .with_context(|| format!("failed to create temp file in {}", parent.display()))?;
-        tmp.write_all(serialized.as_bytes())
-            .context("failed to write state temp file")?;
-        tmp.persist(path)
-            .with_context(|| format!("failed to persist {}", path.display()))?;
+        write_atomic(path, serialized.as_bytes())?;
         Ok(())
     }
 }
@@ -318,11 +349,12 @@ pub fn migrate_legacy_layout(state_dir: &Path) -> Result<()> {
                     pending_scan_started_utc: None,
                     claude: WatermarkSet::default(),
                     codex,
+                    sync: SyncState::default(),
                 };
                 state.save(&state_path)?;
             }
 
-            write_atomic(&soul_path, body)?;
+            write_atomic(&soul_path, body.as_bytes())?;
         }
         Err(_) => {
             // No parseable frontmatter: the soul is already stripped. That is
@@ -343,23 +375,6 @@ pub fn migrate_legacy_layout(state_dir: &Path) -> Result<()> {
             .with_context(|| format!("failed to delete {}", codex_meta_path.display()))?;
     }
 
-    Ok(())
-}
-
-/// Write a file via temp-file-plus-rename in its own directory.
-///
-/// Same guarantee as [`LeiterState::save`]: a crash mid-write never leaves a
-/// torn file at the destination.
-fn write_atomic(path: &Path, content: &str) -> Result<()> {
-    let parent = path
-        .parent()
-        .with_context(|| format!("path must have a parent: {}", path.display()))?;
-    let mut tmp = tempfile::NamedTempFile::new_in(parent)
-        .with_context(|| format!("failed to create temp file in {}", parent.display()))?;
-    tmp.write_all(content.as_bytes())
-        .with_context(|| format!("failed to write temp file for {}", path.display()))?;
-    tmp.persist(path)
-        .with_context(|| format!("failed to persist {}", path.display()))?;
     Ok(())
 }
 
@@ -553,6 +568,28 @@ mod tests {
 
         let loaded = LeiterState::load(&path).unwrap();
         assert_eq!(loaded, state);
+    }
+
+    #[test]
+    fn sync_tables_serialize_only_when_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = paths::state_path(tmp.path());
+        let mut state = LeiterState::fresh();
+        state.save(&path).unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("[sync"));
+
+        state.sync.claude_md = Some(SyncHashes {
+            soul_hash: "soul".to_string(),
+            block_hash: "block".to_string(),
+        });
+        state.save(&path).unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("[sync.claude_md]"));
+        assert!(!raw.contains("[sync.agents_md]"));
+
+        let loaded = LeiterState::load(&path).unwrap();
+        assert_eq!(loaded.sync, state.sync);
     }
 
     #[test]
