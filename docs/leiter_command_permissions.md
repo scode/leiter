@@ -1,7 +1,9 @@
 # Should I grant permission to run leiter:\* commands?
 
-During `/leiter-setup`, one of the optional features is granting Claude permission to run `leiter:*` commands without a
-confirmation prompt. This page covers what that means, why you'd want it, and what you're signing up for.
+Granting Claude permission to run `leiter:*` commands without a confirmation prompt is optional. You can add the entry
+to `~/.claude/settings.json` by hand; on a box migrating from a pre-0.9.0 setup, `leiter claude install`'s output tells
+the agent to keep the entry if it already exists, alongside the hook-removal instructions. This page covers what that
+means, why you'd want it, and what you're signing up for.
 
 ## What this permission does
 
@@ -33,13 +35,15 @@ Here's what the leiter CLI can actually do:
 
 - **Read and write your soul file** (`leiter distill`, `leiter soul instill`, `leiter soul upgrade`) — this is leiter's
   core function, so it's expected.
-- **Read session transcripts** (`leiter distill` reads saved logs from `~/.leiter/`, Claude Code transcripts under
-  `<claude_home>/projects/`, and Codex rollouts under `<codex_home>/` when Codex distillation is enabled) — again, core
-  function.
-- **Mark logs as processed** (`leiter distill`, or the lower-level `leiter soul mark-distilled`) — updates
-  `last_distilled` in `~/.leiter/state.toml`.
-- **Manage Claude Code integration** (`leiter claude install`, `leiter claude uninstall`) — these modify skill files and
-  could in principle be invoked by the agent, though in normal use you run these yourself from the terminal.
+- **Read session transcripts** (`leiter distill` reads Claude Code transcripts in place under `<claude_home>/projects/`,
+  Codex rollouts under `<codex_home>/` when Codex is enabled, and — only on a box migrated from a pre-0.9.0 setup — any
+  leftover copies under `~/.leiter/logs/`) — again, core function.
+- **Mark sessions as distilled** (`leiter distill`, or the lower-level `leiter soul mark-distilled`) — updates
+  `last_distilled` and the distillation watermarks in `~/.leiter/state.toml`.
+- **Manage Claude Code integration** (`leiter claude install`, `leiter claude uninstall`, `leiter sync`,
+  `leiter codex install`/`uninstall`) — these write the managed soul block into `~/.claude/CLAUDE.md` (and
+  `~/.codex/AGENTS.md` when Codex is enabled) and the `leiter` skill under `~/.claude/skills/`. They could in principle
+  be invoked by the agent, though in normal use you run install/uninstall yourself from the terminal.
 - **Change leiter configuration** (`leiter config set`) — sets persistent config values.
 - (The exact set of commands may change in future versions and is not guaranteed to remain fixed. However, leiter
   commands are guaranteed to never become arbitrarily flexible — they will always do a bounded, predictable set of

@@ -20,58 +20,54 @@ Here is an example of it learning:
 
 - `brew install scode/dist-tap/leiter`
 - `leiter claude install`
-- That's it — your soul is delivered through a managed block in `~/.claude/CLAUDE.md`, so it loads in every new session
-  with no hook required. If you also want the optional session-logging and distillation-nudge hooks, start a Claude Code
-  session and run `leiter claude agent-setup-instructions`, then follow the instructions.
-- If you did not enable auto-distillation, say "distill" in a session or run `leiter distill` every now and then (once a
-  day or so) to apply learnings from past sessions.
 
-For more details, including if you cannot or do not want to use Homebrew, see [docs/setup.md](docs/setup.md) for the
-full setup guide.
+That is the whole setup. `leiter claude install` runs once in your terminal — there is no in-session step and no hooks
+to configure. Your soul is delivered through a managed block in `~/.claude/CLAUDE.md`, so it loads in every new Claude
+Code session.
+
+Distillation is manual by default. Say "distill" in a session, or run `leiter distill` from a shell every so often (once
+a day or so), to fold what leiter learned from your recent sessions into the soul. `leiter distill` is non-interactive,
+so you can put it on a cron job instead. Run `leiter status` to see how many sessions are waiting to be distilled.
+
+For more details, including if you cannot or do not want to use Homebrew, see [docs/setup.md](docs/setup.md).
+
+**Upgrading from a pre-0.9.0 (hook-based) setup?** Older leiter used Claude Code hooks. That is gone. When you upgrade
+the binary, your still-configured hooks detect the mismatch and tell you to run `leiter claude install`, which migrates
+your box to the hookless layout and prints instructions for removing the leftover hooks. You can also just run
+`leiter claude install` directly. See [docs/setup.md](docs/setup.md) for the details.
 
 ## How It Works
 
 Leiter maintains a "soul" — a markdown file in `~/.leiter/soul.md` — which contains instructions for how the agent
-should behave. The soul is updated based on distilling learnings from session logs (and can also be directly updated
-when prompted to). You can think of the soul file as an auto-updating personal CLAUDE.md file. You can view it at any
-time by running `/leiter-soul`.
+should behave. The soul is updated by distilling learnings from your session transcripts, and can also be updated
+directly when you ask. Think of it as an auto-updating personal `CLAUDE.md`. Ask the agent to "show my soul" any time to
+see it.
 
 Here's the TLDR of the mechanics:
 
-- **Session start:** Your soul file is injected into the session as context, so the agent starts with your preferences
-  already loaded.
+- **Session start:** Your soul is delivered into the session through a managed block in `~/.claude/CLAUDE.md` that
+  Claude Code already reads, so the agent starts with your preferences loaded. No hook is involved.
 - **During the session:** Just do what you normally do.
-- **During the session (OPTIONAL):** You can directly trigger immediate soul updates by saying something like "Instill
+- **During the session (OPTIONAL):** You can directly trigger an immediate soul update by saying something like "Instill
   that I never want you to create a PR unless explicitly asked."
-- **Session end:** The session transcript is automatically saved to a log directory under `~/.leiter`.
-- **Distillation:** This refers to "distilling" the logs to extract learnings, and updating the soul. This can be
-  automatic or manual.
-  - If you enabled auto-distillation when running `leiter claude agent-setup-instructions`, leiter will periodically
-    launch automatic distillation in a background agent after the first turn in a session.
-  - Otherwise, or in addition to automatic distillation, you can say "distill" in a session or run `leiter distill` at
-    any time to trigger immediate distillation.
-    - NOTE: The current session is only included once Claude Code has written a transcript for it on disk. If you do not
-      see it in distillation output yet, first `/clear` or exit Claude and resume the session.
+- **Distillation:** "Distilling" reads your recent session transcripts and folds any new patterns into the soul. Say
+  "distill" in a session, or run `leiter distill` from a shell or cron. It reads Claude Code's own session store
+  directly, so there is nothing to save or export first.
 
 See [docs/how-it-works.md](docs/how-it-works.md) for the full picture.
 
 ## Usage
 
-The quickstart above is all you need to use it. A little more details and guidance on whether to enable
-auto-distillation during setup is in [docs/usage.md](docs/usage.md).
-
-If you want to change your hook choices, run `leiter claude agent-teardown-instructions` to remove them, then
-`leiter claude agent-setup-instructions` to reconfigure — both in a Claude Code session.
+The quickstart above is all you need to use it. [docs/usage.md](docs/usage.md) covers instilling preferences,
+distillation and cron, `leiter status`, and working with the soul file directly.
 
 ## Uninstalling
 
-- If you configured the optional hooks, run `leiter claude agent-teardown-instructions` in a session and follow the
-  output to remove them.
-- Run `leiter claude uninstall`.
+- Run `leiter claude uninstall` to remove the managed block and the `leiter` skill from `~/.claude/`.
 - Uninstall the binary (e.g. `brew uninstall leiter`).
 
-This will leave your soul intact, as well as any undistilled session logs in `~/.leiter`. You are free to remove them if
-you would like.
+This leaves your soul and state under `~/.leiter/` intact. You are free to remove that directory if you want a clean
+slate.
 
 ## Other topics
 
