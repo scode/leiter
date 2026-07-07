@@ -819,10 +819,15 @@ overrides disable its opportunistic re-sync).
      always and `[codex.pending]` when `codex = true`, in a single atomic write — then opportunistically re-sync any
      stale managed block (see Opportunistic re-sync; refusal warnings go to stderr, never stdout). Then print the
      agent's stdout (its one-paragraph summary) followed by a confirmation line naming the new `last_distilled`, and
-     relay the agent's stderr to leiter's stderr (a successful run's diagnostics matter to cron users too). Finally, if
-     the legacy `~/.leiter/logs/` directory is now empty after obsolete-log cleanup, remove the directory itself. This
-     last step is new: the per-file obsolete cleanup only ever removed files, never the directory. A failing `rmdir` is
-     a warning, not a command failure
+     relay the agent's stderr to leiter's stderr (a successful run's diagnostics matter to cron users too). Finally,
+     sweep the legacy `~/.leiter/logs/`: delete every legacy log whose filename timestamp is strictly below the
+     just-committed `last_distilled`, then remove the directory if it is now empty. The sweep runs after the commit on
+     purpose — a log emitted by THIS run sits above `last_distilled` at scan time, so the scan-time obsolete cleanup
+     cannot delete it, and without the post-commit sweep the migration flow's "the first post-migration distill drains
+     and removes the logs directory" would quietly take two runs. Post-commit, everything below the new cutoff is
+     provably committed history, so the sweep is exactly as crash-safe as scan-time cleanup (on a failed run the
+     post-commit sweep never executes — scan-time obsolete cleanup is the only deletion such a run performs). Sweep and
+     `rmdir` failures are warnings, not command failures
    - **On non-zero exit, spawn failure** (e.g. the agent binary is missing from `PATH`)**, or truncated stdin
      delivery:** print the agent's stderr and stdout, commit **nothing**, and exit non-zero. The pending watermarks
      staged during the scan are left staged; that is harmless because they are never promoted without a successful run,
