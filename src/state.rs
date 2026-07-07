@@ -43,7 +43,7 @@ pub struct LeiterState {
     pub version: u32,
     /// Soul template version that the current `soul.md` has been migrated to.
     pub soul_version: u32,
-    /// Setup epoch for soft (nudge-only) compatibility checks.
+    /// Setup epoch for non-blocking setup advisories.
     ///
     /// Defaults to 1 so state files written before epochs were split can still
     /// be validated by newer binaries.
@@ -305,12 +305,7 @@ impl LeiterState {
     }
 }
 
-/// Convert the legacy frontmatter-plus-codex-meta layout into `state.toml`.
-///
-/// This is intentionally not wired into any runtime command in this revision;
-/// SPEC.md's "Legacy layout migration" section reserves it for a later install
-/// flow. Keeping it unit-tested now makes that later wiring a small command
-/// change instead of a data migration written under release pressure.
+/// Convert the legacy frontmatter-plus-codex-meta layout into current state.
 ///
 /// The routine is deliberately re-runnable from any crash point. Its steps —
 /// write `state.toml`, strip the soul frontmatter, delete `codex-meta.toml` —
@@ -320,7 +315,13 @@ impl LeiterState {
 /// may already carry watermarks newer than anything reconstructable from the
 /// legacy files. The soul rewrite is atomic (temp file + rename) because the
 /// soul is the one file whose contents cannot be regenerated.
-#[allow(dead_code)] // SPEC.md "Legacy layout migration" says this is unwired for now.
+///
+/// The migrated state records this binary's current setup epochs, not the
+/// legacy frontmatter's epochs. That advance intentionally rides the routine's
+/// atomic state write: if install wrote hard=1 here and planned to bump it in a
+/// later afterstep, a crash between the two writes would leave a migrated
+/// state that install's own epoch verification refuses, and rerunning install
+/// could not escape the dead end.
 pub fn migrate_legacy_layout(state_dir: &Path) -> Result<()> {
     let soul_path = paths::soul_path(state_dir);
     let state_path = paths::state_path(state_dir);
@@ -343,8 +344,8 @@ pub fn migrate_legacy_layout(state_dir: &Path) -> Result<()> {
                 let state = LeiterState {
                     version: STATE_VERSION,
                     soul_version: frontmatter.soul_version,
-                    setup_soft_epoch: frontmatter.setup_soft_epoch,
-                    setup_hard_epoch: frontmatter.setup_hard_epoch,
+                    setup_soft_epoch: SETUP_SOFT_EPOCH,
+                    setup_hard_epoch: SETUP_HARD_EPOCH,
                     last_distilled: frontmatter.last_distilled,
                     pending_scan_started_utc: None,
                     claude: WatermarkSet::default(),
@@ -654,6 +655,8 @@ latest_event_timestamp_utc = "2026-03-07T19:00:00Z"
 
         let state = LeiterState::load(&paths::state_path(state_dir)).unwrap();
         assert_eq!(state.soul_version, 1);
+        assert_eq!(state.setup_soft_epoch, SETUP_SOFT_EPOCH);
+        assert_eq!(state.setup_hard_epoch, SETUP_HARD_EPOCH);
         assert_eq!(state.last_distilled, fm.last_distilled);
         assert!(state.codex.committed.contains_key("committed-sess"));
         assert!(state.codex.pending.contains_key("pending-sess"));
@@ -675,8 +678,8 @@ latest_event_timestamp_utc = "2026-03-07T19:00:00Z"
 
         let state = LeiterState::load(&paths::state_path(state_dir)).unwrap();
         assert_eq!(state.soul_version, fm.soul_version);
-        assert_eq!(state.setup_soft_epoch, fm.setup_soft_epoch);
-        assert_eq!(state.setup_hard_epoch, fm.setup_hard_epoch);
+        assert_eq!(state.setup_soft_epoch, SETUP_SOFT_EPOCH);
+        assert_eq!(state.setup_hard_epoch, SETUP_HARD_EPOCH);
         assert_eq!(state.last_distilled, fm.last_distilled);
         assert!(state.codex.committed.is_empty());
         assert!(state.codex.pending.is_empty());

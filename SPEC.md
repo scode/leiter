@@ -15,9 +15,20 @@ rather than talking to any API itself.
 
 ## Architecture
 
-The SessionEnd hook (rather than Stop) is used for session logging because Stop fires on every turn — not just session
-end — which would block the agent on every response to write a log. SessionEnd fires once when the session actually
-terminates and provides the transcript path directly, so no agent involvement is needed to save it.
+Leiter runs hookless. The soul reaches each harness through a managed block that the harness already reads at session
+start — `<claude_home>/CLAUDE.md` for Claude, `<codex_home>/AGENTS.md` for Codex — so no SessionStart hook is needed to
+inject it. Session transcripts are read directly from the harnesses' own session stores (Claude Code's `projects/` tree
+and the Codex rollout directories), so no SessionEnd hook is needed to capture them. Distillation runs through
+`leiter distill`, which shells out to a headless agent CLI; the single consolidated `leiter` skill is a convenience
+trigger that runs the same command.
+
+Hooks survive only as a migration artifact. A box set up before 0.9.0 still carries `leiter hook` entries in
+`~/.claude/settings.json`. The SessionStart hooks now run one-release tombstones whose only job on an incompatible box
+is to deliver the migration instructions, while the SessionEnd hook keeps archiving transcripts until the tombstones are
+deleted — a user who defers migration must lose nothing (see the `leiter hook *` commands and Migration from hook-based
+setups); `leiter claude
+install` performs the actual migration and emits the settings-cleanup instructions. The
+tombstoned subcommands are all removed in the release after 0.9.0.
 
 The `leiter soul instill` and `leiter soul distill` commands share a single set of soul-writing guidelines (built into
 the binary). This ensures consistent entry quality across both learning paths — inline preferences and transcript
@@ -28,11 +39,9 @@ writing to the soul.
 ┌──────────────────────────────────────────────────────────────┐
 │                       Claude Code Session                    │
 │                                                              │
-│  Session start (both active this revision):                  │
+│  Session start:                                              │
 │    <claude_home>/CLAUDE.md block ──► soul inlined            │
-│    SessionStart hook ──► leiter hook context ──► soul +      │
-│                          leiter hook nudge      instructions │
-│    Soul is seen twice until the hooks are dismantled.        │
+│    (no hook — the managed block is the sole delivery path)   │
 │                                                              │
 │  ... normal session ...                                      │
 │                                                              │
@@ -51,17 +60,22 @@ writing to the soul.
 │                  ──► agent restructures soul.md              │
 │                  ──► agent: leiter soul mark-upgraded        │
 │                                                              │
-│  SessionEnd hook ──► leiter hook session-end                 │
-│                      ──► copies transcript to logs/          │
+│  transcripts ──► read in place from <claude_home>/projects/  │
+│                  by leiter distill (no SessionEnd hook)       │
+│                                                              │
+│  Migrating box only (pre-0.9.0 hooks still configured):      │
+│    SessionStart ──► leiter hook context ──► migration note   │
+│    SessionEnd   ──► leiter hook session-end ──► archives      │
+│                     transcript (still works this release)     │
 └──────────────────────────────────────────────────────────────┘
 
 ~/.leiter/
 ├── leiter.toml          # Main leiter settings
 ├── soul.md              # The "leiter soul" — agent instructions (pure markdown, no frontmatter)
 ├── state.toml           # Leiter-managed metadata (epochs, watermarks, sync hashes); agent never edits
-└── logs/
-    ├── 20260223T173000Z-abc123.jsonl
-    ├── 20260223T190000Z-def456.jsonl
+└── logs/                # Legacy: hook-copied transcripts. Only present on pre-migration boxes;
+    ├── 20260223T173000Z-abc123.jsonl   #   the first post-migration distill drains these and
+    ├── 20260223T190000Z-def456.jsonl   #   removes the directory (see leiter distill).
     └── ...
 
 ~/.claude/
@@ -117,12 +131,15 @@ is `~/.codex/`. The `leiter codex` subcommand accepts a `--codex-home <path>` fl
 The skill file contains the sentinel string `SCODE_LEITER_INSTALLED` as an HTML comment. `leiter claude uninstall`
 checks for this sentinel to verify that leiter was installed before removing files.
 
-Transitional note: this one skill replaces the previous six `leiter-*` skills. The `/leiter-setup` and
-`/leiter-teardown` skills in particular are gone from fresh installs, but the commands they used to call —
-`leiter claude agent-setup-instructions` and `leiter claude agent-teardown-instructions` — still exist and can be run
-directly. They (and the hooks they configure) are dismantled in a later revision. `leiter claude install` removes any of
-the old `leiter-*` skill directories whose `SKILL.md` still carries the sentinel, so upgrading a box collapses the old
-set down to the one skill.
+Transitional note: this one skill replaces the previous six `leiter-*` skills. The old `/leiter-setup` and
+`/leiter-teardown` skills that invoked `leiter claude agent-setup-instructions` and
+`leiter claude agent-teardown-instructions` are gone. Both commands survive one more release as tombstones so those old
+skill invocations (and any muscle-memory direct runs) do not hit a clap unknown-command error:
+`agent-setup-instructions` no longer configures any hooks — it just reports that hooks are retired — while
+`agent-teardown-instructions` stays functional and still emits hook-removal instructions, which is exactly what a
+migrating box needs and what `leiter claude install`'s migration output points at. Both are removed in the release after
+0.9.0, together with the `hook *` subcommands. `leiter claude install` removes any of the old `leiter-*` skill
+directories whose `SKILL.md` still carries the sentinel, so upgrading a box collapses the old set down to the one skill.
 
 The skill file is a `const &str` template built into the binary. It is written to disk by `leiter claude install` and
 overwritten on re-run (idempotent).
@@ -186,10 +203,13 @@ These drive `leiter sync` and the opportunistic re-sync described next.
 
 `leiter sync` is the explicit way to re-materialize the blocks, but the agent typically edits the soul _after_ leiter's
 involvement in a command has ended, so there is a structural gap: the block on disk drifts from the soul between syncs.
-To heal that gap, every state-mutating leiter command that runs to completion also re-materializes any managed block
-whose recorded soul hash no longer matches the current soul body — the same work `leiter sync` does, run as a side
-effect. The commands that do this are `leiter soul mark-distilled`, `leiter soul mark-upgraded`, `leiter config set`,
-`leiter claude install`, `leiter codex install`, and the pending-watermark staging path of `leiter soul distill`.
+To heal that gap, an enumerated set of state-mutating leiter commands re-materialize, on successful completion, any
+managed block whose recorded soul hash no longer matches the current soul body — the same work `leiter sync` does, run
+as a side effect. The participating commands are exactly: `leiter soul mark-distilled`, `leiter soul mark-upgraded`,
+`leiter config set`, `leiter codex install`, the pending-watermark staging paths of `leiter soul distill` and
+`leiter distill`, and `leiter claude install` (which syncs with its own force semantics — see that command). The
+uninstall commands mutate state but deliberately do not participate: they are removal flows, and healing a block on the
+way out would be the opposite of what was asked.
 
 The same clobber guard applies: a block hand-edited since leiter last wrote it is warned about and left alone, never
 silently clobbered. Here a refusal is only a warning — it never turns the host command into a failure. A
@@ -215,28 +235,51 @@ corrupt leiter's bookkeeping by editing it — a malformed soul is at worst a ma
 ### Setup Epochs
 
 The leiter binary may evolve in ways that require user action beyond just upgrading the binary — for example, re-running
-`leiter claude install` to update hook configuration. Setup epochs detect this condition and alert the user.
+`leiter claude install` to migrate an old integration model to a new one. Setup epochs detect this condition and alert
+the user.
 
 There are two independent epochs, each a monotonic integer starting at 1:
 
 - **`setup_soft_epoch`**: Bumped when a leiter upgrade introduces changes that benefit from user action but are not
   strictly required. A mismatch produces a nudge but does not block the session.
 - **`setup_hard_epoch`**: Bumped when a leiter upgrade introduces changes that require user action before the session
-  can function correctly. A mismatch blocks the session (the soul is not injected).
+  can function correctly. A mismatch blocks every leiter command until install is re-run. It does not — cannot — block
+  soul delivery on a hookless box: the managed `CLAUDE.md` block is static content the harness reads with no leiter
+  involvement, so a hard-mismatched box keeps its (possibly stale) soul. Only the migrating-box `hook context` tombstone
+  additionally declines to inject.
+
+As of 0.9.0 the binary expects `setup_hard_epoch = 2` and `setup_soft_epoch = 2`. The hard epoch's `1 → 2` bump is the
+hookless-migration trigger: a box set up before 0.9.0 still records `setup_hard_epoch = 1` (or has no `state.toml` at
+all — see the legacy layout below), so the moment its upgraded binary runs any validating command — including the
+`leiter hook context` tombstone fired by its still-configured SessionStart hook — the exact-equality check fails and the
+box is routed to migration (see the `leiter hook *` tombstones, `leiter claude install`, and Migration from hook-based
+setups). Nothing about the 0.9.0 bump is special-cased; the same epoch machinery that has always blocked on a hard
+mismatch is exactly what serves it. A compiled-in guard test pins the expected epoch constants, so bumping either value
+is a deliberate edit that must land in the same commit as the migration logic the bump implies — never an accidental
+drift.
 
 The binary has compiled-in expected values for both epochs. Epoch values are stored in `~/.leiter/state.toml`. Every
-command except `session-end` validates the state file's epoch values against the binary's expected values before doing
-any work. Hard epoch checks use exact equality — both older and newer state files are flagged. Soft epoch mismatches in
-either direction produce a nudge but do not block commands. `leiter claude install` additionally migrates a
-behind-the-binary soft epoch forward on re-run, and refuses to run when the state file is ahead of the binary (to avoid
-downgrading). This validation is implemented as a single shared function used by all commands, preventing drift between
-individual command implementations.
+command except `session-end` (and the inert `hook nudge` tombstone, which reads nothing at all) validates the state
+file's epoch values against the binary's expected values before doing any work. Hard epoch checks use exact equality —
+both older and newer state files are flagged. Soft epoch mismatches in either direction are tolerated: commands proceed
+normally, and the mismatch surfaces as an advisory line in `leiter status` (with hooks retired there is no session-start
+channel to nudge through; status is where a user checks leiter's health). `leiter claude install` additionally migrates
+a behind-the-binary soft epoch forward on re-run, and refuses to run when the state file is ahead of the binary (to
+avoid downgrading). This validation is implemented as a single shared function used by all commands, preventing drift
+between individual command implementations.
 
 Either epoch field defaults to 1 when absent from `state.toml` (for backward compatibility with state files written
 before that field existed).
 
-A missing `state.toml` means leiter is not initialized — the same condition as a missing soul, with the same "run
-`leiter claude install`" response.
+A missing `state.toml` is no longer uniformly "not initialized". Validation discriminates on the soul. When `state.toml`
+is missing but `soul.md` exists and still parses as YAML frontmatter, that is the pre-0.9.0 **legacy layout** — a
+distinct incompatibility with its own migration message (see Epoch Error Messages). When `state.toml` is missing and
+there is no frontmatter-bearing soul — no soul at all, or a soul that is already pure content — leiter is genuinely not
+initialized, the same condition as a missing soul, with the same "run `leiter claude install`" response. Both cases
+funnel the box to `leiter claude install`; only the message the agent relays differs. Because the discrimination lives
+in the one shared validation function, every command that validates state routes a legacy box to install — including old
+skills like `/leiter-distill`, whose route runs `leiter soul distill` and now surfaces the legacy-layout message instead
+of half-running.
 
 Corrupt state (a `state.toml` that cannot be parsed, or whose `version` is unsupported) is treated equivalently to a
 hard epoch mismatch — it blocks the command entirely, since epochs cannot be verified. Recovery is to delete
@@ -262,18 +305,32 @@ A migration routine converts the pre-`state.toml` layout — a `soul.md` carryin
 fields, a frontmatter-free `soul.md`, and no `codex-meta.toml` (it is deleted). The routine is re-runnable from any
 crash point: it keeps an existing `state.toml` rather than overwriting it, rewrites the soul atomically (temp file plus
 rename — the soul is the one file whose contents cannot be regenerated), and tolerates an already-stripped soul as a
-resumed half-migration. In this revision the routine exists and is unit-tested but is not yet invoked by any command; a
-later revision wires it into `leiter claude install`. Until then only fresh installs produce `state.toml`, and
-pre-existing installs are handled when that later revision lands. This is acceptable because releases are cut
-explicitly, so no user is exposed to the interim main-branch-only state.
+resumed half-migration. `leiter claude install` runs it in the legacy quadrant of its state/soul convergence — the case
+where `soul.md` carries frontmatter but no `state.toml` exists yet (see `leiter claude install`). The migrated
+`last_distilled` carries over verbatim from the old frontmatter: it becomes the floor for the external Claude scan (see
+Claude session scanning), so a migrated box does not re-ingest the history the soul already learned — which is precisely
+the floor's purpose. The setup epochs are the one thing that does **not** carry over: the routine itself stamps the
+binary's current epoch values into the `state.toml` it writes, because running install is exactly the action the
+hard-epoch bump requires — a migrated box that kept `setup_hard_epoch = 1` would re-trip the migration message on its
+next session forever. The stamp rides the routine's atomic state write rather than being an install afterstep on
+purpose: a crash between "state written with old epochs" and "epochs fixed" would leave a hard mismatch that install's
+own epoch verification then refuses, a dead end no rerun escapes.
 
 #### Epoch Error Messages Delivered to the User
 
-When `leiter hook context` or `leiter hook nudge` detects an incompatibility, the output is an instruction to the agent.
-The agent must deliver the quoted message to the user **verbatim** — the instruction must use strong compliance language
-(e.g. "EXACTLY this (word for word)") to maximize the chance the agent relays it unchanged. The exact user-facing
-phrases for each case:
+When a validating command detects an incompatibility, the output is an instruction to the agent. (On a migrating box the
+`leiter hook context` tombstone usually delivers it first, since its still-configured SessionStart hook fires before the
+agent does anything else; `leiter hook nudge` no longer emits anything at all — see that command.) The agent must
+deliver the quoted message to the user **verbatim** — the instruction must use strong compliance language (e.g. "EXACTLY
+this (word for word)") to maximize the chance the agent relays it unchanged. The exact user-facing phrases for each
+case:
 
+- **Legacy layout** (`state.toml` missing while `soul.md` exists and still parses as YAML frontmatter — the pre-0.9.0
+  layout that predates `state.toml`): "Leiter has moved to hookless operation: it no longer uses hooks, and its six
+  skills are replaced by a single consolidated skill. Please run `leiter claude install` in your terminal — or let me
+  run it now — and follow its instructions, then start a new session." Unlike the other cases, this instruction tells
+  the agent it MAY run `leiter claude install` itself with the user's approval and then follow that command's output; it
+  must not attempt any other leiter command first.
 - **Setup outdated** (state hard epoch < binary): "Leiter setup needs to be re-run — please run `leiter claude install`
   in your terminal and follow the instructions, then start a new session."
 - **Binary outdated** (state hard epoch > binary): "Your leiter binary is older than your soul file expects — please
@@ -286,12 +343,23 @@ phrases for each case:
 - **Soul unreadable**: "The leiter soul file could not be read. Please check file permissions on [path], then start a
   new session."
 
-The instruction must also tell the agent not to attempt leiter commands for the remainder of the session.
+The instruction must also tell the agent not to attempt leiter commands for the remainder of the session — with one
+carve-out: the Legacy layout message explicitly permits exactly `leiter claude install` (with the user's approval),
+since running it is the migration. Its prohibition is on any _other_ leiter command.
 
-For soft epoch mismatches, the agent is instructed to briefly mention that optional improvements are available (or that
-the binary is a bit behind) and suggest the appropriate action (re-run install or upgrade). The nudge explicitly notes
-there are no breaking changes. These are nudges, not verbatim scripts — the agent is told to keep it to one short
-sentence.
+- **Not initialized** (no `state.toml` and no soul, or a soul that is already pure content): "Leiter is not initialized.
+  Run `leiter claude install` to set up." This one is not an ACTION REQUIRED relay — there is nothing to migrate and no
+  urgency to escalate; it is a plain pointer.
+
+Each incompatibility also carries a shorter non-verbatim `user_message` form used when a directly-invoked CLI command
+fails validation (there is no agent to relay through); both forms funnel to the same remedy.
+
+Soft epoch mismatches produce no message from validating commands at all; the advisory lives in `leiter status` (see
+Setup Epochs and that command).
+
+One unsupported shape, for completeness: a `state.toml` recording `setup_hard_epoch = 1` can only come from an interim
+main-branch build (released 0.8.1 predates `state.toml` entirely), and no code path advances it. Such a box is outside
+the migration contract; the recovery is deleting `state.toml` and re-running install, accepting the watermark reset.
 
 ### Soul Template (built into the binary)
 
@@ -367,7 +435,7 @@ Logical shape:
 version = 1
 soul_version = 2
 setup_soft_epoch = 2
-setup_hard_epoch = 1
+setup_hard_epoch = 2
 last_distilled = 2026-07-01T12:00:00Z
 
 [sync.claude_md]
@@ -489,9 +557,11 @@ skill) to the Claude Code home directory, and writes the managed soul-delivery b
 
 **Deterministic steps:**
 
-1. Create `~/.leiter/` directory (no-op if exists)
-2. Create `~/.leiter/logs/` directory (no-op if exists)
-3. Converge the soul/state pair by which of the two files exist. "Fresh state" below means a `state.toml` with
+1. Create `~/.leiter/` directory (no-op if exists). Deliberately NOT `~/.leiter/logs/`: the logs directory is a hook-era
+   artifact nothing writes to on a hookless box — the SessionEnd tombstone recreates it on demand for still-hooked
+   migrating boxes, and `leiter distill` removes it once drained, so install recreating it would resurrect an empty
+   directory on every converge
+2. Converge the soul/state pair by which of the two files exist. "Fresh state" below means a `state.toml` with
    `version = 1`, `last_distilled` set to the current UTC time, `soul_version` set to the current template version, and
    both epochs set to the binary's current values. Stamping install time (rather than the Unix epoch) matters because
    `last_distilled` now also acts as the floor for the external Claude scan (see Claude session scanning): under an
@@ -504,35 +574,68 @@ skill) to the Claude Code home directory, and writes the managed soul-delivery b
    four cases:
    - **Neither exists** (fresh install): write fresh state, then the template soul.
    - **Soul exists, state missing**: two situations share this shape, discriminated by whether the soul still parses as
-     YAML frontmatter. If it does, this is the pre-`state.toml` legacy layout: fail with an error saying migration
-     arrives in a later revision (see Legacy layout migration). If it does not, this is the documented corrupt-state
-     recovery path (the user deleted `state.toml`): write fresh state and keep the soul untouched — preferences survive,
-     watermarks reset.
+     YAML frontmatter. If it does, this is the pre-`state.toml` legacy layout: run the legacy migration routine (see
+     Legacy layout migration) — soul frontmatter plus any `~/.leiter/codex-meta.toml` become `state.toml`, the soul is
+     rewritten frontmatter-free, and `codex-meta.toml` is deleted; the migrated `last_distilled` carries over from the
+     old frontmatter and becomes the external-scan floor, so the box does not re-ingest history it already learned. The
+     migrated `state.toml` records the binary's current epochs, not the old frontmatter's: completing this install _is_
+     the action the hard-epoch bump demands, so the box must come out at the current hard epoch or it would trip the
+     same migration message on the very next session and loop forever. Then normalize `~/.leiter/leiter.toml`: if it
+     exists, load it (accepting the legacy `enable_codex_experimental` alias) and rewrite it so the modern `codex` key
+     is persisted; the converge continues normally from the migrated state. If the soul does not parse as frontmatter,
+     this is instead the documented corrupt-state recovery path (the user deleted `state.toml`): write fresh state and
+     keep the soul untouched — preferences survive, watermarks reset.
    - **Soul missing, state exists**: verify epochs first, then recreate the soul from the template. The existing state
      is kept, not reset — its watermarks may be perfectly valid.
-   - **Both exist**: verify epochs.
+   - **Both exist**: if the soul still parses as YAML frontmatter, this is a legacy migration that crashed between the
+     routine's state write and its soul strip — the state write is the migration's first mutation, and it is exactly the
+     thing this quadrant discriminates on, so without this check the "re-runnable from any crash point" guarantee would
+     be unreachable from install and the frontmatter would leak into the managed blocks forever. Re-run the migration
+     routine (it keeps the existing state, strips the soul, deletes any leftover `codex-meta.toml`), then verify epochs.
+     Otherwise: verify epochs.
 
    Ordering invariant: whenever both files are written, `state.toml` is written before `soul.md`, and validation runs
    before any write. This keeps a torn or refused install self-healing: dying between the two writes leaves the
    soul-missing/state-present shape, which the next run repairs, never the soul-present/state-missing shape that reads
    as a legacy layout
-4. Verify the Claude Code home directory exists (error if not — Claude Code not installed)
-5. Write the single `<claude_home>/skills/leiter/SKILL.md` skill file, overwriting on re-run (idempotent). Remove any of
+3. Verify the Claude Code home directory exists (error if not — Claude Code not installed). This check runs BEFORE the
+   state/soul convergence of step 3 in execution order: the legacy migration is a one-way epoch advance, and running it
+   only to then bail on a missing or mistyped Claude home would leave a migrated box whose still-configured hooks no
+   longer show the migration message while no managed block exists to deliver the soul. (Steps are numbered by what they
+   converge, not strictly by execution sequence; this is the one place order is load-bearing enough to state.)
+4. Write the single `<claude_home>/skills/leiter/SKILL.md` skill file, overwriting on re-run (idempotent). Remove any of
    the old `<claude_home>/skills/leiter-*/` directories whose `SKILL.md` carries the `SCODE_LEITER_INSTALLED` sentinel —
    this collapses a previous six-skill install down to the one skill and is safe to re-run
-6. Write the managed soul-delivery block into `<claude_home>/CLAUDE.md` (always), and into `<codex_home>/AGENTS.md` when
+5. Write the managed soul-delivery block into `<claude_home>/CLAUDE.md` (always), and into `<codex_home>/AGENTS.md` when
    `codex = true` — effectively a `leiter sync` of both targets, using the block writer and clobber-guard semantics from
    Managed soul-delivery blocks. This runs after the state/soul convergence so the block reflects the just-materialized
    soul, and it records the `[sync.*]` hashes. A fresh install has no recorded block hash, so both targets are written
    unconditionally
+6. Read-only inspection of `<claude_home>/settings.json` for leftover hooks. Leiter never edits `settings.json` itself;
+   it only reads it and, when it finds hook entries whose command contains `leiter hook`, folds hook-removal
+   instructions and a behavior-change summary into its output (see below). When no such entries exist — a fresh install,
+   or a box that already had its hooks removed — none of that is emitted. A missing or unreadable `settings.json` is
+   treated as "no leiter hooks present" and is never fatal
 
 **Output (stdout):** A success message confirming what was written — the `CLAUDE.md` managed soul block (and the
 `AGENTS.md` block when `codex = true`) and the single `leiter` skill — and noting that the soul is now delivered inline
-via the managed block, so soul injection no longer depends on a hook. Because the `/leiter-setup` skill is gone, the
-message points users who still want the session-logging and nudge hooks at running
-`leiter claude
-agent-setup-instructions` directly; those hooks remain available in this revision (the external Claude
-scan already reads transcripts directly, so they are no longer required for distillation to see sessions).
+via the managed block, so soul injection no longer depends on a hook.
+
+When step 7 found `leiter hook` entries in `settings.json`, the output additionally carries the migration payload for
+the agent to act on and relay:
+
+- Agent-usable hook-removal instructions: find the entries whose command contains `leiter hook`, remove those entries,
+  clean up any arrays and objects left empty by the removal, and preserve everything else byte-for-byte. Keep the
+  `Bash(leiter:*)` and soul-file permission entries — they are still useful and are not hooks (this is the same edit
+  `leiter claude agent-teardown-instructions` emits, and the output can point the agent there).
+- A behavior-change summary to relay to the user: session-start distillation nudges and auto-distillation are gone;
+  `leiter distill` is now the distillation mechanism and, being non-interactive, is cron-able — include one sample
+  crontab line; and transcript retention is no longer leiter's own `~/.leiter/logs/` copy but Claude Code's own session
+  store, bounded by its `cleanupPeriodDays` (~30-day default), so distill within that window or raise the setting.
+
+If a legacy migration ran in step 3, the message also states that the box was migrated to the hookless layout (soul
+stripped to pure content, `state.toml` written, `codex-meta.toml` absorbed, `leiter.toml` normalized to the `codex`
+key).
 
 If any step fails, the output instructs the agent to relay the error to the user.
 
@@ -755,12 +858,14 @@ Like `leiter distill`, this command has no home-override flags; its scan uses th
    than `retention_warn_days` days (see `~/.leiter/leiter.toml`; default 21)
 
 **Output (stdout):** A human-readable report of the undistilled Claude session count, the undistilled Codex count when
-Codex is enabled, per-target managed-block state, and — when triggered — the retention warning naming the at-risk
-sessions. The per-target block states are: **in sync**, **stale** (recorded soul hash behind the current soul, or the
-block missing from the file), **hand-edited** (block present but not matching the recorded hash), **never synced** (no
-recorded hashes for the target), and **unreadable** (the target file could not be read or its sentinel structure is
-malformed). Unreadable is deliberately distinct from hand-edited: "hand-edited" implies `leiter sync --force` is the
-remedy, which is wrong advice for a permissions problem or a mangled sentinel pair.
+Codex is enabled, per-target managed-block state, a soft-epoch advisory when `setup_soft_epoch` differs from the
+binary's (suggesting a `leiter claude install` re-run or a binary upgrade, matching the mismatch direction — this is the
+retired session-start nudge's new home), and — when triggered — the retention warning naming the at-risk sessions. The
+per-target block states are: **in sync**, **stale** (recorded soul hash behind the current soul, or the block missing
+from the file), **hand-edited** (block present but not matching the recorded hash), **never synced** (no recorded hashes
+for the target), and **unreadable** (the target file could not be read or its sentinel structure is malformed).
+Unreadable is deliberately distinct from hand-edited: "hand-edited" implies `leiter sync --force` is the remedy, which
+is wrong advice for a permissions problem or a mangled sentinel pair.
 
 **Exit status:** `leiter status` always exits 0 once state validates. The conditions it reports — staleness, hand edits,
 pending sessions, retention pressure — are informational, not failures: it is a status report, not a health check. (An
@@ -770,89 +875,68 @@ could determine, notes the failure as a warning line, and still exits 0.
 
 ### `leiter claude agent-setup-instructions`
 
-Outputs natural language instructions for the agent to configure Claude Code hooks in `~/.claude/settings.json`. This is
-the same hook configuration content that `leiter claude install` used to output directly.
+A pure tombstone. Hooks are retired: leiter no longer configures any, and this command no longer emits hook-setup JSON.
+It survives one release only so the old `/leiter-setup` skill (and any muscle-memory direct runs) does not hit a clap
+unknown-command error. It is removed in the release after 0.9.0, together with the `hook *` subcommands.
 
-Transitional note: this command used to be invoked by the `/leiter-setup` skill, which no longer exists (the six skills
-are consolidated into one — see Plugin Files). The command itself stays runnable directly, so a user who wants the
-session-logging and nudge hooks can still get these instructions. It is retired along with the hooks in a later
-revision.
+**Behavior:** Validates state (see Setup Epochs). If incompatible, exits with an error — on a legacy layout that error
+is the migration message, which is what a pre-0.9.0 box invoking this via `/leiter-setup` needs to see.
 
-**Behavior:** Validates state (see Setup Epochs). If incompatible, exits with an error.
-
-**Output (stdout):** Instructions including the exact JSON hook entries for `SessionStart` and `SessionEnd`, plus
-three-case logic for handling fresh install, upgrade, and already-configured states. See Hook Configuration below for
-the exact hook JSON. After hooks are configured, includes an optional permissions prompt (see Permissions below).
+**Output (stdout):** On a healthy box, a short note that leiter runs hookless now, that the soul is delivered by the
+managed `CLAUDE.md` block, and that there is nothing to configure. On a legacy layout, the migration message (see Epoch
+Error Messages) instead.
 
 ### `leiter claude agent-teardown-instructions`
 
-Outputs natural language instructions for the agent to remove leiter hooks from `~/.claude/settings.json`.
-
-Transitional note: this command used to be invoked by the `/leiter-teardown` skill, which no longer exists. Like
-`agent-setup-instructions`, the command stays runnable directly until the hooks are dismantled in a later revision.
+Outputs natural language instructions for the agent to remove leiter hooks from `~/.claude/settings.json`. Unlike
+`agent-setup-instructions`, this command stays functional: emitting hook-removal instructions is exactly what a
+migrating box needs, and `leiter claude install`'s migration output points at it. It too is removed in the release after
+0.9.0 — by then no box has leiter hooks left to remove.
 
 **Behavior:** Validates state (see Setup Epochs). If incompatible, exits with an error.
 
-**Output (stdout):** Instructions telling the agent to find and remove hook entries whose commands contain
-`"leiter hook context"`, `"leiter hook nudge"`, or `"leiter hook session-end"`, clean up empty arrays, preserve
-non-leiter hooks, remove leiter permission entries (see Permissions below), and provide cleanup/re-enable guidance to
-the user.
+**Output (stdout):** Instructions telling the agent to find and remove hook entries whose command contains `leiter hook`
+(the same substring rule install's migration payload uses — it matches all three legacy hook commands), clean up empty
+arrays, preserve non-leiter hooks, and provide cleanup/re-enable guidance to the user. It leaves the `Bash(leiter:*)`
+and soul-file permission entries in place — they are still useful and are not hooks.
 
 ### `leiter hook context`
 
-Outputs the soul content and agent instructions. Called by the SessionStart hook.
-
-Transitional note: as of this revision the soul is also delivered by the managed `CLAUDE.md` block (see Managed
-soul-delivery blocks), so on a box that still has the hook configured the agent sees the soul twice at session start —
-harmless duplication that resolves when the hook is dismantled in a later revision. This preamble also still names the
-previous per-topic skills (`/leiter-instill`, `/leiter-distill`, `/leiter-soul`, `/leiter-soul-upgrade`), which have
-been consolidated into the single `leiter` skill; the consolidated skill auto-matches the same trigger keywords, and the
-managed block carries the current routing guidance. The mismatch is cosmetic and is retired with the hook.
+A one-release tombstone for the SessionStart hook. It no longer injects the soul: the managed `CLAUDE.md` block is the
+sole delivery path now, and re-injecting here would be exactly the double injection this migration retires. The hook is
+only still configured on a pre-0.9.0 box (or a mid-migration box whose `settings.json` cleanup has not run yet), so the
+command's whole job is to serve those boxes during migration. It is removed in the release after 0.9.0.
 
 **Behavior:**
 
-1. Validate state (see Setup Epochs). If the soul is missing, `state.toml` is corrupt (unparseable or unsupported
-   version), or there is a hard epoch mismatch: output an error message and return without injecting the soul
-2. If `setup_soft_epoch` in `state.toml` does not exactly match the binary's expected value: output a nudge message
-   (different for older vs. newer state) but continue to inject the soul normally
-3. Output the preamble and full soul content (the soul file is emitted as-is; it has no frontmatter to strip)
+1. Validate state (see Setup Epochs). On any incompatibility, output that case's agent-relay message from Epoch Error
+   Messages and return without injecting anything. For a pre-0.9.0 box that is the **Legacy layout** message (missing
+   `state.toml` with a frontmatter soul — the only case whose message invites the agent to run `leiter claude install`
+   itself); a hard-epoch mismatch on a modern layout gets the ordinary setup-outdated / binary-outdated text, corrupt or
+   unreadable state gets its own messages, and a genuinely uninitialized box gets the not-initialized line. This hook
+   output is how a migrating user first learns to run `leiter claude install`
+2. On a healthy hookless box (state current), the hook being configured at all means `settings.json` still carries
+   leiter hooks — `leiter claude install` migrates state but never edits `settings.json` itself, so a box whose agent
+   has not yet applied the cleanup instructions lands here. Output ONE short line telling the agent to briefly remind
+   the user that leiter's hooks are no longer needed and can be removed via the instructions in
+   `leiter claude install`'s output. Do not emit the soul — the managed block already delivered it this session
 
-**Output (stdout):**
-
-1. A preamble explaining what leiter is and how the agent should interact with it. The preamble text is defined in
-   source code. It must cover these topics with the specified constraints:
-
-   **Identity:** A one-line description of leiter (self-training system that learns across sessions).
-
-   **Soul file location:** Must include the resolved path to the soul file (the state directory joined with `soul.md`).
-   Must tell the agent to use its Read/Edit/Write tools to modify this file directly.
-
-   **When to instill preferences:** When the user says "remember", "learn", "instill", "always", "never", or similar
-   preference-setting language. The agent should invoke the `/leiter-instill` skill.
-
-   **Session transcripts:** Session transcripts are saved automatically by the SessionEnd hook. The agent does not need
-   to do anything — no manual logging is required.
-
-   **Distillation:** When the user asks to distill session logs, the agent should invoke the `/leiter-distill` skill.
-
-   **Soul viewing:** When the user asks to see or view their soul, the agent should invoke the `/leiter-soul` skill.
-
-   **Soul upgrade:** When the user asks to upgrade the leiter soul (or runs `/leiter-soul-upgrade`), the agent should
-   invoke the `/leiter-soul-upgrade` skill.
-
-2. The full contents of `~/.leiter/soul.md`
-
-If `~/.leiter/soul.md` does not exist, outputs a message telling the agent that leiter is not initialized and to suggest
-the user run `leiter claude install`.
-
-The soul content is output inline (not as a file path reference) so that it survives context compaction in long
-sessions. The agent receives the full soul text in the SessionStart hook output, ensuring preferences remain available
-even after earlier messages are compressed.
+The old soul preamble and the soft-epoch nudge are gone from this command. There is no case in which it emits the soul.
 
 ### `leiter hook session-end`
 
 Hook handler for the Claude Code SessionEnd event. Reads the SessionEnd hook JSON from stdin and copies the session
-transcript to the logs directory.
+transcript to the logs directory. Unlike the other `leiter hook *` commands, this one keeps its original behavior rather
+than becoming a migration tombstone: it is epoch-exempt, and a user who defers migration for days must not silently lose
+a single session. It dies with the rest of the `hook *` subcommands in the release after 0.9.0, by which point no box
+still has the SessionEnd hook configured.
+
+Historical context: SessionEnd (rather than Stop) was chosen for logging because Stop fires on every turn — not just at
+session end — which would block the agent on every response to write a log. SessionEnd fires once when the session
+actually terminates and hands over the transcript path directly, so no agent involvement was needed to save it. The
+hookless architecture retires this path entirely: `leiter distill` now reads Claude Code's own session store in place
+(see Claude session scanning), so no copy step is needed at all. This command survives only to keep archiving on
+un-migrated boxes.
 
 **Input:** Claude Code SessionEnd hook JSON on stdin. The command depends on these fields (other fields may be present
 and are ignored):
@@ -870,9 +954,10 @@ and are ignored):
 5. Atomically rename the temporary file to the final path
 
 A missing `~/.leiter/logs/` directory is recreated, not an error. A successful `leiter distill` removes the logs
-directory once it drains empty, and this hook stays configured through the transitional revisions — the two would
-otherwise interact as "first drained distill permanently breaks every later session save". The hook's charter is that
-losing session data is worse than anything else it could do, so it makes the directory it needs.
+directory once it drains empty, and this hook stays active on un-migrated boxes — the two would otherwise interact as
+"first drained distill permanently breaks every later session save" (a procrastinating user can distill manually and
+keep running old sessions). The hook's charter is that losing session data is worse than anything else it could do, so
+it makes the directory it needs.
 
 **Output:** None. A confirmation message with the saved file path is logged to stderr (via `tracing`). The SessionEnd
 hook fires after the session terminates, so no agent is present to read stdout.
@@ -888,10 +973,11 @@ error to stderr and exit with a non-zero code. Clean up the temporary file on an
 Lower-level distillation plumbing, exposed for debugging and scan testing; `leiter distill` is the primary mechanism
 most users and the consolidated skill invoke (see `leiter distill`), and it reuses this command's scan, staging, and
 prompt composition rather than duplicating them. Outputs session logs that haven't been processed since the last
-distillation. In this revision it draws from two Claude sources that coexist: the legacy `~/.leiter/logs/` files copied
-by the SessionEnd hook, and the external scan of Claude Code's own session store (see Claude session scanning). Both
-stay active — the hook still runs — and their output is deduplicated by session id so a session present in both places
-is emitted once. A later revision removes the hook and with it the legacy path.
+distillation. It draws from two Claude sources that can coexist during migration: the legacy `~/.leiter/logs/` files the
+SessionEnd hook copied — still archived on un-migrated boxes, and left behind for the first post-migration distill to
+drain on a just-migrated one — and the external scan of Claude Code's own session store (see Claude session scanning),
+which is now the primary source. Their output is deduplicated by session id so a session present in both places is
+emitted once. The release after 0.9.0 removes the SessionEnd hook entirely, and with it the legacy path and this dedupe.
 
 **Flags:**
 
@@ -994,10 +1080,11 @@ message with both text and tool_use blocks emits both `[assistant]:` and `[assis
 with only tool_use blocks (no text) emits only the tool summary lines. Tool results (`type: "user"` with
 `toolUseResult`) remain dropped — the tool name from the assistant side provides sufficient context.
 
-**Claude session scanning:** In addition to the hook-copied logs in `~/.leiter/logs/`, `leiter soul distill` reads
-Claude Code's own session transcripts directly from the Claude home directory. Claude Code stores one JSONL transcript
-per session at `<claude_home>/projects/<cwd-slug>/<session-uuid>.jsonl`, appended live while the session runs. This
-external scan is always active in this revision; it is not gated on `codex`.
+**Claude session scanning:** `leiter soul distill` reads Claude Code's own session transcripts directly from the Claude
+home directory — the primary and, on a migrated box, only Claude source (the hook-copied `~/.leiter/logs/` files are a
+migration leftover, drained once and gone). Claude Code stores one JSONL transcript per session at
+`<claude_home>/projects/<cwd-slug>/<session-uuid>.jsonl`, appended live while the session runs. This external scan is
+always active; it is not gated on `codex`.
 
 Discovery starts at `<claude_home>/projects/` (default `~/.claude/projects/`, override the home with `--claude-home`)
 and recurses, but it is deliberately fail-useful about this undocumented layout. It considers only regular files; it
@@ -1042,11 +1129,13 @@ A scanned session that canonicalizes to no user-visible content is not emitted, 
 `[claude.pending]` (mirroring the Codex behavior) so that once `leiter soul mark-distilled` commits it, the session
 stops being rescanned on every run.
 
-Dedupe against the legacy logs is what keeps this coexistence clean. In this revision the SessionEnd hook still copies
-every finished transcript into `~/.leiter/logs/`, so most sessions exist in both places at once. A session id emitted
-from the external scan suppresses the legacy log file bearing the same session-id suffix — the external copy is the same
-or fresher content. The suppressed legacy file still participates in obsolete-log cleanup exactly as it does today. When
-a later revision removes the SessionEnd hook, the legacy path and this dedupe go away with it.
+Dedupe against the legacy logs is what keeps this coexistence clean during migration. On an un-migrated box the
+SessionEnd hook still copies every finished transcript into `~/.leiter/logs/`, and a just-migrated box has a backlog of
+such files that the first post-migration distill drains, so for a while some sessions exist in both places at once. A
+session id emitted from the external scan suppresses the legacy log file bearing the same session-id suffix — the
+external copy is the same or fresher content. The suppressed legacy file still participates in obsolete-log cleanup
+exactly as it does today. The release after 0.9.0 removes the SessionEnd hook, and the legacy path and this dedupe go
+with it.
 
 Codex rollout files use a different event schema and are canonicalized separately. Leiter keeps user-visible user
 messages, assistant/user-facing output text, commentary updates shown to the user, and one-line tool call summaries. It
@@ -1144,33 +1233,19 @@ body may contain markdown including fenced code blocks.
 
 ### `leiter hook nudge`
 
-Checks for stale undistilled session logs and outputs a nudge if any exist. Called by the SessionStart hook (after
-`leiter hook context`) to remind the agent to suggest distillation.
+A silent one-release tombstone for the second SessionStart hook. It outputs nothing, ever, and never fails. Its old
+staleness scan and its `--auto-distill` behavior are gone: `leiter hook context` already delivers the migration message
+on a migrating box, so a nudge here would be double messaging, and there is no longer any nudge to emit on a healthy
+box. It is removed in the release after 0.9.0.
 
 **Flags:**
 
-- `--auto-distill`: Use a 4-hour threshold instead of 24 hours, and output an instruction for the agent to run
-  distillation (instead of asking the user). This is opt-in via `leiter claude agent-setup-instructions` option 3.
+- `--auto-distill`: accepted and ignored. The flag survives only so a pre-0.9.0 `settings.json` that configured
+  `leiter hook nudge --auto-distill` does not error on the new binary.
 
-**Behavior:**
+**Behavior:** Exit 0 with no output. It does not read state, scan logs, or emit anything.
 
-1. Validate state (see Setup Epochs). If `state.toml`, the soul, or the logs directory does not exist, silently output
-   nothing and exit successfully. If `state.toml` is corrupt (unparseable or unsupported version) or there is a hard
-   epoch mismatch, output an error message and exit successfully (the hook must never fail the session). If the logs
-   directory cannot be read, silently output nothing
-2. Read `last_distilled` timestamp from the validated `state.toml`
-3. Scan `~/.leiter/logs/` for files whose filename timestamps are >= `last_distilled` (same inclusive comparison as
-   `leiter soul distill`)
-4. If any such file has a timestamp older than the threshold (`now - 24h`, or `now - 4h` with `--auto-distill`): output
-   a message (defined in source code)
-5. Otherwise: output nothing
-
-**Output (stdout):**
-
-- Without `--auto-distill`: if stale undistilled logs exist (24h), a short nudge message reminding the agent to suggest
-  distillation
-- With `--auto-distill`: if stale undistilled logs exist (4h), an instruction for the agent to invoke distillation
-- Otherwise: nothing (zero context pollution)
+**Output (stdout):** None, in every case.
 
 ### `leiter soul upgrade`
 
@@ -1224,13 +1299,15 @@ upgrade as done.
 
 ## Hook Configuration
 
-The following hooks are configured in `~/.claude/settings.json` by the agent when it runs
-`leiter claude agent-setup-instructions` (formerly triggered by the `/leiter-setup` skill, which no longer exists — see
-Plugin Files). In this revision hooks are optional: the soul reaches the agent through the managed `CLAUDE.md` block
-regardless, and the external Claude scan reads transcripts directly, so these hooks add session-end archiving and
-distillation nudges rather than being required for leiter to function. They are dismantled entirely in a later revision.
+Leiter no longer configures any hooks. `leiter claude install` writes none, and `leiter claude agent-setup-instructions`
+is a tombstone that emits none. This section documents only what a pre-0.9.0 box still carries in
+`~/.claude/settings.json`, and how the one-release tombstones serve those configs during migration until
+`leiter claude install`'s cleanup instructions remove them. The release after 0.9.0 deletes the `hook *` subcommands;
+any entry lingering past that is dead configuration.
 
 ### SessionStart Hook
+
+A box set up before 0.9.0 still has:
 
 ```json
 {
@@ -1253,13 +1330,15 @@ distillation nudges rather than being required for leiter to function. They are 
 }
 ```
 
-Fires on every session start (new, resume, clear, compact). The stdout output is added as context for the agent. The
-`leiter hook context` hook injects the soul and agent instructions; the `leiter hook nudge` hook outputs a distillation
-reminder only when stale undistilled logs exist (otherwise it outputs nothing, adding zero context). If the user opts
-into auto-distillation during `leiter claude agent-setup-instructions` (option 3), the nudge command is configured as
-`leiter hook nudge --auto-distill`, which uses a 4-hour threshold and instructs the agent to run distillation.
+Fires on every session start (new, resume, clear, compact). The stdout output is added as context for the agent. On a
+migrating box `leiter hook context` now outputs the migration message instead of the soul (the managed `CLAUDE.md` block
+delivers the soul), and `leiter hook nudge` is silent. Some pre-0.9.0 boxes configured the second entry as
+`leiter hook nudge --auto-distill`; the flag is still accepted and ignored. Both entries are removed by the cleanup
+instructions in `leiter claude install`'s output.
 
 ### SessionEnd Hook
+
+A box set up before 0.9.0 still has:
 
 ```json
 {
@@ -1278,12 +1357,15 @@ into auto-distillation during `leiter claude agent-setup-instructions` (option 3
 }
 ```
 
-Fires once when the session terminates. The `leiter hook session-end` command reads the SessionEnd hook JSON from stdin
-(which includes `session_id` and `transcript_path`) and copies the transcript to `~/.leiter/logs/`.
+Fires once when the session terminates. `leiter hook session-end` keeps its original behavior — it reads the SessionEnd
+hook JSON from stdin (which includes `session_id` and `transcript_path`) and copies the transcript to `~/.leiter/logs/`,
+so a user who defers migration loses nothing (see that command). It is the one tombstone still doing real work, and it
+is removed with the rest in the release after 0.9.0.
 
 ## Permissions
 
-After configuring hooks, `agent-setup-instructions` offers three optional features:
+Two permission entries stay useful in the hookless world. `leiter claude install`'s migration output points at them
+(rather than the retired `agent-setup-instructions`), so a migrating box keeps them while its hooks are cleaned out:
 
 1. **Bash commands:** `"Bash(leiter:*)"` — allows all leiter CLI commands without confirmation dialogs.
 2. **Soul file access:** `"Read(<soul_path>)"`, `"Edit(<soul_path>)"`, and `"Write(<soul_path>)"` — allows reading,
@@ -1291,17 +1373,19 @@ After configuring hooks, `agent-setup-instructions` offers three optional featur
    gitignore-style path matching: `/path` is project-relative, `//path` is absolute, and `~/path` is home-relative. A
    bare absolute path like `/Users/alice/.leiter/soul.md` would be interpreted as project-relative and never match. The
    soul path must be formatted as `~/.leiter/soul.md` (when under `$HOME`) or `//path/to/soul.md` (otherwise).
-3. **Auto-distillation:** Changes the nudge hook command from `leiter hook nudge` to `leiter hook nudge --auto-distill`,
-   so the agent runs distillation at session start when stale logs exist (4h threshold) instead of asking the user.
 
-The user can accept any combination, all, or none.
+The old auto-distillation permission option is gone: it was purely a hook toggle (`leiter hook nudge --auto-distill`),
+and hooks are retired. Running `leiter distill` from cron is the replacement (see `leiter claude install` and Migration
+from hook-based setups).
 
-`agent-teardown-instructions` removes any entries in `permissions.allow` starting with `Bash(leiter` or referencing the
-soul file path. Empty `permissions.allow` arrays and empty `permissions` objects are cleaned up.
+Both `leiter claude install`'s hook-cleanup instructions and `leiter claude agent-teardown-instructions` deliberately
+leave these two entries in place — they are not hooks, and they remain useful for the tool that stays installed.
 
 ## Flows
 
 ### First-Time Setup
+
+Setup is one terminal command. There is no in-session step, and no hooks to configure.
 
 1. User installs `leiter` binary
 2. User runs `leiter claude install` from their terminal
@@ -1309,21 +1393,16 @@ soul file path. Empty `permissions.allow` arrays and empty `permissions` objects
    the managed soul block into `~/.claude/CLAUDE.md` (and `~/.codex/AGENTS.md` when `codex = true`)
 4. On the next session start, the harness reads the managed block, so the agent has the soul and leiter instructions
    with no hook involved
-5. Optionally, to capture session transcripts through the SessionEnd hook and receive distillation nudges, the user has
-   the agent run `leiter claude agent-setup-instructions` and configure hooks in `~/.claude/settings.json` with the
-   user's approval. The `/leiter-setup` skill that used to drive this is gone in this revision, but the command remains
-6. Agent presents optional features (Bash permissions, soul file access, auto-distillation); user accepts any
-   combination or none
+5. Optionally, the user enables Codex delivery with `leiter codex install`, and accepts the `Bash(leiter:*)` and
+   soul-file permissions if desired (see Permissions)
 
 ### Normal Session (After Setup)
 
-1. Session starts → the agent has the soul from the managed `CLAUDE.md` block. If hooks are configured, the SessionStart
-   hook also fires → `leiter hook context` outputs soul + instructions (a harmless second copy this revision) and
-   `leiter hook nudge` outputs a distillation reminder if stale logs exist
-2. Normal session proceeds
-3. Session ends → if the SessionEnd hook is configured, `leiter hook session-end` copies the transcript to
-   `~/.leiter/logs/`. Either way, `leiter soul distill`'s external scan reads the live transcript from
-   `~/.claude/projects/` directly
+1. Session starts → the harness reads the managed `CLAUDE.md` block, so the agent has the soul and leiter instructions.
+   No hook fires
+2. Normal session proceeds; the transcript is written live into `~/.claude/projects/` by Claude Code itself
+3. Session ends → nothing leiter-specific happens. When distillation next runs, `leiter distill`'s external scan reads
+   the transcript in place from `~/.claude/projects/` — there is no copy step
 
 ### User Asks the Agent to Learn Something
 
@@ -1361,9 +1440,38 @@ soul file path. Empty `permissions.allow` arrays and empty `permissions` objects
    can run from cron or a systemd timer on whatever cadence keeps sessions distilled inside Claude Code's retention
    window
 
+### Migration from Hook-Based Setups
+
+This is the one-time path for a box set up before 0.9.0. It is driven entirely by the setup-epoch mechanism and the
+agent — leiter never edits `settings.json` itself.
+
+1. The user upgrades the `leiter` binary. It carries `setup_hard_epoch = 2`, which no longer matches the box's recorded
+   `setup_hard_epoch = 1` (or its missing `state.toml` with a frontmatter soul)
+2. At the next session start, the still-configured SessionStart hook runs the new binary's `leiter hook context`
+   tombstone. The hard mismatch makes it output the migration message (verbatim, strong-compliance framing) instead of
+   the soul, telling the user to run `leiter claude install` — or let the agent run it — then start a new session. The
+   soul is not injected that session (ordinary hard-mismatch behavior). `leiter hook nudge` is silent, so there is no
+   double message, and `leiter hook session-end` keeps archiving transcripts, so nothing is lost however long the user
+   defers
+3. The agent runs `leiter claude install`. It converges deterministically: `state.toml` is built from the soul
+   frontmatter and any `codex-meta.toml`, the soul is rewritten frontmatter-free, the `CLAUDE.md` block is written (and
+   `AGENTS.md` when Codex was enabled), `leiter.toml` is normalized to the `codex` key, and the six old skills collapse
+   to one. Its output then carries the settings.json hook-removal instructions and the behavior-change summary to relay:
+   session-start nudges and auto-distillation are gone, `leiter distill` is the cron-able replacement (with a sample
+   crontab line), and transcript retention is now bounded by Claude Code's `cleanupPeriodDays` (~30-day default), so
+   distill within that window or raise it
+4. The first post-migration `leiter distill` drains the leftover `~/.leiter/logs/` files (those at or after the migrated
+   `last_distilled`) alongside the external scan, deduplicated by session id, then removes the now-empty logs directory
+5. Any old skill invoked against the new binary before migration (`/leiter-distill`, `/leiter-instill`, and the rest)
+   hits the same legacy-aware validation and surfaces the Legacy layout message, so every path funnels to step 3. (Only
+   the Legacy layout message invites the agent to run install itself; the plain hard-mismatch messages, which apply to
+   modern-layout boxes, keep telling the agent to stay away from leiter commands and let the user run install)
+6. The release after 0.9.0 deletes all the tombstoned subcommands (`hook *` and both `agent-*-instructions`); by then no
+   box has hooks left for them to serve
+
 ## Non-Goals (For Now)
 
 - Multiple user profiles or project-specific souls
-- Automatic distillation by default (opt-in via setup)
+- Automatic distillation by default (the user opts in by scheduling `leiter distill` from cron or a timer)
 - Soul backup
 - API key management or direct Claude API calls from the CLI

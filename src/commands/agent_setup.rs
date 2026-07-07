@@ -9,14 +9,16 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use tracing::info;
+use serde_json::Value;
+use tracing::{debug, info, warn};
 
-use crate::config::load_config_best_effort;
+use crate::config::{LeiterConfig, load_config_best_effort};
 use crate::paths;
-use crate::state::LeiterState;
+use crate::state::{LeiterState, migrate_legacy_layout};
 use crate::sync::{SyncHomes, sync_blocks};
 use crate::templates::{
     LEGACY_SKILL_DIRS, PLUGIN_SENTINEL, SETUP_SOFT_EPOCH, SKILL_CONTENTS, SOUL_TEMPLATE,
+    legacy_hook_migration_output,
 };
 use crate::validation::{ValidationStatus, load_and_check_state, validate_state};
 
@@ -33,8 +35,6 @@ pub fn run(
     codex_home: &Path,
     out: &mut impl Write,
 ) -> Result<()> {
-    init_filesystem(state_dir)?;
-
     if !claude_home.is_dir() {
         bail!(
             "`{}` does not exist. Is Claude Code installed?",
@@ -42,14 +42,17 @@ pub fn run(
         );
     }
 
-    write_plugin_files(claude_home)?;
-    remove_legacy_skill_dirs(claude_home)?;
+    let init_outcome = init_filesystem(state_dir)?;
 
     let (mut state, soul) = match validate_state(state_dir) {
-        ValidationStatus::Compatible { state, soul, .. } => (state, soul),
+        ValidationStatus::Compatible { state, soul } => (state, soul),
         ValidationStatus::Incompatible(reason) => bail!("{}", reason.user_message()),
     };
     let config = load_config_best_effort(state_dir);
+
+    write_plugin_files(claude_home)?;
+    remove_legacy_skill_dirs(claude_home)?;
+
     // Install syncs with force on purpose (SPEC install step 6): it is the
     // explicit converge command the user just chose to run, and the clobber
     // guard would otherwise dead-end the documented corrupt-state recovery
@@ -86,15 +89,32 @@ pub fn run(
         out,
         "The soul is now delivered inline through managed blocks, so soul injection no longer depends on a hook."
     )?;
-    writeln!(
-        out,
-        "The old /leiter-setup skill is gone. If you still want the transitional session-logging and nudge hooks, run `leiter claude agent-setup-instructions` directly."
-    )?;
+    if init_outcome.migrated_legacy_layout {
+        if init_outcome.normalized_legacy_config {
+            writeln!(
+                out,
+                "Migrated the legacy layout to hookless operation: stripped soul frontmatter, wrote state.toml, absorbed codex-meta.toml when present, and normalized leiter.toml to the `codex` key."
+            )?;
+        } else {
+            writeln!(
+                out,
+                "Migrated the legacy layout to hookless operation: stripped soul frontmatter, wrote state.toml, and absorbed codex-meta.toml when present."
+            )?;
+        }
+    }
+    if settings_contains_leiter_hook(claude_home) {
+        write!(out, "{}", legacy_hook_migration_output())?;
+    }
 
     Ok(())
 }
 
-/// Output the agent-setup instructions (hooks and permissions).
+/// Output the retired agent-setup tombstone.
+///
+/// The command still validates state so pre-hookless boxes get the migration
+/// message instead of a generic unknown-command failure. On a healthy setup it
+/// emits no hook configuration; the managed `CLAUDE.md` block is now the soul
+/// delivery path.
 ///
 /// Used by `leiter claude agent-setup-instructions`.
 pub fn agent_setup_instructions(state_dir: &Path, out: &mut impl Write) -> Result<()> {
@@ -110,16 +130,31 @@ pub fn agent_setup_instructions(state_dir: &Path, out: &mut impl Write) -> Resul
     Ok(())
 }
 
-/// Deterministic filesystem initialization: create dirs and seed soul file.
-fn init_filesystem(state_dir: &Path) -> Result<()> {
-    let logs_dir = paths::logs_dir(state_dir);
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct InitOutcome {
+    migrated_legacy_layout: bool,
+    normalized_legacy_config: bool,
+}
+
+/// Deterministic filesystem initialization: create dirs and converge soul/state.
+///
+/// The both-exist legacy check is crash-resume logic, not normal validation.
+/// `state.toml` is the migration routine's first mutation, and that write is
+/// exactly what moves a torn migration into the (soul present, state present)
+/// quadrant. Re-running the migration there is what strips the remaining
+/// frontmatter and deletes leftover `codex-meta.toml`; otherwise install would
+/// verify the already-current state and keep leaking frontmatter forever.
+fn init_filesystem(state_dir: &Path) -> Result<InitOutcome> {
     let soul_path = paths::soul_path(state_dir);
     let state_path = paths::state_path(state_dir);
 
+    // Deliberately no logs/ creation: the directory is a hook-era artifact.
+    // Nothing writes there on a hookless box (the SessionEnd tombstone
+    // recreates it on demand for still-hooked migrating boxes), and distill
+    // removes it once drained — install recreating it would resurrect an
+    // empty directory forever.
     fs::create_dir_all(state_dir)
         .with_context(|| format!("failed to create {}", state_dir.display()))?;
-    fs::create_dir_all(&logs_dir)
-        .with_context(|| format!("failed to create {}", logs_dir.display()))?;
 
     let soul_exists = soul_path.exists();
     let state_exists = state_path.exists();
@@ -139,6 +174,7 @@ fn init_filesystem(state_dir: &Path) -> Result<()> {
                 .with_context(|| format!("failed to write {}", soul_path.display()))?;
             info!("created {}", state_path.display());
             info!("created {}", soul_path.display());
+            Ok(InitOutcome::default())
         }
         (true, false) => {
             // Two very different situations look like (soul, no state): a
@@ -147,29 +183,45 @@ fn init_filesystem(state_dir: &Path) -> Result<()> {
             // (user deleted state.toml; soul is already frontmatter-free).
             // The frontmatter is the discriminator.
             if soul_has_legacy_frontmatter(&soul_path)? {
-                bail!(
-                    "existing leiter layout predates state.toml. Automatic migration is not wired into this revision yet; leave {} in place and upgrade with a later leiter revision that performs the migration.",
-                    soul_path.display()
+                migrate_legacy_layout(state_dir)?;
+                let normalized_legacy_config = normalize_legacy_config_if_present(state_dir);
+                verify_epochs(state_dir)?;
+                info!("migrated legacy layout in {}", state_dir.display());
+                Ok(InitOutcome {
+                    migrated_legacy_layout: true,
+                    normalized_legacy_config,
+                })
+            } else {
+                LeiterState::fresh().save(&state_path)?;
+                info!(
+                    "re-initialized {} (existing soul kept; distillation watermarks reset)",
+                    state_path.display()
                 );
+                Ok(InitOutcome::default())
             }
-            LeiterState::fresh().save(&state_path)?;
-            info!(
-                "re-initialized {} (existing soul kept; distillation watermarks reset)",
-                state_path.display()
-            );
         }
         (false, true) => {
             verify_epochs(state_dir)?;
             fs::write(&soul_path, SOUL_TEMPLATE)
                 .with_context(|| format!("failed to write {}", soul_path.display()))?;
             info!("created {}", soul_path.display());
+            Ok(InitOutcome::default())
         }
         (true, true) => {
+            if soul_has_legacy_frontmatter(&soul_path)? {
+                migrate_legacy_layout(state_dir)?;
+                let normalized_legacy_config = normalize_legacy_config_if_present(state_dir);
+                verify_epochs(state_dir)?;
+                info!("resumed legacy layout migration in {}", state_dir.display());
+                return Ok(InitOutcome {
+                    migrated_legacy_layout: true,
+                    normalized_legacy_config,
+                });
+            }
             verify_epochs(state_dir)?;
+            Ok(InitOutcome::default())
         }
     }
-
-    Ok(())
 }
 
 /// Detect the pre-state.toml layout: a soul that still opens with a YAML
@@ -182,6 +234,83 @@ fn soul_has_legacy_frontmatter(soul_path: &Path) -> Result<bool> {
     let raw = fs::read_to_string(soul_path)
         .with_context(|| format!("failed to read {}", soul_path.display()))?;
     Ok(crate::frontmatter::parse_soul(&raw).is_ok())
+}
+
+/// Rewrite an existing config through `LeiterConfig` so legacy aliases collapse.
+///
+/// This is deliberately best-effort during layout migration. A bad config
+/// should not strand a one-way state/soul migration; later commands already
+/// warn and fall back to defaults when `leiter.toml` cannot be loaded.
+fn normalize_legacy_config_if_present(state_dir: &Path) -> bool {
+    let config_path = paths::leiter_config_path(state_dir);
+    if !config_path.exists() {
+        return false;
+    }
+    let config = match LeiterConfig::load(&config_path) {
+        Ok(config) => config,
+        Err(err) => {
+            warn!(
+                "failed to normalize legacy config at {}, continuing install: {err}",
+                config_path.display()
+            );
+            return false;
+        }
+    };
+    if let Err(err) = config.save(&config_path) {
+        warn!(
+            "failed to normalize legacy config at {}, continuing install: {err}",
+            config_path.display()
+        );
+        return false;
+    }
+    info!("normalized {}", config_path.display());
+    true
+}
+
+/// Return true when Claude Code settings still contain retired leiter hooks.
+///
+/// This inspection is deliberately read-only and fail-open: install must never
+/// fail because `settings.json` is missing, unreadable, or in the middle of a
+/// user edit. In those cases it behaves as though no hooks were found.
+fn settings_contains_leiter_hook(claude_home: &Path) -> bool {
+    let settings_path = claude_home.join("settings.json");
+    let raw = match fs::read_to_string(&settings_path) {
+        Ok(raw) => raw,
+        Err(err) => {
+            debug!(
+                "skipping settings hook inspection for {}: {err}",
+                settings_path.display()
+            );
+            return false;
+        }
+    };
+    let value: Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(err) => {
+            debug!(
+                "skipping settings hook inspection for {}: {err}",
+                settings_path.display()
+            );
+            return false;
+        }
+    };
+    value
+        .get("hooks")
+        .is_some_and(value_contains_leiter_hook_command)
+}
+
+fn value_contains_leiter_hook_command(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => map.iter().any(|(key, value)| {
+            (key == "command"
+                && value
+                    .as_str()
+                    .is_some_and(|command| command.contains("leiter hook")))
+                || value_contains_leiter_hook_command(value)
+        }),
+        Value::Array(values) => values.iter().any(value_contains_leiter_hook_command),
+        _ => false,
+    }
 }
 
 /// Write skill files to the Claude Code home directory.
@@ -257,6 +386,7 @@ fn verify_epochs(state_dir: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::LeiterConfig;
+    use crate::frontmatter::{SoulFrontmatter, serialize_soul};
     use crate::state::LeiterState;
     use crate::templates::{SETUP_HARD_EPOCH, SKILL_CONTENTS, SOUL_TEMPLATE_VERSION};
     use chrono::{SubsecRound, TimeZone, Utc};
@@ -284,7 +414,10 @@ mod tests {
         let _claude_tmp = run_setup_with_claude_home(dir);
 
         assert!(dir.is_dir());
-        assert!(paths::logs_dir(dir).is_dir());
+        assert!(
+            !paths::logs_dir(dir).exists(),
+            "logs/ is a hook-era artifact; a fresh hookless install must not create it"
+        );
         assert!(paths::soul_path(dir).is_file());
     }
 
@@ -443,18 +576,349 @@ mod tests {
     }
 
     #[test]
-    fn legacy_frontmatter_soul_without_state_reports_legacy_layout() {
+    fn legacy_frontmatter_soul_without_state_migrates() {
         let tmp = tempfile::tempdir().unwrap();
         let claude_tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path()).unwrap();
-        // A legacy soul is discriminated by its YAML frontmatter.
         let legacy_soul = format!(
             "---\nlast_distilled: 2026-01-01T00:00:00Z\nsoul_version: 1\n---\n{SOUL_TEMPLATE}"
         );
         fs::write(paths::soul_path(tmp.path()), legacy_soul).unwrap();
 
-        let err = run_setup_result(tmp.path(), claude_tmp.path()).unwrap_err();
-        assert!(err.to_string().contains("predates state.toml"));
+        run_setup_result(tmp.path(), claude_tmp.path()).unwrap();
+
+        let state = LeiterState::load(&paths::state_path(tmp.path())).unwrap();
+        assert_eq!(state.soul_version, 1);
+        assert_eq!(state.setup_soft_epoch, SETUP_SOFT_EPOCH);
+        assert_eq!(state.setup_hard_epoch, SETUP_HARD_EPOCH);
+        assert_eq!(
+            fs::read_to_string(paths::soul_path(tmp.path())).unwrap(),
+            SOUL_TEMPLATE
+        );
+    }
+
+    #[test]
+    fn legacy_install_migrates_layout_and_reports_settings_cleanup() {
+        let state_tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        let codex_tmp = tempfile::tempdir().unwrap();
+        let state_dir = state_tmp.path();
+        let claude_home = claude_tmp.path();
+        let codex_home = codex_tmp.path();
+        let frontmatter = SoulFrontmatter {
+            last_distilled: Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap(),
+            soul_version: 1,
+            setup_soft_epoch: 1,
+            setup_hard_epoch: 1,
+        };
+        let soul_body = "# Legacy Soul\n\n- Preserve this exact body.\n";
+        fs::write(
+            paths::soul_path(state_dir),
+            serialize_soul(&frontmatter, soul_body),
+        )
+        .unwrap();
+        fs::write(
+            paths::codex_meta_path(state_dir),
+            r#"version = 1
+
+[committed."codex-sess"]
+path = "/tmp/codex.jsonl"
+size_bytes = 12
+mtime_utc = "2026-03-07T18:00:00Z"
+session_timestamp_utc = "2026-03-07T17:59:00Z"
+latest_event_timestamp_utc = "2026-03-07T18:00:00Z"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            paths::leiter_config_path(state_dir),
+            "enable_codex_experimental = true\n",
+        )
+        .unwrap();
+        let settings = r#"{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "leiter hook context"
+          },
+          {
+            "type": "command",
+            "command": "echo not leiter"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(leiter:*)",
+      "Read(~/.leiter/soul.md)"
+    ]
+  }
+}
+"#;
+        fs::write(claude_home.join("settings.json"), settings).unwrap();
+
+        let mut out = Vec::new();
+        run(state_dir, claude_home, codex_home, &mut out).unwrap();
+        let output = String::from_utf8(out).unwrap();
+
+        let state = LeiterState::load(&paths::state_path(state_dir)).unwrap();
+        assert_eq!(state.setup_soft_epoch, SETUP_SOFT_EPOCH);
+        assert_eq!(state.setup_hard_epoch, SETUP_HARD_EPOCH);
+        assert_eq!(state.soul_version, frontmatter.soul_version);
+        assert_eq!(state.last_distilled, frontmatter.last_distilled);
+        assert!(state.codex.committed.contains_key("codex-sess"));
+        assert_eq!(
+            fs::read_to_string(paths::soul_path(state_dir)).unwrap(),
+            soul_body
+        );
+        assert!(!paths::codex_meta_path(state_dir).exists());
+
+        let config = fs::read_to_string(paths::leiter_config_path(state_dir)).unwrap();
+        assert!(config.contains("codex = true"));
+        assert!(!config.contains("enable_codex_experimental"));
+        assert!(
+            fs::read_to_string(paths::claude_md_path(claude_home))
+                .unwrap()
+                .contains("# Legacy Soul")
+        );
+        assert!(
+            fs::read_to_string(paths::agents_md_path(codex_home))
+                .unwrap()
+                .contains("# Legacy Soul")
+        );
+        assert!(output.contains("Migrated the legacy layout"));
+        assert!(output.contains("Legacy hook cleanup required"));
+        assert!(output.contains("Keep `Bash(leiter:*)`"));
+        assert!(output.contains("0 */6 * * * leiter distill"));
+        assert!(output.contains("cleanupPeriodDays"));
+        assert_eq!(
+            fs::read_to_string(claude_home.join("settings.json")).unwrap(),
+            settings
+        );
+    }
+
+    #[test]
+    fn install_without_settings_hooks_omits_migration_payload() {
+        let state_tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        let codex_tmp = tempfile::tempdir().unwrap();
+
+        let mut out = Vec::new();
+        run(
+            state_tmp.path(),
+            claude_tmp.path(),
+            codex_tmp.path(),
+            &mut out,
+        )
+        .unwrap();
+        let output = String::from_utf8(out).unwrap();
+
+        assert!(!output.contains("Legacy hook cleanup required"));
+        assert!(!output.contains("Behavior change to relay"));
+    }
+
+    #[test]
+    fn install_with_malformed_settings_omits_migration_payload() {
+        let state_tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        let codex_tmp = tempfile::tempdir().unwrap();
+        fs::write(claude_tmp.path().join("settings.json"), "{ not json").unwrap();
+
+        let mut out = Vec::new();
+        run(
+            state_tmp.path(),
+            claude_tmp.path(),
+            codex_tmp.path(),
+            &mut out,
+        )
+        .unwrap();
+        let output = String::from_utf8(out).unwrap();
+
+        assert!(!output.contains("Legacy hook cleanup required"));
+        assert!(!output.contains("Behavior change to relay"));
+    }
+
+    #[test]
+    fn install_with_decoy_settings_hook_omits_migration_payload() {
+        let state_tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        let codex_tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            claude_tmp.path().join("settings.json"),
+            r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"leiter-hook context"}]}]}}"#,
+        )
+        .unwrap();
+
+        let mut out = Vec::new();
+        run(
+            state_tmp.path(),
+            claude_tmp.path(),
+            codex_tmp.path(),
+            &mut out,
+        )
+        .unwrap();
+        let output = String::from_utf8(out).unwrap();
+
+        assert!(!output.contains("Legacy hook cleanup required"));
+        assert!(!output.contains("Behavior change to relay"));
+    }
+
+    #[test]
+    fn install_with_settings_without_hooks_omits_migration_payload() {
+        let state_tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        let codex_tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            claude_tmp.path().join("settings.json"),
+            r#"{"permissions":{"allow":["Bash(leiter:*)"]}}"#,
+        )
+        .unwrap();
+
+        let mut out = Vec::new();
+        run(
+            state_tmp.path(),
+            claude_tmp.path(),
+            codex_tmp.path(),
+            &mut out,
+        )
+        .unwrap();
+        let output = String::from_utf8(out).unwrap();
+
+        assert!(!output.contains("Legacy hook cleanup required"));
+        assert!(!output.contains("Behavior change to relay"));
+    }
+
+    #[test]
+    fn install_resumes_torn_legacy_migration_in_both_exist_quadrant() {
+        let state_tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        let codex_tmp = tempfile::tempdir().unwrap();
+        let state_dir = state_tmp.path();
+        let frontmatter = SoulFrontmatter {
+            last_distilled: Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap(),
+            soul_version: 1,
+            setup_soft_epoch: 1,
+            setup_hard_epoch: 1,
+        };
+        let soul_body = "# Legacy Soul\n\n- Preserve this exact body.\n";
+        fs::write(
+            paths::soul_path(state_dir),
+            serialize_soul(&frontmatter, soul_body),
+        )
+        .unwrap();
+        let mut state = LeiterState::fresh();
+        state.last_distilled = frontmatter.last_distilled;
+        state.soul_version = frontmatter.soul_version;
+        state.save(&paths::state_path(state_dir)).unwrap();
+        fs::write(
+            paths::codex_meta_path(state_dir),
+            r#"version = 1
+
+[committed."leftover-codex-sess"]
+path = "/tmp/codex.jsonl"
+size_bytes = 12
+mtime_utc = "2026-03-07T18:00:00Z"
+session_timestamp_utc = "2026-03-07T17:59:00Z"
+latest_event_timestamp_utc = "2026-03-07T18:00:00Z"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            paths::leiter_config_path(state_dir),
+            "enable_codex_experimental = true\n",
+        )
+        .unwrap();
+
+        let mut out = Vec::new();
+        run(state_dir, claude_tmp.path(), codex_tmp.path(), &mut out).unwrap();
+        let output = String::from_utf8(out).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(paths::soul_path(state_dir)).unwrap(),
+            soul_body
+        );
+        assert!(!paths::codex_meta_path(state_dir).exists());
+        let config = fs::read_to_string(paths::leiter_config_path(state_dir)).unwrap();
+        assert!(config.contains("codex = true"));
+        assert!(!config.contains("enable_codex_experimental"));
+        assert!(output.contains("Migrated the legacy layout"));
+        assert!(output.contains("normalized leiter.toml"));
+
+        let mut second = Vec::new();
+        run(state_dir, claude_tmp.path(), codex_tmp.path(), &mut second).unwrap();
+        let second_output = String::from_utf8(second).unwrap();
+
+        assert!(!second_output.contains("Migrated the legacy layout"));
+        assert!(!second_output.contains("normalized leiter.toml"));
+    }
+
+    #[test]
+    fn legacy_config_normalization_failure_does_not_fail_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        let state_dir = tmp.path();
+        let frontmatter = SoulFrontmatter {
+            last_distilled: Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap(),
+            soul_version: 1,
+            setup_soft_epoch: 1,
+            setup_hard_epoch: 1,
+        };
+        fs::write(
+            paths::soul_path(state_dir),
+            serialize_soul(&frontmatter, "legacy body\n"),
+        )
+        .unwrap();
+        fs::write(paths::leiter_config_path(state_dir), "codex = ???\n").unwrap();
+
+        let mut out = Vec::new();
+        run(state_dir, claude_tmp.path(), tmp.path(), &mut out).unwrap();
+        let output = String::from_utf8(out).unwrap();
+
+        assert!(output.contains("Migrated the legacy layout"));
+        assert!(!output.contains("normalized leiter.toml"));
+        assert_eq!(
+            fs::read_to_string(paths::leiter_config_path(state_dir)).unwrap(),
+            "codex = ???\n"
+        );
+    }
+
+    #[test]
+    fn install_post_migration_is_idempotent_without_migration_message() {
+        let state_tmp = tempfile::tempdir().unwrap();
+        let claude_tmp = tempfile::tempdir().unwrap();
+        let codex_tmp = tempfile::tempdir().unwrap();
+        let state_dir = state_tmp.path();
+        let frontmatter = SoulFrontmatter {
+            last_distilled: Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap(),
+            soul_version: 1,
+            setup_soft_epoch: 1,
+            setup_hard_epoch: 1,
+        };
+        fs::write(
+            paths::soul_path(state_dir),
+            serialize_soul(&frontmatter, "legacy body\n"),
+        )
+        .unwrap();
+
+        run(
+            state_dir,
+            claude_tmp.path(),
+            codex_tmp.path(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let mut second = Vec::new();
+        run(state_dir, claude_tmp.path(), codex_tmp.path(), &mut second).unwrap();
+        let output = String::from_utf8(second).unwrap();
+
+        let state = LeiterState::load(&paths::state_path(state_dir)).unwrap();
+        assert_eq!(state.setup_hard_epoch, SETUP_HARD_EPOCH);
+        assert!(!output.contains("Migrated the legacy layout"));
     }
 
     /// The corrupt-state recovery path: the CLI's own error message tells the
@@ -505,18 +969,19 @@ mod tests {
         assert_eq!(state.last_distilled, known_last_distilled);
     }
 
+    /// A rerun must not resurrect the hook-era logs directory: distill
+    /// removes it once drained, and install recreating it would bring an
+    /// empty artifact back on every converge.
     #[test]
-    fn running_twice_still_creates_missing_directories() {
+    fn rerun_does_not_resurrect_logs_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let claude_tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         run_setup(dir, claude_tmp.path());
 
-        fs::remove_dir(paths::logs_dir(dir)).unwrap();
-
         run_setup(dir, claude_tmp.path());
 
-        assert!(paths::logs_dir(dir).is_dir());
+        assert!(!paths::logs_dir(dir).exists());
     }
 
     #[test]
@@ -532,6 +997,29 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let err = run_setup_result(tmp.path(), Path::new("/nonexistent/claude")).unwrap_err();
         assert!(err.to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn missing_claude_home_does_not_migrate_legacy_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state_dir = tmp.path();
+        let frontmatter = SoulFrontmatter {
+            last_distilled: Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap(),
+            soul_version: 1,
+            setup_soft_epoch: 1,
+            setup_hard_epoch: 1,
+        };
+        let legacy_soul = serialize_soul(&frontmatter, "legacy body\n");
+        fs::write(paths::soul_path(state_dir), &legacy_soul).unwrap();
+
+        let err = run_setup_result(state_dir, &state_dir.join("missing-claude")).unwrap_err();
+
+        assert!(err.to_string().contains("does not exist"));
+        assert!(!paths::state_path(state_dir).exists());
+        assert_eq!(
+            fs::read_to_string(paths::soul_path(state_dir)).unwrap(),
+            legacy_soul
+        );
     }
 
     #[test]
@@ -676,7 +1164,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_setup_instructions_outputs_hook_commands() {
+    fn agent_setup_instructions_outputs_tombstone_note() {
         let tmp = tempfile::tempdir().unwrap();
         let claude_tmp = tempfile::tempdir().unwrap();
         run_setup(tmp.path(), claude_tmp.path());
@@ -684,8 +1172,9 @@ mod tests {
         let mut out = Vec::new();
         agent_setup_instructions(tmp.path(), &mut out).unwrap();
         let output = String::from_utf8(out).unwrap();
-        assert!(output.contains("leiter hook context"));
-        assert!(output.contains("leiter hook session-end"));
+        assert!(output.contains("hookless"));
+        assert!(output.contains("leiter claude install"));
+        assert!(!output.contains("leiter hook context"));
     }
 
     #[test]

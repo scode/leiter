@@ -154,6 +154,10 @@ mod tests {
         let claude_tmp = tempfile::tempdir().unwrap();
         setup_plugin_files(claude_tmp.path(), state_tmp.path());
 
+        // Plant a legacy logs dir to prove uninstall leaves ~/.leiter alone
+        // (fresh installs no longer create it, so the fixture does).
+        fs::create_dir_all(paths::logs_dir(state_tmp.path())).unwrap();
+
         run_uninstall(state_tmp.path(), claude_tmp.path()).unwrap();
 
         assert!(paths::soul_path(state_tmp.path()).is_file());
@@ -334,9 +338,9 @@ mod tests {
         let mut out = Vec::new();
         agent_teardown_instructions(state_tmp.path(), &mut out).unwrap();
         let output = String::from_utf8(out).unwrap();
-        assert!(output.contains("leiter hook context"));
-        assert!(output.contains("leiter hook nudge"));
-        assert!(output.contains("leiter hook session-end"));
+        assert!(output.contains("command` field contains `leiter hook`"));
+        assert!(output.contains("Keep `Bash(leiter:*)`"));
+        assert!(!output.contains("Remove them"));
     }
 
     #[test]

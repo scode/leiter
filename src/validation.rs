@@ -8,9 +8,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::frontmatter::parse_soul;
 use crate::paths;
 use crate::state::{LeiterState, StateLoadError};
-use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
+use crate::templates::SETUP_HARD_EPOCH;
 
 /// Result of validating `state.toml` and `soul.md` against the current binary.
 ///
@@ -20,14 +21,12 @@ use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
 /// not matter in leiter's CLI workload.
 #[allow(clippy::large_enum_variant)]
 pub enum ValidationStatus {
-    /// State and soul are compatible. May include a soft epoch nudge.
+    /// State and soul are compatible with this binary.
     Compatible {
         /// Loaded leiter-managed state.
         state: LeiterState,
         /// Full markdown contents of `soul.md`.
         soul: String,
-        /// Present when soft epochs do not match. This is advisory only.
-        soft_nudge: Option<String>,
     },
     /// State or soul cannot be used by this binary.
     Incompatible(ValidationIncompatibility),
@@ -35,6 +34,8 @@ pub enum ValidationStatus {
 
 /// Why validation failed before the command could safely run.
 pub enum ValidationIncompatibility {
+    /// A pre-0.9.0 soul still carries frontmatter but no `state.toml` exists.
+    LegacyLayout { soul_path: PathBuf },
     /// `state.toml` is missing, so leiter has not been initialized.
     StateNotFound,
     /// `soul.md` is missing, so leiter has not been initialized.
@@ -60,6 +61,18 @@ impl ValidationIncompatibility {
     /// user.
     pub fn agent_message(&self) -> String {
         match self {
+            Self::LegacyLayout { soul_path } => format!(
+                "ACTION REQUIRED: Leiter found the legacy frontmatter layout at {}. \
+                 Tell the user EXACTLY this (word for word): \
+                 \"Leiter has moved to hookless operation: it no longer uses hooks, \
+                 and its six skills are replaced by a single consolidated skill. \
+                 Please run `leiter claude install` in your terminal \u{2014} or let me \
+                 run it now \u{2014} and follow its instructions, then start a new session.\" \
+                 You MAY run `leiter claude install` yourself if the user approves, \
+                 then follow that command's output. Do not attempt any other leiter \
+                 command for the remainder of this session.",
+                soul_path.display()
+            ),
             Self::SetupOutdated {
                 state_epoch,
                 binary_epoch,
@@ -129,6 +142,9 @@ impl ValidationIncompatibility {
     /// Human-facing error message for direct CLI failures.
     pub fn user_message(&self) -> String {
         match self {
+            Self::LegacyLayout { .. } => {
+                "leiter is using the legacy hook-based layout. Run `leiter claude install` to migrate, then start a new session.".to_string()
+            }
             Self::SetupOutdated {
                 state_epoch,
                 binary_epoch,
@@ -227,6 +243,34 @@ pub fn load_and_check_state(state_dir: &Path) -> Result<LeiterState, ValidationI
 pub fn validate_state(state_dir: &Path) -> ValidationStatus {
     let state = match load_and_check_state(state_dir) {
         Ok(state) => state,
+        Err(ValidationIncompatibility::StateNotFound) => {
+            let soul_path = paths::soul_path(state_dir);
+            match fs::read_to_string(&soul_path) {
+                Ok(raw) if parse_soul(&raw).is_ok() => {
+                    return ValidationStatus::Incompatible(
+                        ValidationIncompatibility::LegacyLayout { soul_path },
+                    );
+                }
+                Ok(_) => {
+                    return ValidationStatus::Incompatible(
+                        ValidationIncompatibility::StateNotFound,
+                    );
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return ValidationStatus::Incompatible(
+                        ValidationIncompatibility::StateNotFound,
+                    );
+                }
+                Err(e) => {
+                    return ValidationStatus::Incompatible(
+                        ValidationIncompatibility::SoulUnreadable {
+                            soul_path,
+                            error: e.to_string(),
+                        },
+                    );
+                }
+            }
+        }
         Err(reason) => return ValidationStatus::Incompatible(reason),
     };
 
@@ -244,33 +288,7 @@ pub fn validate_state(state_dir: &Path) -> ValidationStatus {
         }
     };
 
-    let soft_nudge = if state.setup_soft_epoch < SETUP_SOFT_EPOCH {
-        Some(
-            "Briefly mention to the user \
-             that a newer version of leiter has optional improvements available. \
-             There are no breaking changes, so there is no rush. \
-             Suggest they run `leiter claude install` when convenient to pick up \
-             the new features. Keep it to one short sentence."
-                .to_string(),
-        )
-    } else if state.setup_soft_epoch > SETUP_SOFT_EPOCH {
-        Some(
-            "Briefly mention to the user \
-             that the leiter binary is a bit behind the current setup. \
-             There are no breaking changes, so there is no rush. \
-             Suggest they upgrade leiter when convenient. \
-             Keep it to one short sentence."
-                .to_string(),
-        )
-    } else {
-        None
-    };
-
-    ValidationStatus::Compatible {
-        state,
-        soul,
-        soft_nudge,
-    }
+    ValidationStatus::Compatible { state, soul }
 }
 
 fn corrupt_state_user_text(state_path: &Path) -> String {
@@ -289,7 +307,10 @@ mod tests {
     #[test]
     fn epoch_constants_match_spec() {
         assert_eq!(SETUP_SOFT_EPOCH, 2);
-        assert_eq!(SETUP_HARD_EPOCH, 1);
+        assert_eq!(
+            SETUP_HARD_EPOCH, 2,
+            "hard epoch 2 is the hookless migration trigger; keep this guard in sync with install's legacy migration path"
+        );
     }
 
     #[test]
@@ -299,6 +320,64 @@ mod tests {
             ValidationStatus::Incompatible(ValidationIncompatibility::StateNotFound) => {}
             other => panic!("expected StateNotFound, got {}", status_label(&other)),
         }
+    }
+
+    #[test]
+    fn missing_state_with_frontmatter_soul_returns_legacy_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let soul_path = paths::soul_path(tmp.path());
+        std::fs::write(
+            &soul_path,
+            "---\nlast_distilled: 2026-01-01T00:00:00Z\nsoul_version: 1\nsetup_soft_epoch: 1\nsetup_hard_epoch: 1\n---\nbody\n",
+        )
+        .unwrap();
+
+        match validate_state(tmp.path()) {
+            ValidationStatus::Incompatible(ValidationIncompatibility::LegacyLayout {
+                soul_path: path,
+            }) => assert_eq!(path, soul_path),
+            other => panic!("expected LegacyLayout, got {}", status_label(&other)),
+        }
+    }
+
+    #[test]
+    fn missing_state_with_frontmatter_free_soul_returns_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(paths::soul_path(tmp.path()), "# Plain Soul\n").unwrap();
+
+        match validate_state(tmp.path()) {
+            ValidationStatus::Incompatible(ValidationIncompatibility::StateNotFound) => {}
+            other => panic!("expected StateNotFound, got {}", status_label(&other)),
+        }
+    }
+
+    #[test]
+    fn missing_state_with_soul_directory_returns_soul_unreadable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let soul_path = paths::soul_path(tmp.path());
+        std::fs::create_dir(&soul_path).unwrap();
+
+        match validate_state(tmp.path()) {
+            ValidationStatus::Incompatible(ValidationIncompatibility::SoulUnreadable {
+                soul_path: path,
+                ..
+            }) => assert_eq!(path, soul_path),
+            other => panic!("expected SoulUnreadable, got {}", status_label(&other)),
+        }
+    }
+
+    #[test]
+    fn legacy_layout_agent_message_contains_verbatim_migration_text() {
+        let msg = ValidationIncompatibility::LegacyLayout {
+            soul_path: PathBuf::from("/tmp/leiter/soul.md"),
+        }
+        .agent_message();
+        assert!(msg.contains("ACTION REQUIRED"));
+        assert!(msg.contains("Tell the user EXACTLY this (word for word)"));
+        assert!(msg.contains("Leiter has moved to hookless operation: it no longer uses hooks, and its six skills are replaced by a single consolidated skill. Please run `leiter claude install` in your terminal \u{2014} or let me run it now \u{2014} and follow its instructions, then start a new session."));
+        assert!(msg.contains("MAY run `leiter claude install`"));
+        assert!(msg.contains("Do not attempt any other leiter command"));
+        assert!(!msg.contains("Do not attempt to use leiter commands"));
     }
 
     #[test]
@@ -388,37 +467,7 @@ mod tests {
     fn matching_epochs_returns_compatible() {
         let tmp = setup_state_dir();
         match validate_state(tmp.path()) {
-            ValidationStatus::Compatible { soft_nudge, .. } => {
-                assert!(soft_nudge.is_none());
-            }
-            other => panic!("expected Compatible, got {}", status_label(&other)),
-        }
-    }
-
-    #[test]
-    fn soft_epoch_lower_returns_nudge_but_compatible() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_state_with_epochs(
-            tmp.path(),
-            SETUP_SOFT_EPOCH.saturating_sub(1),
-            SETUP_HARD_EPOCH,
-        );
-        match validate_state(tmp.path()) {
-            ValidationStatus::Compatible { soft_nudge, .. } => {
-                assert!(soft_nudge.unwrap().contains("optional improvements"));
-            }
-            other => panic!("expected Compatible, got {}", status_label(&other)),
-        }
-    }
-
-    #[test]
-    fn soft_epoch_higher_returns_nudge_but_compatible() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_state_with_epochs(tmp.path(), SETUP_SOFT_EPOCH + 1, SETUP_HARD_EPOCH);
-        match validate_state(tmp.path()) {
-            ValidationStatus::Compatible { soft_nudge, .. } => {
-                assert!(soft_nudge.unwrap().contains("binary is a bit behind"));
-            }
+            ValidationStatus::Compatible { .. } => {}
             other => panic!("expected Compatible, got {}", status_label(&other)),
         }
     }
@@ -462,6 +511,9 @@ mod tests {
     fn status_label(s: &ValidationStatus) -> &'static str {
         match s {
             ValidationStatus::Compatible { .. } => "Compatible",
+            ValidationStatus::Incompatible(ValidationIncompatibility::LegacyLayout { .. }) => {
+                "LegacyLayout"
+            }
             ValidationStatus::Incompatible(ValidationIncompatibility::StateNotFound) => {
                 "StateNotFound"
             }

@@ -33,7 +33,7 @@ pub fn run(
     dry_run: bool,
 ) -> Result<()> {
     if let ValidationStatus::Incompatible(reason) = validate_state(state_dir) {
-        bail!("{}", reason.agent_message());
+        bail!("{}", reason.user_message());
     }
     let config = load_config_best_effort(state_dir);
     let claude_home = paths::resolve_claude_home(None);
@@ -481,6 +481,7 @@ mod tests {
         write_claude_session(tmp.claude.path(), SESSION_ID, "same prompt bytes");
         let obsolete =
             generate_log_filename(Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap(), "old");
+        fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
         fs::write(paths::logs_dir(tmp.path()).join(obsolete), "old").unwrap();
         let script_dir = tempfile::tempdir().unwrap();
         let script = script_dir.path().join("agent.sh");
@@ -847,6 +848,7 @@ mod tests {
         });
         let obsolete =
             generate_log_filename(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(), "old");
+        fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
         fs::write(paths::logs_dir(tmp.path()).join(obsolete), "old").unwrap();
 
         let script_dir = tempfile::tempdir().unwrap();
@@ -879,6 +881,7 @@ mod tests {
         update_state(tmp.path(), |state| {
             state.last_distilled = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
         });
+        fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
         fs::write(
             paths::logs_dir(tmp.path()).join("keep.txt"),
             "not a leiter log",

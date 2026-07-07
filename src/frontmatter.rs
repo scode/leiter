@@ -22,7 +22,7 @@ pub struct SoulFrontmatter {
     /// Tracks which soul template version this file was created from,
     /// so `leiter soul upgrade` can detect drift.
     pub soul_version: u32,
-    /// Setup epoch for soft (nudge) compatibility checks.
+    /// Setup epoch for non-blocking setup advisories.
     /// Defaults to 1 for souls created before epochs were introduced.
     #[serde(default = "default_setup_epoch")]
     pub setup_soft_epoch: u32,
