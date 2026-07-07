@@ -48,8 +48,8 @@ Here's the TLDR of the mechanics:
     background agent after the first turn in a session.
   - Otherwise, or in addition to automatic distillation, you can run `/leiter-distill` at any time to trigger immediate
     distillation.
-    - NOTE: The _current session_ is not capture during distillation because it has not yet been logged. If that is what
-      you want, first `/clear` or exit claude and resume the session.
+    - NOTE: The current session is only included once Claude Code has written a transcript for it on disk. If you do not
+      see it in distillation output yet, first `/clear` or exit Claude and resume the session.
 
 See [docs/how-it-works.md](docs/how-it-works.md) for the full picture.
 

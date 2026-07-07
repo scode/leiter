@@ -189,7 +189,7 @@ mod tests {
     use super::*;
     use crate::state::LeiterState;
     use crate::templates::{SETUP_HARD_EPOCH, SKILL_CONTENTS, SOUL_TEMPLATE_VERSION};
-    use chrono::{TimeZone, Utc};
+    use chrono::{SubsecRound, TimeZone, Utc};
 
     fn run_setup(state_dir: &Path, claude_home: &Path) {
         run(state_dir, claude_home).unwrap();
@@ -228,10 +228,13 @@ mod tests {
     fn fresh_setup_creates_state_with_expected_metadata() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
+        let before = Utc::now().trunc_subsecs(0);
         let _claude_tmp = run_setup_with_claude_home(dir);
+        let after = Utc::now();
 
         let state = LeiterState::load(&paths::state_path(dir)).unwrap();
-        assert_eq!(state.last_distilled, LeiterState::fresh().last_distilled);
+        assert!(state.last_distilled >= before);
+        assert!(state.last_distilled <= after);
         assert_eq!(state.soul_version, SOUL_TEMPLATE_VERSION);
         assert_eq!(state.setup_soft_epoch, SETUP_SOFT_EPOCH);
         assert_eq!(state.setup_hard_epoch, SETUP_HARD_EPOCH);

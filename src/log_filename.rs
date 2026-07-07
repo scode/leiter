@@ -17,6 +17,7 @@ const TIMESTAMP_FORMAT: &str = "%Y%m%dT%H%M%SZ";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedLogEntry {
     pub timestamp: DateTime<Utc>,
+    pub session_id: String,
     pub filename: String,
     pub path: PathBuf,
 }
@@ -77,12 +78,13 @@ pub fn collect_log_entries(logs_dir: &Path) -> std::io::Result<Vec<ParsedLogEntr
             continue;
         };
 
-        let Ok((timestamp, _)) = parse_log_filename(filename_str) else {
+        let Ok((timestamp, session_id)) = parse_log_filename(filename_str) else {
             continue;
         };
 
         parsed.push(ParsedLogEntry {
             timestamp,
+            session_id,
             filename: filename_str.to_owned(),
             path: entry.path(),
         });

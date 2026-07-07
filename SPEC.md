@@ -146,8 +146,12 @@ A missing `state.toml` means leiter is not initialized — the same condition as
 Corrupt state (a `state.toml` that cannot be parsed, or whose `version` is unsupported) is treated equivalently to a
 hard epoch mismatch — it blocks the command entirely, since epochs cannot be verified. Recovery is to delete
 `state.toml` and re-run `leiter claude install`. The tradeoff is deliberate: deleting `state.toml` discards the
-distillation watermarks, so the next distill re-reads already-processed sessions. That is annoying (redundant work,
-possible duplicate learnings the agent must reconcile) but not destructive — no user data is lost.
+distillation watermarks and stamps a fresh `last_distilled` of the re-install time. Because that timestamp is also the
+floor for the external Claude scan, sessions that ran before the re-install are treated as already distilled and are not
+re-read — so recovery does not flood the next distill with redundant history. The cost lands the other way: any session
+that had genuinely not been distilled yet but predates the re-install is skipped (its watermark is gone and its file
+mtime is below the new floor). That is still not destructive — no user data is lost, only a slice of pre-recovery
+learning opportunity — and it mirrors the "learning starts at install" semantics of a fresh install.
 
 `session-end` is exempt from epoch checks. It only copies transcript files to a known directory, and losing session data
 is worse than any epoch-related risk.
@@ -230,7 +234,9 @@ enable_codex_experimental = false
 `leiter soul mark-distilled` must not read Codex rollout files, must not consult the `[codex.*]` tables in
 `~/.leiter/state.toml`, and must not modify those tables' contents. Since `state.toml` is core state (not
 Codex-specific), commands still load and rewrite the file as a whole — the requirement is that a disabled gate leaves
-the `[codex.*]` table contents exactly as they were, and epoch validation and `last_distilled` work unaffected.
+the `[codex.*]` table contents exactly as they were, and epoch validation and `last_distilled` work unaffected. This
+gate is Codex-only: the external Claude session scan and its `[claude.*]` tables are always active and are never gated
+on this flag.
 
 ### `~/.leiter/state.toml`
 
@@ -248,6 +254,16 @@ setup_soft_epoch = 2
 setup_hard_epoch = 1
 last_distilled = 2026-07-01T12:00:00Z
 
+[claude.committed."<session_id>"]
+path = "/home/alice/.claude/projects/-home-alice-proj/<uuid>.jsonl"
+size_bytes = 12345
+mtime_utc = 2026-07-01T11:59:00Z
+session_timestamp_utc = 2026-07-01T11:40:12Z # optional
+# latest_event_timestamp_utc omitted for Claude sessions
+
+[claude.pending."<session_id>"]
+# same fields as committed
+
 [codex.committed."<session_id>"]
 path = "/Users/alice/.codex/sessions/2026/03/07/rollout-....jsonl"
 size_bytes = 12345
@@ -264,6 +280,9 @@ latest_event_timestamp_utc = 2026-03-07T18:09:25Z # optional
 - `soul_version`, `setup_soft_epoch`, `setup_hard_epoch`, `last_distilled`: the fields that previously lived in soul
   frontmatter, with identical meaning. `soul_version` drives `leiter soul upgrade`; the epochs drive Setup Epochs
   validation; `last_distilled` drives which session logs `leiter soul distill` treats as new.
+- `pending_scan_started_utc` (optional): the scan-start time staged by the most recent non-dry-run distill.
+  `mark-distilled` consumes it as the new `last_distilled` (see that command). Absent when no distill has staged
+  anything since the last mark.
 
 The `[codex.*]` tables carry the Codex distillation watermarks previously kept in `codex-meta.toml`, with the same
 semantics. `committed` is the last successfully marked-distilled Codex watermark set. `pending` is staged by
@@ -271,13 +290,19 @@ semantics. `committed` is the last successfully marked-distilled Codex watermark
 file state (`path`, `size_bytes`, `mtime_utc`) rather than a single global timestamp because Codex sessions can be
 resumed and appended.
 
-`pending` exists so `mark-distilled` can commit the exact Codex file state that `distill` actually showed to the LLM.
-Without `pending`, `mark-distilled` would have to either leave Codex state untouched forever or re-scan `~/.codex/` at
-mark time and risk committing a newer session file state than the LLM actually saw if a Codex session changed between
-the two commands.
+The `[claude.*]` tables are the exact same shape and serve the same role for the external Claude session scan (see
+Claude session scanning under `leiter soul distill`). The fields carry identical meaning, with one difference: for a
+Claude session the optional `session_timestamp_utc` holds the first record timestamp found in the transcript file (used
+for ordering), and `latest_event_timestamp_utc` is omitted — the Claude canonicalizer does not track a distinct
+latest-event time the way the Codex path does.
 
-The tables are nested under `[codex.*]` (rather than a flat `[committed]`/`[pending]`) specifically so a later revision
-can add a parallel `[claude.*]` watermark map beside it without a further schema change.
+`pending` exists so `mark-distilled` can commit the exact file state that `distill` actually showed to the LLM. Without
+`pending`, `mark-distilled` would have to either leave those watermarks untouched forever or re-scan the session stores
+at mark time and risk committing a newer file state than the LLM actually saw if a session changed between the two
+commands. This holds for both `[claude.*]` and `[codex.*]`.
+
+The tables are nested under `[codex.*]` and `[claude.*]` (rather than a flat `[committed]`/`[pending]`) so each
+harness's watermark map lives in its own namespace and neither collides with the other.
 
 ## Implementation
 
@@ -334,11 +359,16 @@ sentinel) to the Claude Code home directory.
 1. Create `~/.leiter/` directory (no-op if exists)
 2. Create `~/.leiter/logs/` directory (no-op if exists)
 3. Converge the soul/state pair by which of the two files exist. "Fresh state" below means a `state.toml` with
-   `version = 1`, `last_distilled = 1970-01-01T00:00:00Z`, `soul_version` set to the current template version, and both
-   epochs set to the binary's current values. "Verify epochs" means: hard epochs must exactly match (any mismatch is an
-   error, using the direction-specific messages from Setup Epochs); a soft epoch behind the binary is migrated forward
-   by rewriting `state.toml` (preserving all other fields); a soft epoch ahead of the binary is an error; corrupt or
-   unsupported-version `state.toml` is an error. The four cases:
+   `version = 1`, `last_distilled` set to the current UTC time, `soul_version` set to the current template version, and
+   both epochs set to the binary's current values. Stamping install time (rather than the Unix epoch) matters because
+   `last_distilled` now also acts as the floor for the external Claude scan (see Claude session scanning): under an
+   epoch-0 convention a fresh install's very first distill would ingest the entire Claude Code retention window of
+   sessions that predate the install, which is not what the old hook-based system did — it only ever learned from
+   sessions that ran after setup. Stamping install time preserves that "learning starts at install" semantics. "Verify
+   epochs" means: hard epochs must exactly match (any mismatch is an error, using the direction-specific messages from
+   Setup Epochs); a soft epoch behind the binary is migrated forward by rewriting `state.toml` (preserving all other
+   fields); a soft epoch ahead of the binary is an error; corrupt or unsupported-version `state.toml` is an error. The
+   four cases:
    - **Neither exists** (fresh install): write fresh state, then the template soul.
    - **Soul exists, state missing**: two situations share this shape, discriminated by whether the soul still parses as
      YAML frontmatter. If it does, this is the pre-`state.toml` legacy layout: fail with an error saying migration
@@ -477,7 +507,21 @@ atomic rename fails, print an error to stderr and exit with a non-zero code. Cle
 
 ### `leiter soul distill`
 
-Outputs session logs that haven't been processed since the last distillation.
+Outputs session logs that haven't been processed since the last distillation. In this revision it draws from two Claude
+sources that coexist: the legacy `~/.leiter/logs/` files copied by the SessionEnd hook, and the external scan of Claude
+Code's own session store (see Claude session scanning). Both stay active — the hook still runs — and their output is
+deduplicated by session id so a session present in both places is emitted once. A later revision removes the hook and
+with it the legacy path.
+
+**Flags:**
+
+- `--dry-run`: report what would be deleted during obsolete-log cleanup instead of deleting, and skip the pending
+  watermark writes.
+- `--claude-home <path>`: override the Claude home directory whose `projects/` subtree the external scan walks (default
+  `~/.claude/`). Primarily for testing. This is a distinct flag from the `--claude-home` on the `leiter claude`
+  subcommand, which is unrelated plumbing scoped to plugin installation.
+- `--codex-home <path>`: override the Codex home directory the Codex scan walks (default `~/.codex/`). Primarily for
+  testing.
 
 **Behavior:**
 
@@ -488,24 +532,55 @@ Outputs session logs that haven't been processed since the last distillation.
    same second as the distillation timestamp is not lost — this matters because the distillation flow has the agent
    write a session log immediately before running `leiter soul distill`, and the two timestamps could collide
 4. Load `~/.leiter/leiter.toml`. If it is unreadable or invalid, warn and use defaults
-5. If `enable_codex_experimental = true`, best-effort scan Codex rollout transcripts under
-   `~/.codex/sessions/**/*.jsonl` and `~/.codex/archived_sessions/**/*.jsonl`
-6. If `enable_codex_experimental = true`, for each Codex rollout file, read the leading `session_meta` record and use
+5. Scan the external Claude session store under `<claude_home>/projects/` (default `~/.claude/`, overridable with
+   `--claude-home`). This scan is unconditional — it is **not** gated on `enable_codex_experimental` (that gate is
+   Codex-only). Discovery is recursive but fail-useful about Claude Code's undocumented layout: only regular files
+   (symlinks are never followed), only `.jsonl` files whose filename stem parses as a UUID (that stem is the session
+   id), everything else silently skipped; unreadable files or directories are warned about and skipped, never fatal. See
+   Claude session scanning below for the full contract
+6. Read the Claude `[claude.committed]` watermarks from the validated `state.toml` (same core-state note as the Codex
+   watermarks in step 10). For each discovered session, compare the current file watermark (`path`, `size_bytes`,
+   `mtime_utc`) to the committed watermark. If unchanged, skip the session completely. If changed or new, re-read the
+   full transcript and emit the full canonicalized session so the LLM sees the entire updated context. One exception is
+   the `last_distilled` floor: a discovered session with no committed watermark whose file mtime is strictly older than
+   `last_distilled` is treated as already distilled under the pre-scan regime and skipped without emission (and without
+   staging a watermark). See Claude session scanning
+7. Dedupe the external scan against legacy logs: any session id the external store accounts for suppresses the
+   `~/.leiter/logs/` file bearing the same session-id suffix. "Accounts for" means the session is being emitted from the
+   external copy this run, or its committed watermark matched unchanged — the latter covers the ordinary idle-exit
+   sequence where the SessionEnd hook copies a log after `mark-distilled` already committed the session, which would
+   otherwise re-emit the whole session from the legacy copy. Floor-skipped sessions are deliberately not in the
+   suppression set: for those the legacy log may be the only copy that would ever emit. The suppressed legacy file still
+   participates in obsolete-log cleanup below
+8. If `enable_codex_experimental = true`, best-effort scan Codex rollout transcripts under
+   `<codex_home>/sessions/**/*.jsonl` and `<codex_home>/archived_sessions/**/*.jsonl` (default `~/.codex/`, overridable
+   with `--codex-home`)
+9. If `enable_codex_experimental = true`, for each Codex rollout file, read the leading `session_meta` record and use
    `payload.id` as the stable session ID. Files without a readable leading `session_meta` record are skipped with a
    warning
-7. If `enable_codex_experimental = true`, read the Codex `[codex.committed]` watermarks from the validated `state.toml`.
-   (Unlike the former `codex-meta.toml`, `state.toml` is core state validated in step 1, so an unreadable or invalid
-   state file is already a hard command error there — there is no separate warn-and-skip path for it. The
-   warn-and-default behavior for `leiter.toml` in step 4 is unchanged.)
-8. If `enable_codex_experimental = true`, for each Codex session ID, compare the current file watermark (`path`,
-   `size_bytes`, `mtime_utc`) to the `[codex.committed]` watermark in `state.toml`. If unchanged, skip the session
-   completely. If changed (or new), re-read the full rollout file and emit the full canonicalized session so the LLM
-   sees the entire updated context
-9. Sort matching Claude logs chronologically. Sort changed Codex sessions by session timestamp (from
-   `session_meta.payload.timestamp`) and then session ID
-10. Output the Claude transcript content, and also Codex transcript content when enabled, wrapped in XML-like boundary
-    tags (see Output below)
-11. If `enable_codex_experimental = true` and `--dry-run` is not set, replace the `[codex.pending]` map in
+10. If `enable_codex_experimental = true`, read the Codex `[codex.committed]` watermarks from the validated
+    `state.toml`. (Unlike the former `codex-meta.toml`, `state.toml` is core state validated in step 1, so an unreadable
+    or invalid state file is already a hard command error there — there is no separate warn-and-skip path for it. The
+    warn-and-default behavior for `leiter.toml` in step 4 is unchanged.)
+11. If `enable_codex_experimental = true`, for each Codex session ID, compare the current file watermark (`path`,
+    `size_bytes`, `mtime_utc`) to the `[codex.committed]` watermark in `state.toml`. If unchanged, skip the session
+    completely. If changed (or new), re-read the full rollout file and emit the full canonicalized session so the LLM
+    sees the entire updated context
+12. Sort the combined Claude output chronologically, interleaving legacy `~/.leiter/logs/` sessions (keyed by filename
+    timestamp, as today) with external Claude sessions (keyed by their session timestamp — see Claude session scanning
+    for how that timestamp is derived — then session id as a tiebreak). Sort changed Codex sessions separately by
+    session timestamp (from `session_meta.payload.timestamp`) and then session ID
+13. Output the Claude transcript content (legacy and external, interleaved), and also Codex transcript content when
+    enabled, wrapped in XML-like boundary tags (see Output below)
+14. If `--dry-run` is not set, replace the `[claude.pending]` map in `~/.leiter/state.toml` with this run's changed
+    Claude sessions and set `pending_scan_started_utc` to the time this run's scan began (an atomic rewrite preserving
+    all other state fields). This staging is **not** gated on `enable_codex_experimental`, and it happens even when the
+    Claude home could not be resolved and the scan was skipped — pending means "exactly what this run showed the LLM",
+    and a run that scanned nothing showed nothing; leaving a stale pending map would let the next `mark-distilled`
+    commit watermarks for sessions this cycle never emitted. If writing state fails, warn and continue. Staging may
+    happen before the emission step completes; this is safe because `mark-distilled` is only ever run after a distill
+    that succeeded end to end (a failed distill is rerun, restaging from current reality)
+15. If `enable_codex_experimental = true` and `--dry-run` is not set, replace the `[codex.pending]` map in
     `~/.leiter/state.toml` with the changed sessions from this run (an atomic rewrite preserving all other state
     fields). If writing state fails, warn and continue
 
@@ -519,9 +594,11 @@ Outputs session logs that haven't been processed since the last distillation.
 
 **Log pre-processing:** JSONL session logs are pre-processed to extract user-visible content — user messages, assistant
 text responses, and tool action summaries — filtering out tool results, progress events, thinking blocks, and other
-non-user-facing content. Leiter only processes files that match the expected log filename format
-`<YYYYMMDDTHHMMSSZ>-<session_id>.jsonl`; files that do not match this format are ignored. Within matching JSONL files,
-lines with unrecognized JSON structures are included as-is (fail-useful: no user content is silently lost).
+non-user-facing content. In the legacy `~/.leiter/logs/` directory, leiter only processes files that match the expected
+log filename format `<YYYYMMDDTHHMMSSZ>-<session_id>.jsonl`; files that do not match are ignored. The external Claude
+scan applies its own filter instead (regular `.jsonl` files with a UUID stem; see Claude session scanning). Both feed
+the identical canonicalizer — the two sources are the same JSONL transcript format. Within matching JSONL files, lines
+with unrecognized JSON structures are included as-is (fail-useful: no user content is silently lost).
 
 For assistant messages containing `tool_use` content blocks, a one-line summary is emitted for each tool:
 `[assistant tool]: Name(param)`. The key parameter is chosen heuristically: `input.file_path` if present, else
@@ -529,6 +606,60 @@ For assistant messages containing `tool_use` content blocks, a one-line summary 
 message with both text and tool_use blocks emits both `[assistant]:` and `[assistant tool]:` lines. An assistant message
 with only tool_use blocks (no text) emits only the tool summary lines. Tool results (`type: "user"` with
 `toolUseResult`) remain dropped — the tool name from the assistant side provides sufficient context.
+
+**Claude session scanning:** In addition to the hook-copied logs in `~/.leiter/logs/`, `leiter soul distill` reads
+Claude Code's own session transcripts directly from the Claude home directory. Claude Code stores one JSONL transcript
+per session at `<claude_home>/projects/<cwd-slug>/<session-uuid>.jsonl`, appended live while the session runs. This
+external scan is always active in this revision; it is not gated on `enable_codex_experimental`.
+
+Discovery starts at `<claude_home>/projects/` (default `~/.claude/projects/`, override the home with `--claude-home`)
+and recurses, but it is deliberately fail-useful about this undocumented layout. It considers only regular files; it
+never follows symlinks — a UUID-named symlink must not be able to pull an arbitrary readable file into the distill
+output. The symlink guarantee is enforced at read time, not just at discovery: the content read verifies the opened
+handle still refers to the same regular file seen during the walk (filesystem identity check) and reads through that
+handle, so a file swapped for a symlink between the two moments is skipped rather than followed. It considers only
+`.jsonl` files whose filename stem parses as a UUID, and that stem is taken as the session id. If multiple discovered
+files share a session id (not something Claude Code normally produces), the newest wins — latest mtime, then largest
+size — and only that file is emitted and watermarked; anything else would stage one watermark while emitting both,
+leaving the loser to re-emit forever. Everything else — subdirectories like `memory/`, stray non-UUID files,
+non-`.jsonl` files — is silently skipped. Files and directories that cannot be read are warned about and skipped; an
+unreadable entry is never fatal to the command. Because the emitted `file` label embeds arbitrary directory names from
+this undocumented layout, characters that could forge or break the `<session>` tag attribute (quotes, angle brackets,
+control characters) are replaced before emission.
+
+The watermark model is identical to Codex: each discovered session's `(path, size_bytes, mtime_utc)` is compared against
+its `[claude.committed]` entry. Unchanged sessions are skipped entirely. Changed or new sessions are re-read and emitted
+in full. Emitting the whole session on any change is what handles a session distilled mid-run and later resumed — Claude
+Code materializes a resumed session as a **new** transcript file that duplicates the prior history, so re-emitting in
+full keeps the LLM's view complete rather than stitching deltas.
+
+The `last_distilled` floor guards the first scan-enabled distill from re-ingesting history the soul already learned.
+Sessions distilled through the old hook-copied-logs flow are still sitting in the Claude home within Claude Code's
+retention window, so without a floor the first external scan would re-emit all of them. The rule: a discovered session
+with **no** committed watermark whose file mtime is strictly older than `last_distilled` is treated as already distilled
+under the pre-scan regime and is skipped without emission — and it stages no watermark, so it stays invisible until its
+file actually changes. A session that **does** have a committed watermark follows the ordinary watermark comparison
+regardless of mtime (its history is by definition already accounted for).
+
+Ordering: external Claude sessions sort by session timestamp — the first `timestamp` field found among the file's
+leading records, where header inspection reads at most a small bounded number of lines — falling back to the file mtime
+when no such field is found, then by session id as a tiebreak. In the combined Claude output these interleave
+chronologically with the legacy `~/.leiter/logs/` sessions (which sort by their filename timestamp, as today). Codex
+ordering is unchanged and separate.
+
+Emission uses the same `<session source="claude" file="...">` wrapping and the same canonicalization and filtering as
+the hook-copied logs, because they are byte-for-byte the same file format. For an externally scanned session the `file`
+label is the transcript path relative to the Claude home (e.g. `projects/-home-alice-proj/<uuid>.jsonl`).
+
+A scanned session that canonicalizes to no user-visible content is not emitted, but it is still staged in
+`[claude.pending]` (mirroring the Codex behavior) so that once `leiter soul mark-distilled` commits it, the session
+stops being rescanned on every run.
+
+Dedupe against the legacy logs is what keeps this coexistence clean. In this revision the SessionEnd hook still copies
+every finished transcript into `~/.leiter/logs/`, so most sessions exist in both places at once. A session id emitted
+from the external scan suppresses the legacy log file bearing the same session-id suffix — the external copy is the same
+or fresher content. The suppressed legacy file still participates in obsolete-log cleanup exactly as it does today. When
+a later revision removes the SessionEnd hook, the legacy path and this dedupe go away with it.
 
 Codex rollout files use a different event schema and are canonicalized separately. Leiter keeps user-visible user
 messages, assistant/user-facing output text, commentary updates shown to the user, and one-line tool call summaries. It
@@ -548,19 +679,26 @@ If there are no obsolete logs, nothing is printed about cleanup. Codex rollout f
 
 ### `leiter soul mark-distilled`
 
-Sets `last_distilled` in `~/.leiter/state.toml` to the current UTC time. This is the only way `last_distilled` should be
-updated — the agent must never edit it manually. This command never writes `soul.md`.
+Commits the last distill run's cutoff: `last_distilled` advances to the scan-start time that run staged in
+`pending_scan_started_utc`, not to the mark-time wall clock. The distinction closes a loss window — a session created
+after distill's scan but before the mark would sit below a mark-time floor forever (no committed watermark, mtime too
+old), and the same window would delete hook-copied logs as obsolete without ever distilling them. A scan-start cutoff
+guarantees everything born after the scan is the next run's responsibility. This is the only way `last_distilled` should
+be updated — the agent must never edit it manually. This command never writes `soul.md`.
 
 **Behavior:**
 
 1. Validate state (see Setup Epochs). If incompatible, exit with an error
 2. Load `~/.leiter/leiter.toml`. If it is unreadable or invalid, warn and use defaults
-3. Set `last_distilled` to the current UTC time and, if `enable_codex_experimental = true`, merge the `[codex.pending]`
-   map into `[codex.committed]` and clear `[codex.pending]`
-4. Write `state.toml` back in a single atomic write, preserving all other fields. There is no separate best-effort path
-   for the Codex merge: it rides the same write as `last_distilled`, so it either all commits or the command fails. (The
-   old warn-and-continue behavior existed because Codex watermarks lived in a separate best-effort file; that split no
-   longer exists.)
+3. Merge the `[claude.pending]` map into `[claude.committed]` and clear `[claude.pending]`. This always happens — it is
+   **not** gated on `enable_codex_experimental`, since the external Claude scan is always active
+4. Set `last_distilled` to the staged `pending_scan_started_utc` (clearing that field), falling back to the current UTC
+   time when nothing is staged (a mark without a preceding non-dry-run distill). If `enable_codex_experimental = true`,
+   also merge the `[codex.pending]` map into `[codex.committed]` and clear `[codex.pending]`
+5. Write `state.toml` back in a single atomic write, preserving all other fields. There is no separate best-effort path
+   for either merge: both the Claude and (when enabled) Codex promotions ride the same write as `last_distilled`, so the
+   whole thing either commits or the command fails. (The old warn-and-continue behavior existed because Codex watermarks
+   lived in a separate best-effort file; that split no longer exists.)
 
 When `enable_codex_experimental = false`, `leiter soul mark-distilled` must not consult or modify the contents of the
 `[codex.*]` tables in `~/.leiter/state.toml` — the rewrite that updates `last_distilled` passes them through unchanged.
@@ -809,8 +947,9 @@ soul file path. Empty `permissions.allow` arrays and empty `permissions` objects
 3. Sub-agent runs `leiter soul distill`, reads the output, updates the soul with new learnings, and returns a concise
    summary of what it added, modified, or removed
 4. After the sub-agent completes successfully, the main agent always runs `leiter soul mark-distilled` — even if the
-   sub-agent found no new preferences to add. This advances Claude `last_distilled`, and when experimental Codex support
-   is enabled it also commits Codex `pending` watermarks so unchanged sessions are not re-processed
+   sub-agent found no new preferences to add. This advances `last_distilled` and commits the external Claude scan's
+   `pending` watermarks so unchanged sessions are not re-processed; when experimental Codex support is enabled it also
+   commits the Codex `pending` watermarks
 5. Main agent relays the sub-agent's summary to the user so they can see what distillation changed
 
 ## Non-Goals (For Now)
