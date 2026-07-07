@@ -14,6 +14,7 @@ use crate::commands::distill::{gather, retention_risk_sessions};
 use crate::config::load_config_best_effort;
 use crate::paths;
 use crate::sync::{SyncTarget, inspect_target};
+use crate::templates::SETUP_SOFT_EPOCH;
 use crate::validation::{ValidationStatus, validate_state};
 
 /// Run the top-level `leiter status` command against the default homes.
@@ -106,6 +107,18 @@ pub fn run_with_homes(
         }
     }
 
+    if state.setup_soft_epoch < SETUP_SOFT_EPOCH {
+        writeln!(
+            out,
+            "Setup advisory: leiter setup has optional updates available; run `leiter claude install` when convenient."
+        )?;
+    } else if state.setup_soft_epoch > SETUP_SOFT_EPOCH {
+        writeln!(
+            out,
+            "Setup advisory: this leiter binary is older than the installed setup expects; upgrade leiter when convenient."
+        )?;
+    }
+
     if let Some(gathered) = &gathered {
         let at_risk = retention_risk_sessions(
             &gathered.external_claude,
@@ -195,6 +208,7 @@ mod tests {
             Utc.with_ymd_and_hms(2026, 7, 1, 12, 0, 0).unwrap(),
             SESSION_ID,
         );
+        fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
         fs::write(
             paths::logs_dir(tmp.path()).join(duplicate),
             "duplicate legacy",
@@ -243,6 +257,44 @@ mod tests {
     }
 
     #[test]
+    fn soft_epoch_behind_reports_install_advisory() {
+        let tmp = setup_state_dir();
+        let codex_home = tempfile::tempdir().unwrap();
+        update_state(tmp.path(), |state| {
+            state.setup_soft_epoch = SETUP_SOFT_EPOCH.saturating_sub(1);
+        });
+
+        let output = run_status_capture(tmp.path(), tmp.claude.path(), codex_home.path());
+
+        assert!(output.contains("Setup advisory:"));
+        assert!(output.contains("leiter claude install"));
+    }
+
+    #[test]
+    fn soft_epoch_ahead_reports_binary_upgrade_advisory() {
+        let tmp = setup_state_dir();
+        let codex_home = tempfile::tempdir().unwrap();
+        update_state(tmp.path(), |state| {
+            state.setup_soft_epoch = SETUP_SOFT_EPOCH + 1;
+        });
+
+        let output = run_status_capture(tmp.path(), tmp.claude.path(), codex_home.path());
+
+        assert!(output.contains("Setup advisory:"));
+        assert!(output.contains("upgrade leiter"));
+    }
+
+    #[test]
+    fn matching_soft_epoch_omits_setup_advisory() {
+        let tmp = setup_state_dir();
+        let codex_home = tempfile::tempdir().unwrap();
+
+        let output = run_status_capture(tmp.path(), tmp.claude.path(), codex_home.path());
+
+        assert!(!output.contains("Setup advisory:"));
+    }
+
+    #[test]
     fn reports_stale_and_hand_edited_blocks() {
         let tmp = setup_state_dir();
         let codex_home = tempfile::tempdir().unwrap();
@@ -287,7 +339,9 @@ mod tests {
     fn scan_failure_is_reported_without_failing_status() {
         let tmp = setup_state_dir();
         let codex_home = tempfile::tempdir().unwrap();
-        fs::remove_dir_all(paths::logs_dir(tmp.path())).unwrap();
+        // Fresh installs no longer create logs/; make the path a FILE so
+        // the legacy-log scan fails deterministically.
+        let _ = fs::remove_dir_all(paths::logs_dir(tmp.path()));
         fs::write(paths::logs_dir(tmp.path()), "not a directory").unwrap();
 
         let output = run_status_capture(tmp.path(), tmp.claude.path(), codex_home.path());

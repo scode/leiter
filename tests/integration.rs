@@ -68,6 +68,14 @@ fn corrupt_state(state_dir: &Path) {
     fs::write(state_dir.join("state.toml"), "not = valid = toml\n").unwrap();
 }
 
+fn write_legacy_soul(state_dir: &Path) {
+    fs::write(
+        state_dir.join("soul.md"),
+        "---\nlast_distilled: 2026-01-01T00:00:00Z\nsoul_version: 1\nsetup_soft_epoch: 1\nsetup_hard_epoch: 1\n---\nlegacy body\n",
+    )
+    .unwrap();
+}
+
 fn install(state_dir: &Path, claude_home: &Path) {
     leiter(state_dir)
         .args(["claude", &claude_home_flag(claude_home), "install"])
@@ -155,7 +163,7 @@ fn codex_distill_is_gated_by_experimental_flag() {
 }
 
 #[test]
-fn claude_install_then_context_injects_soul() {
+fn claude_install_then_context_reports_retired_hook() {
     let tmp = tempfile::tempdir().unwrap();
     let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -166,9 +174,8 @@ fn claude_install_then_context_injects_soul() {
         .args(["hook", "context"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Leiter is a self-training system"))
-        .stdout(predicate::str::contains("# Communication Style"))
-        .stdout(predicate::str::contains("/leiter-instill"));
+        .stdout(predicate::str::contains("hooks are no longer needed"))
+        .stdout(predicate::str::contains("# Communication Style").not());
 }
 
 #[test]
@@ -204,7 +211,7 @@ fn claude_uninstall_removes_plugin_files() {
 
     // State dir is untouched.
     assert!(dir.join("soul.md").is_file());
-    assert!(dir.join("logs").is_dir());
+    assert!(dir.join("state.toml").is_file());
 }
 
 #[test]
@@ -501,7 +508,7 @@ fn stdout_stderr_separation() {
     let stdout = String::from_utf8(output.stdout.clone()).unwrap();
     let stderr = String::from_utf8(output.stderr.clone()).unwrap();
 
-    assert!(stdout.contains("Leiter is a self-training system"));
+    assert!(stdout.contains("hooks are no longer needed"));
     assert!(stderr.contains("dispatching command"));
     assert!(!stdout.contains("dispatching command"));
 }
@@ -522,7 +529,7 @@ fn nudge_outputs_nothing_when_no_stale_logs() {
 }
 
 #[test]
-fn nudge_outputs_message_when_stale_logs_exist() {
+fn nudge_outputs_nothing_when_stale_logs_exist() {
     let tmp = tempfile::tempdir().unwrap();
     let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -532,13 +539,14 @@ fn nudge_outputs_message_when_stale_logs_exist() {
 
     let stale_filename = "20260101T000000Z-stale-sess.jsonl";
     let logs_dir = dir.join("logs");
+    fs::create_dir_all(&logs_dir).unwrap();
     fs::write(logs_dir.join(stale_filename), "stale log content\n").unwrap();
 
     leiter(dir)
         .args(["hook", "nudge"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("undistilled leiter session logs"));
+        .stdout(predicate::str::is_empty());
 }
 
 #[test]
@@ -585,6 +593,7 @@ fn distill_dry_run_reports_obsolete_without_deleting() {
     set_last_distilled(dir, "2026-01-01T00:00:00Z");
 
     let logs_dir = dir.join("logs");
+    fs::create_dir_all(&logs_dir).unwrap();
     let obsolete_name = "20250101T000000Z-old-sess.jsonl";
     fs::write(logs_dir.join(obsolete_name), "obsolete content\n").unwrap();
 
@@ -620,6 +629,7 @@ fn distill_deletes_obsolete_logs() {
     set_last_distilled(dir, "2026-01-01T00:00:00Z");
 
     let logs_dir = dir.join("logs");
+    fs::create_dir_all(&logs_dir).unwrap();
     let obsolete_name = "20250101T000000Z-old-sess.jsonl";
     fs::write(logs_dir.join(obsolete_name), "obsolete content\n").unwrap();
 
@@ -629,7 +639,7 @@ fn distill_deletes_obsolete_logs() {
 }
 
 #[test]
-fn agent_setup_instructions_contain_hook_commands() {
+fn agent_setup_instructions_are_tombstoned() {
     let tmp = tempfile::tempdir().unwrap();
     let claude_tmp = tempfile::tempdir().unwrap();
 
@@ -639,9 +649,9 @@ fn agent_setup_instructions_contain_hook_commands() {
         .args(["claude", "agent-setup-instructions"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("leiter hook context"))
-        .stdout(predicate::str::contains("leiter hook nudge"))
-        .stdout(predicate::str::contains("leiter hook session-end"));
+        .stdout(predicate::str::contains("hookless"))
+        .stdout(predicate::str::contains("leiter claude install"))
+        .stdout(predicate::str::contains("leiter hook context").not());
 }
 
 #[test]
@@ -655,9 +665,10 @@ fn agent_teardown_instructions_contain_hook_commands() {
         .args(["claude", "agent-teardown-instructions"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("leiter hook context"))
-        .stdout(predicate::str::contains("leiter hook nudge"))
-        .stdout(predicate::str::contains("leiter hook session-end"))
+        .stdout(predicate::str::contains(
+            "command` field contains `leiter hook`",
+        ))
+        .stdout(predicate::str::contains("Keep `Bash(leiter:*)`"))
         .stdout(predicate::str::contains(format!(
             "{}/",
             tmp.path().display()
@@ -703,7 +714,7 @@ fn soul_upgrade_reports_up_to_date_after_claude_install() {
 }
 
 #[test]
-fn auto_distill_with_stale_log_outputs_message() {
+fn auto_distill_with_stale_log_outputs_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -713,13 +724,14 @@ fn auto_distill_with_stale_log_outputs_message() {
 
     let stale_filename = "20260101T000000Z-stale-sess.jsonl";
     let logs_dir = dir.join("logs");
+    fs::create_dir_all(&logs_dir).unwrap();
     fs::write(logs_dir.join(stale_filename), "stale log content\n").unwrap();
 
     leiter(dir)
         .args(["hook", "nudge", "--auto-distill"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("/leiter-distill"));
+        .stdout(predicate::str::is_empty());
 }
 
 #[test]
@@ -744,7 +756,7 @@ fn context_hard_epoch_mismatch_blocks_soul() {
     let dir = tmp.path();
 
     install(dir, claude_tmp.path());
-    tamper_state_field(dir, "setup_hard_epoch", 2);
+    tamper_state_field(dir, "setup_hard_epoch", 3);
 
     leiter(dir)
         .args(["hook", "context"])
@@ -755,7 +767,7 @@ fn context_hard_epoch_mismatch_blocks_soul() {
 }
 
 #[test]
-fn context_soft_epoch_mismatch_nudges_and_injects() {
+fn context_soft_epoch_mismatch_still_reports_retired_hook_only() {
     let tmp = tempfile::tempdir().unwrap();
     let claude_tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -767,8 +779,8 @@ fn context_soft_epoch_mismatch_nudges_and_injects() {
         .args(["hook", "context"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("binary is a bit behind"))
-        .stdout(predicate::str::contains("Leiter is a self-training system"));
+        .stdout(predicate::str::contains("hooks are no longer needed"))
+        .stdout(predicate::str::contains("binary is a bit behind").not());
 }
 
 #[test]
@@ -786,7 +798,7 @@ fn context_corrupt_state_blocks_soul() {
         .success()
         .stdout(predicate::str::contains("ACTION REQUIRED"))
         .stdout(predicate::str::contains("state file"))
-        .stdout(predicate::str::contains("Leiter is a self-training system").not());
+        .stdout(predicate::str::contains("# Communication Style").not());
 }
 
 #[test]
@@ -796,7 +808,7 @@ fn session_end_succeeds_despite_hard_epoch_mismatch() {
     let dir = tmp.path();
 
     install(dir, claude_tmp.path());
-    tamper_state_field(dir, "setup_hard_epoch", 2);
+    tamper_state_field(dir, "setup_hard_epoch", 3);
 
     let transcript = tmp.path().join("transcript.jsonl");
     fs::write(&transcript, "{\"role\":\"user\",\"message\":\"hello\"}\n").unwrap();
@@ -824,11 +836,63 @@ fn distill_hard_epoch_mismatch_fails() {
     let dir = tmp.path();
 
     install(dir, claude_tmp.path());
-    tamper_state_field(dir, "setup_hard_epoch", 2);
+    tamper_state_field(dir, "setup_hard_epoch", 3);
 
     leiter(dir)
         .args(["soul", "distill"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("incompatible"));
+}
+
+#[test]
+fn user_facing_validating_commands_surface_legacy_user_message() {
+    let cases: &[&[&str]] = &[&["distill", "--dry-run"], &["sync"], &["status"]];
+
+    for args in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        write_legacy_soul(tmp.path());
+
+        leiter(tmp.path())
+            .args(*args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("legacy hook-based layout"))
+            .stderr(predicate::str::contains("Leiter has moved to hookless operation").not());
+    }
+}
+
+#[test]
+fn agent_facing_validating_commands_surface_legacy_agent_message() {
+    let failure_cases: &[&[&str]] = &[
+        &["soul", "distill"],
+        &["soul", "instill", "remember this"],
+        &["claude", "agent-setup-instructions"],
+        &["claude", "agent-teardown-instructions"],
+    ];
+
+    for args in failure_cases {
+        let tmp = tempfile::tempdir().unwrap();
+        write_legacy_soul(tmp.path());
+
+        leiter(tmp.path())
+            .args(*args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "Leiter has moved to hookless operation",
+            ))
+            .stderr(predicate::str::contains("legacy hook-based layout").not());
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    write_legacy_soul(tmp.path());
+    leiter(tmp.path())
+        .args(["hook", "context"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Leiter has moved to hookless operation",
+        ))
+        .stdout(predicate::str::contains("legacy hook-based layout").not());
 }

@@ -37,7 +37,7 @@ fn e2e_suite() {
     step_7_soul_upgrade(&host);
     step_8_hard_epoch_mismatch_blocks_session(&host);
     step_9_session_end_exempt_from_epoch_checks(&host);
-    step_10_soft_epoch_mismatch_nudges(&host);
+    step_10_soft_epoch_mismatch_status_advisory(&host);
     step_11_soul_show(&host);
 }
 
@@ -351,13 +351,10 @@ fn step_9_session_end_exempt_from_epoch_checks(host: &RemoteHost) {
     info!("Step 9 passed");
 }
 
-/// Deterministic setup + agent-driven. Downgrades `setup_soft_epoch` to 1 so
-/// the binary sees a soft mismatch. The context hook nudge tells the agent to
-/// mention optional improvements and suggest `leiter claude install`.
-/// We verify the agent relays this by checking for "leiter claude install" in
-/// the response — a generic mention of "install" or "setup" is not sufficient.
-fn step_10_soft_epoch_mismatch_nudges(host: &RemoteHost) {
-    info!("Step 10: Soft epoch mismatch nudges");
+/// Downgrade `setup_soft_epoch` to 1 and verify the non-blocking mismatch is
+/// reported by `leiter status`, not by the retired session-start hook path.
+fn step_10_soft_epoch_mismatch_status_advisory(host: &RemoteHost) {
+    info!("Step 10: Soft epoch mismatch status advisory");
 
     host.run_ok("cp ~/.leiter/state.toml ~/.leiter/state.toml.bak");
 
@@ -369,15 +366,12 @@ fn step_10_soft_epoch_mismatch_nudges(host: &RemoteHost) {
         "setup_soft_epoch should be 1 after sed"
     );
 
-    let stdout = host.claude_prompt_ok(
-        "Are there any warnings or notices from session startup hooks? If so, tell me what they say.",
-        3,
-    );
+    let stdout = host.run_ok("leiter status");
 
     let lower = stdout.to_lowercase();
     assert!(
-        lower.contains("leiter claude install") || lower.contains("behind"),
-        "Agent should relay the soft epoch nudge mentioning 'leiter claude install' or 'behind'. Got: {stdout}"
+        lower.contains("setup advisory") && lower.contains("leiter claude install"),
+        "Status should report the soft epoch advisory and suggest install. Got: {stdout}"
     );
 
     host.run_ok("mv ~/.leiter/state.toml.bak ~/.leiter/state.toml");

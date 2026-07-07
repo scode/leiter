@@ -664,8 +664,12 @@ mod tests {
     ) {
         let ts = Utc.with_ymd_and_hms(year, month, day, hour, 0, 0).unwrap();
         let filename = generate_log_filename(ts, session_id);
-        let path = paths::logs_dir(state_dir).join(filename);
-        fs::write(path, content).unwrap();
+        // Legacy logs only exist on migrated (previously hooked) boxes, and
+        // fresh installs no longer create logs/ — so a fixture that plants a
+        // legacy log is responsible for the directory too.
+        let logs_dir = paths::logs_dir(state_dir);
+        fs::create_dir_all(&logs_dir).unwrap();
+        fs::write(logs_dir.join(filename), content).unwrap();
     }
 
     fn write_claude_session(
@@ -1693,6 +1697,7 @@ mod tests {
     #[test]
     fn unparseable_filenames_not_deleted() {
         let tmp = setup_state_dir();
+        fs::create_dir_all(paths::logs_dir(tmp.path())).unwrap();
         let bad_path = paths::logs_dir(tmp.path()).join("not-a-log.txt");
         fs::write(&bad_path, "bad").unwrap();
         set_last_distilled(tmp.path(), 2026, 6, 1, 0);

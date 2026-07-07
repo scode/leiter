@@ -1,24 +1,20 @@
-//! `leiter hook context` — inject soul content and agent instructions into the session.
+//! `leiter hook context` — retired SessionStart hook tombstone.
 //!
-//! Called by the SessionStart hook on every session start. Checks setup epoch
-//! compatibility, then outputs the preamble (explaining how to interact with
-//! leiter) followed by the full soul file. Hard epoch mismatches and corrupt
-//! state block the session; soft mismatches produce a nudge.
+//! This command survives for one release so old Claude Code settings still
+//! route users to the hookless migration. It never injects the soul; the
+//! managed `CLAUDE.md` block is the only delivery path now.
 
 use std::io::Write;
 use std::path::Path;
 
 use anyhow::Result;
 
-use crate::templates::context_preamble;
+use crate::templates::HOOK_CONTEXT_RETIRED_MESSAGE;
 use crate::validation::{ValidationStatus, validate_state};
 
 /// Run the context command.
 ///
-/// Validates `state.toml` epochs and soul readability, then outputs the
-/// preamble and soul content. Hard epoch mismatches and corrupt state block the
-/// session (no soul injected). Soft epoch mismatches produce a nudge but still
-/// inject the soul.
+/// Validates enough state to decide which tombstone message to print.
 ///
 /// Always exits successfully — the SessionStart hook should never fail the
 /// session.
@@ -27,13 +23,8 @@ pub fn run(state_dir: &Path, out: &mut impl Write) -> Result<()> {
         ValidationStatus::Incompatible(reason) => {
             writeln!(out, "{}", reason.agent_message())?;
         }
-        ValidationStatus::Compatible {
-            soul, soft_nudge, ..
-        } => {
-            if let Some(nudge) = &soft_nudge {
-                writeln!(out, "{nudge}\n")?;
-            }
-            write!(out, "{}{soul}", context_preamble(state_dir))?;
+        ValidationStatus::Compatible { .. } => {
+            write!(out, "{HOOK_CONTEXT_RETIRED_MESSAGE}")?;
         }
     }
 
@@ -46,7 +37,7 @@ mod tests {
     use crate::commands::agent_setup;
     use crate::commands::test_support::write_state_with_epochs;
     use crate::paths;
-    use crate::templates::{SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
+    use crate::templates::{HOOK_CONTEXT_RETIRED_MESSAGE, SETUP_HARD_EPOCH, SETUP_SOFT_EPOCH};
     use std::fs;
 
     fn run_context(state_dir: &Path) -> String {
@@ -69,10 +60,10 @@ mod tests {
     }
 
     #[test]
-    fn with_soul_output_starts_with_preamble() {
+    fn healthy_state_outputs_retired_hook_one_liner() {
         let tmp = tempfile::tempdir().unwrap();
         let output = setup_and_context(tmp.path());
-        assert!(output.starts_with(&context_preamble(tmp.path())));
+        assert_eq!(output, HOOK_CONTEXT_RETIRED_MESSAGE);
     }
 
     #[test]
@@ -84,31 +75,25 @@ mod tests {
     }
 
     #[test]
-    fn preamble_contains_required_elements() {
+    fn healthy_state_does_not_output_soul_content() {
         let tmp = tempfile::tempdir().unwrap();
         let output = setup_and_context(tmp.path());
-        let soul_path = paths::soul_path(tmp.path()).display().to_string();
-        assert!(output.contains(&soul_path));
-        assert!(output.contains("Read/Edit/Write"));
-        assert!(output.contains("remember"));
-        assert!(output.contains("session log"));
-        assert!(output.contains("/leiter-distill"));
-        assert!(output.contains("/leiter-instill"));
-        assert!(output.contains("/leiter-soul-upgrade"));
+        assert!(!output.contains("# Communication Style"));
     }
 
     #[test]
-    fn soul_content_reproduced_verbatim() {
+    fn legacy_layout_outputs_migration_message_without_soul() {
         let tmp = tempfile::tempdir().unwrap();
-        let claude_tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        let codex_tmp = tempfile::tempdir().unwrap();
-        agent_setup::run(dir, claude_tmp.path(), codex_tmp.path(), &mut Vec::new()).unwrap();
-
-        let soul_content = fs::read_to_string(paths::soul_path(dir)).unwrap();
+        fs::write(
+            paths::soul_path(dir),
+            "---\nlast_distilled: 2026-01-01T00:00:00Z\nsoul_version: 1\nsetup_soft_epoch: 1\nsetup_hard_epoch: 1\n---\nlegacy body\n",
+        )
+        .unwrap();
         let output = run_context(dir);
 
-        assert!(output.ends_with(&soul_content));
+        assert!(output.contains("Leiter has moved to hookless operation"));
+        assert!(!output.contains("legacy body"));
     }
 
     #[test]
@@ -122,7 +107,7 @@ mod tests {
         let output = run_context(tmp.path());
         assert!(output.contains("ACTION REQUIRED"));
         assert!(output.contains("leiter claude install"));
-        assert!(!output.contains(&context_preamble(tmp.path())));
+        assert!(!output.contains("# Communication Style"));
     }
 
     #[test]
@@ -132,11 +117,11 @@ mod tests {
         let output = run_context(tmp.path());
         assert!(output.contains("ACTION REQUIRED"));
         assert!(output.contains("binary is older than your soul file"));
-        assert!(!output.contains(&context_preamble(tmp.path())));
+        assert!(!output.contains("# Communication Style"));
     }
 
     #[test]
-    fn soft_epoch_mismatch_old_soul_nudges() {
+    fn soft_epoch_mismatch_old_soul_still_only_outputs_retired_hook_one_liner() {
         let tmp = tempfile::tempdir().unwrap();
         write_state_with_epochs(
             tmp.path(),
@@ -144,19 +129,15 @@ mod tests {
             SETUP_HARD_EPOCH,
         );
         let output = run_context(tmp.path());
-        assert!(output.contains("optional improvements"));
-        assert!(output.contains("leiter claude install"));
-        assert!(output.contains(&context_preamble(tmp.path())));
+        assert_eq!(output, HOOK_CONTEXT_RETIRED_MESSAGE);
     }
 
     #[test]
-    fn soft_epoch_mismatch_new_soul_nudges() {
+    fn soft_epoch_mismatch_new_soul_still_only_outputs_retired_hook_one_liner() {
         let tmp = tempfile::tempdir().unwrap();
         write_state_with_epochs(tmp.path(), SETUP_SOFT_EPOCH + 1, SETUP_HARD_EPOCH);
         let output = run_context(tmp.path());
-        assert!(output.contains("binary is a bit behind"));
-        assert!(output.contains("upgrade leiter"));
-        assert!(output.contains(&context_preamble(tmp.path())));
+        assert_eq!(output, HOOK_CONTEXT_RETIRED_MESSAGE);
     }
 
     #[test]
@@ -171,7 +152,7 @@ mod tests {
         assert!(output.contains("ACTION REQUIRED"));
         assert!(output.contains("state file"));
         assert!(output.contains(&state_path.display().to_string()));
-        assert!(!output.contains(&context_preamble(dir)));
+        assert!(!output.contains("body\n"));
     }
 
     #[test]
@@ -181,6 +162,6 @@ mod tests {
         assert!(!output.contains("incompatible"));
         assert!(!output.contains("optional improvements"));
         assert!(!output.contains("a bit behind"));
-        assert!(output.starts_with(&context_preamble(tmp.path())));
+        assert_eq!(output, HOOK_CONTEXT_RETIRED_MESSAGE);
     }
 }

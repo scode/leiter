@@ -28,7 +28,10 @@ fn parses_claude_install() {
         .stdout(predicate::str::contains("installed successfully"));
 
     assert!(dir.join("soul.md").is_file());
-    assert!(dir.join("logs").is_dir());
+    assert!(
+        !dir.join("logs").exists(),
+        "hookless install must not create the hook-era logs directory"
+    );
 }
 
 #[test]
